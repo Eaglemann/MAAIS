@@ -1,0 +1,46 @@
+[project]
+name = "maais"
+version = "0.1.0"
+description = "Multi-Agent Adversarial Inference System — Institutional Quantitative Trading"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Database
+    "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    # Analytical store
+    "duckdb>=1.1",
+    # Streaming
+    "kafka-python-ng>=2.2",
+    # Configuration & secrets
+    "pydantic-settings>=2.5",
+    "python-dotenv>=1.0",
+    # Logging
+    "structlog>=24.4",
+    # HTTP + WebSocket (Binance connectors)
+    "httpx[http2]>=0.27",
+    "websockets>=13.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
