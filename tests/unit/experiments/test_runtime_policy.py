@@ -61,6 +61,16 @@ def _live_manifest(**overrides):
             "counterfactual": "v1",
         },
         "clock_policy": {"latency_ms": 250, "maximum_decision_lag_ms": 5000},
+        "fee_policy": {
+            "maker": "0.0002",
+            "taker": "0.0005",
+            "venue": "binance_usdm",
+            "tier": "regular_user",
+            "settlement_asset": "USDT",
+            "discount": "none",
+            "source": "https://www.binance.com/en/fee/trading",
+            "verified_at": "2026-08-02T09:00:00Z",
+        },
         "exchange_metadata": {
             "venue": "binance_usdm",
             "market": "usdt_perpetual",
@@ -86,7 +96,9 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
     assert policy.execution_latency.total_seconds() == 0.25
     assert policy.maximum_decision_lag.total_seconds() == 5
     assert policy.maker_fee_rate == Decimal("0.0002")
-    assert policy.taker_fee_rate == Decimal("0.0004")
+    assert policy.taker_fee_rate == Decimal("0.0005")
+    assert policy.fee_tier == "regular_user"
+    assert policy.fee_schedule_verified_at == datetime(2026, 8, 2, 9, tzinfo=timezone.utc)
     assert policy.history_bars == 240
     assert policy.benchmark_symbol == "BTCUSDT"
     assert policy.strategy_key == "maais_primary"
@@ -140,7 +152,22 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
             "leverage exactly 1",
         ),
         ({"clock_policy": {"latency_ms": 250}}, "maximum_decision_lag_ms"),
-        ({"fee_policy": {"maker": "0.001", "taker": "0.0004"}}, "fees"),
+        (
+            {
+                "fee_policy": {
+                    "maker": "0.001",
+                    "taker": "0.0005",
+                    "venue": "binance_usdm",
+                    "tier": "regular_user",
+                    "settlement_asset": "USDT",
+                    "discount": "none",
+                    "source": "https://www.binance.com/en/fee/trading",
+                    "verified_at": "2026-08-02T09:00:00Z",
+                }
+            },
+            "fees",
+        ),
+        ({"fee_policy": {"maker": "0.0002", "taker": "0.0005"}}, "venue"),
         ({"funding_policy": {"source": "estimated"}}, "funding source"),
         (
             {

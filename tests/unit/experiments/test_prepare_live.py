@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -51,6 +52,8 @@ def test_prepare_live_manifest_pins_complete_runtime_identity() -> None:
     assert manifest.worktree_hash is None
     assert policy.exchange_filters == {item.symbol: item for item in filters}
     assert policy.strategy_parameters["timeframe"] == "1m"
+    assert policy.maker_fee_rate == Decimal("0.0002")
+    assert policy.taker_fee_rate == Decimal("0.0005")
     assert manifest.exchange_metadata["primary_mapping_hash"] == "4" * 64
     assert manifest.exchange_metadata["secondary_mapping_hash"] == "5" * 64
     assert require_candidate_identity(manifest) == manifest

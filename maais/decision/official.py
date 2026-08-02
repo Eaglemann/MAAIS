@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from maais.agents.evaluations import AgentEvaluationMatrix
+from maais.config.fees import BINANCE_USDM_REGULAR_TAKER_FEE_RATE
 from maais.domain.enums import Direction
 from maais.domain.json import JsonValue, content_hash, freeze_json
 from maais.feature_pipeline.features import FeatureSet
@@ -36,10 +37,20 @@ class OfficialDecisionPolicy:
             raise ValueError("minimum directional voters must be positive")
 
     @classmethod
-    def conservative(cls) -> OfficialDecisionPolicy:
+    def conservative(
+        cls,
+        *,
+        taker_fee_fraction: Decimal = BINANCE_USDM_REGULAR_TAKER_FEE_RATE,
+    ) -> OfficialDecisionPolicy:
+        if (
+            not taker_fee_fraction.is_finite()
+            or taker_fee_fraction < 0
+            or taker_fee_fraction > Decimal("0.01")
+        ):
+            raise ValueError("taker fee fraction must be a finite Decimal in [0, 0.01]")
         return cls(
             adversarial_block_threshold=Decimal("0.65"),
-            round_trip_fee_fraction=Decimal("0.0008"),
+            round_trip_fee_fraction=taker_fee_fraction * 2,
             atr_slippage_multiplier=Decimal("0.5"),
             spread_impact_multiplier=Decimal("0.3"),
             maximum_expected_move_fraction=Decimal("0.20"),

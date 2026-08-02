@@ -57,7 +57,7 @@ def _manifest(**overrides: object) -> ExperimentManifest:
             "fill": "v1",
         },
         "agent_versions": _agents(),
-        "fee_policy": {"maker": "0.0002", "taker": "0.0004"},
+        "fee_policy": {"maker": "0.0002", "taker": "0.0005"},
         "funding_policy": {"source": "observed"},
         "clock_policy": {"latency_ms": 250},
         "market_data_sources": {"primary": "binance", "reference": "coinbase"},

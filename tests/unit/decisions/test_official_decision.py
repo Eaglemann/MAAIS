@@ -71,6 +71,12 @@ def _features(**overrides: object) -> FeatureSet:
     return FeatureSet(**values)  # type: ignore[arg-type]
 
 
+def test_conservative_policy_derives_round_trip_cost_from_frozen_taker_fee() -> None:
+    policy = OfficialDecisionPolicy.conservative(taker_fee_fraction=Decimal("0.0005"))
+
+    assert policy.round_trip_fee_fraction == Decimal("0.0010")
+
+
 def test_decimal_analysis_is_directional_costed_and_benchmark_relative() -> None:
     analysis = OfficialDecisionAnalytics(OfficialDecisionPolicy.conservative()).evaluate(
         features=_features(),
@@ -83,11 +89,11 @@ def test_decimal_analysis_is_directional_costed_and_benchmark_relative() -> None
     assert analysis.consensus_probability == Decimal("0.70")
     assert analysis.consensus_confidence == Decimal("0.80")
     assert analysis.long_weight == Decimal("8")
-    assert analysis.estimated_cost == Decimal("0.0061")
+    assert analysis.estimated_cost == Decimal("0.0063")
     assert analysis.funding_carry == Decimal("-0.0001")
     assert analysis.gross_ev == Decimal("0.0040")
-    assert analysis.net_ev == Decimal("-0.0022")
-    assert analysis.alpha_estimate == Decimal("-0.0032")
+    assert analysis.net_ev == Decimal("-0.0024")
+    assert analysis.alpha_estimate == Decimal("-0.0034")
     assert not analysis.ev_positive
     assert not analysis.alpha_positive
     assert len(analysis.content_hash) == 64

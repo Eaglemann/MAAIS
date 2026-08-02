@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 
+from maais.config.fees import BINANCE_FEE_SCHEDULE_URL
 from maais.config.modes import RunMode
 from maais.domain.enums import PaperOrderType
 from maais.execution.paper.filters import ExchangeFilterSnapshot
@@ -72,6 +73,17 @@ def _integer(parent: Mapping[str, object], name: str) -> int:
     return value
 
 
+def _utc_datetime(parent: Mapping[str, object], name: str) -> datetime:
+    raw = _text(parent, name).replace("Z", "+00:00")
+    try:
+        value = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise RuntimePolicyError(f"{name} must be an ISO-8601 timestamp") from exc
+    if value.tzinfo is None or value.utcoffset() != timedelta(0):
+        raise RuntimePolicyError(f"{name} must be UTC-aware")
+    return value
+
+
 def _filter_snapshot(value: Mapping[str, object]) -> ExchangeFilterSnapshot:
     raw_order_types = value.get("supported_order_types")
     if not isinstance(raw_order_types, Sequence) or isinstance(raw_order_types, str):
@@ -112,6 +124,12 @@ class LivePaperPolicy:
     maximum_decision_lag: timedelta
     maker_fee_rate: Decimal
     taker_fee_rate: Decimal
+    fee_venue: str
+    fee_tier: str
+    fee_settlement_asset: str
+    fee_discount: str
+    fee_schedule_source: str
+    fee_schedule_verified_at: datetime
     leverage: int
     history_bars: int
     benchmark_symbol: str
@@ -185,6 +203,26 @@ class LivePaperPolicy:
         taker = _decimal(manifest.fee_policy, "taker")
         if maker < 0 or taker < maker or taker > Decimal("0.01"):
             raise RuntimePolicyError("fees must satisfy 0 <= maker <= taker <= 0.01")
+        fee_venue = _text(manifest.fee_policy, "venue")
+        fee_tier = _text(manifest.fee_policy, "tier")
+        fee_settlement_asset = _text(manifest.fee_policy, "settlement_asset")
+        fee_discount = _text(manifest.fee_policy, "discount")
+        fee_schedule_source = _text(manifest.fee_policy, "source")
+        fee_schedule_verified_at = _utc_datetime(manifest.fee_policy, "verified_at")
+        if fee_venue != "binance_usdm":
+            raise RuntimePolicyError("official fee venue must be binance_usdm")
+        if fee_tier != "regular_user":
+            raise RuntimePolicyError("official fee tier must be regular_user")
+        if fee_settlement_asset != "USDT":
+            raise RuntimePolicyError("official fee settlement asset must be USDT")
+        if fee_discount != "none":
+            raise RuntimePolicyError("official fee discount must be none")
+        if fee_schedule_source != BINANCE_FEE_SCHEDULE_URL:
+            raise RuntimePolicyError("official fee source must be the Binance fee schedule")
+        if fee_schedule_verified_at > manifest.created_at + timedelta(days=1):
+            raise RuntimePolicyError("fee schedule verification cannot postdate the manifest")
+        if manifest.created_at - fee_schedule_verified_at > timedelta(days=7):
+            raise RuntimePolicyError("fee schedule verification is older than seven days")
 
         if _text(manifest.funding_policy, "source") != "observed":
             raise RuntimePolicyError("official funding source must be observed")
@@ -235,6 +273,12 @@ class LivePaperPolicy:
             maximum_decision_lag=timedelta(milliseconds=decision_lag_ms),
             maker_fee_rate=maker,
             taker_fee_rate=taker,
+            fee_venue=fee_venue,
+            fee_tier=fee_tier,
+            fee_settlement_asset=fee_settlement_asset,
+            fee_discount=fee_discount,
+            fee_schedule_source=fee_schedule_source,
+            fee_schedule_verified_at=fee_schedule_verified_at,
             leverage=leverage,
             history_bars=history_bars,
             benchmark_symbol=benchmark_symbol,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from uuid import UUID
 
@@ -128,6 +128,13 @@ class OrchestrationCommand:
                 raise ValueError("monitoring and orchestration evaluation times differ")
             if context.exchange_filters.captured_at > self.completed_at:
                 raise ValueError("exchange filters cannot be captured after the decision")
+            raw_taker_fee = self.manifest.fee_policy.get("taker")
+            try:
+                manifest_taker_fee = Decimal(str(raw_taker_fee))
+            except (InvalidOperation, ValueError) as exc:
+                raise ValueError("manifest taker fee must be an explicit decimal") from exc
+            if not manifest_taker_fee.is_finite() or (context.taker_fee_rate != manifest_taker_fee):
+                raise ValueError("entry-context taker fee differs from the frozen manifest")
         version_ids = dict(self.agent_version_ids)
         if set(version_ids) != set(ALL_AGENTS) or any(
             value.int == 0 for value in version_ids.values()

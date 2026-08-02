@@ -13,6 +13,7 @@ from maais.agents.evaluations import (
     DurationSource,
     run_agent_matrix,
 )
+from maais.config.fees import BINANCE_USDM_REGULAR_TAKER_FEE_RATE
 from maais.decision.official import (
     OfficialDecisionAnalysis,
     OfficialDecisionAnalytics,
@@ -114,9 +115,7 @@ class OfficialOrchestrationService:
         self._durations = durations
         self._authorizer = authorizer
         self._paper_broker = paper_broker
-        self._decision_analytics = decision_analytics or OfficialDecisionAnalytics(
-            OfficialDecisionPolicy.conservative()
-        )
+        self._decision_analytics = decision_analytics
         self._monitoring_admission = monitoring_admission or OfficialMonitoringAdmission(
             OfficialAdmissionPolicy.conservative()
         )
@@ -337,7 +336,16 @@ class OfficialOrchestrationService:
         executable_price = self._executable_price(command)
         context = command.entry_context
         benchmark = context.monitoring.benchmark if context is not None else None
-        analysis = self._decision_analytics.evaluate(
+        decision_analytics = self._decision_analytics or OfficialDecisionAnalytics(
+            OfficialDecisionPolicy.conservative(
+                taker_fee_fraction=(
+                    context.taker_fee_rate
+                    if context is not None
+                    else BINANCE_USDM_REGULAR_TAKER_FEE_RATE
+                )
+            )
+        )
+        analysis = decision_analytics.evaluate(
             features=features,
             matrix=matrix,
             executable_price=executable_price,

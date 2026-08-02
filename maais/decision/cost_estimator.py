@@ -3,14 +3,15 @@
 Slippage model: f(order_size_usd, volatility, liquidity)
   slippage ≈ ATR_pct × volatility_multiplier + spread_impact
 
-Taker fee: 0.04% (Binance USDT-Perp standard)
+Taker fee: frozen regular-user Binance USD-M USDT rate.
 """
 
+from maais.config.fees import BINANCE_USDM_REGULAR_TAKER_FEE_RATE
 from maais.decision.schemas import CostEstimate
 from maais.feature_pipeline.features import FeatureSet
 
 # Binance USDT-Perp taker fee (Rule 20: never underestimate costs)
-TAKER_FEE_PCT = 0.0004  # 0.04%
+TAKER_FEE_PCT = float(BINANCE_USDM_REGULAR_TAKER_FEE_RATE)
 
 # Slippage scaling factors
 _VOL_SLIPPAGE_MULTIPLIER = 0.5  # fraction of ATR% paid as slippage

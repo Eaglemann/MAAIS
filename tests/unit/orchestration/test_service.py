@@ -209,7 +209,7 @@ def _entry_context(*, kill_switch: bool = False) -> EntryDecisionContext:
         active_exit_plan=None,
         proposal_ttl=timedelta(seconds=30),
         execution_latency=timedelta(milliseconds=100),
-        taker_fee_rate=Decimal("0.0004"),
+        taker_fee_rate=Decimal("0.0005"),
     )
 
 
@@ -335,6 +335,15 @@ def test_command_rejects_mismatched_frame_assessment_and_incomplete_agent_ids() 
         replace(command, agent_version_ids={AgentName.MOMENTUM: UUID(int=100)})
     with pytest.raises(ValueError, match="experiment"):
         replace(command, manifest=_manifest(experiment_id=UUID(int=999)))
+    with pytest.raises(ValueError, match="taker fee"):
+        replace(
+            command,
+            manifest=replace(
+                command.manifest,
+                fee_policy={"maker": "0.0002", "taker": "0.0004"},
+            ),
+            entry_context=_entry_context(),
+        )
 
 
 async def test_admitted_neutral_cycle_has_all_gates_and_no_synthetic_proposal() -> None:
@@ -371,6 +380,7 @@ async def test_directional_monitoring_rejection_creates_isolated_counterfactual(
     assert outcome.capability is None
     assert outcome.execution is None
     assert outcome.incident is None
+    assert outcome.bundle.summary.cost_snapshot["round_trip_fee_fraction"] == "0.001"
     monitoring_gate = next(
         gate for gate in outcome.bundle.gates if gate.gate_type is GateType.MONITORING
     )

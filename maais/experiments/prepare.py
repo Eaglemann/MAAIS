@@ -17,6 +17,12 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from maais.config.constants import ALL_AGENTS, TRADING_PAIRS, AgentName
+from maais.config.fees import (
+    BINANCE_FEE_SCHEDULE_URL,
+    BINANCE_FEE_SCHEDULE_VERIFIED_AT,
+    BINANCE_USDM_REGULAR_MAKER_FEE_RATE,
+    BINANCE_USDM_REGULAR_TAKER_FEE_RATE,
+)
 from maais.config.modes import RunMode
 from maais.domain.enums import AgentMaturity
 from maais.domain.json import content_hash, freeze_json
@@ -224,7 +230,16 @@ def prepare_live_paper_manifest(
         exchange_metadata=exchange_metadata,
         component_versions={name: version for name in _COMPONENTS},
         agent_versions=agents,
-        fee_policy={"maker": "0.0002", "taker": "0.0004"},
+        fee_policy={
+            "maker": str(BINANCE_USDM_REGULAR_MAKER_FEE_RATE),
+            "taker": str(BINANCE_USDM_REGULAR_TAKER_FEE_RATE),
+            "venue": "binance_usdm",
+            "tier": "regular_user",
+            "settlement_asset": "USDT",
+            "discount": "none",
+            "source": BINANCE_FEE_SCHEDULE_URL,
+            "verified_at": BINANCE_FEE_SCHEDULE_VERIFIED_AT,
+        },
         funding_policy={"source": "observed"},
         clock_policy={"latency_ms": 250, "maximum_decision_lag_ms": 5000},
         market_data_sources={

@@ -253,6 +253,9 @@ class TestAdversarial:
 
 
 class TestCostEstimator:
+    def test_current_regular_usdt_perpetual_taker_fee_is_conservative(self):
+        assert TAKER_FEE_PCT == pytest.approx(0.0005)
+
     def test_round_trip_fee_is_2x_taker(self):
         result = estimate_costs(_features(atr=None, bid_ask_spread=None))
         assert result.exchange_fee_pct == pytest.approx(TAKER_FEE_PCT * 2)
