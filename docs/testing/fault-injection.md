@@ -27,11 +27,13 @@ uv run pytest tests/faults tests/unit/market_data/test_binance_websocket_connect
   tests/unit/market_data/test_frame_builder.py \
   tests/unit/market_data/test_integrity_state_machine.py -q
 
-MAAIS_TEST_DATABASE_URL=postgresql+psycopg://maais:maais@localhost:5432/maais_test \
-  uv run pytest tests/integration/faults tests/integration/test_recovery_store.py \
+uv run pytest tests/integration/faults tests/integration/test_recovery_store.py \
   tests/integration/test_operational_state_repository.py \
   tests/integration/test_decision_lineage.py -q
 ```
+
+The PostgreSQL command requires `MAAIS_TEST_DATABASE_URL` to already reference a dedicated
+local database whose name ends in `_test`.
 
 For each disposable process drill, capture the overview and ledger immediately before the
 fault, kill only the exact PID recorded in `artifacts/run-state/current.json`, invoke the

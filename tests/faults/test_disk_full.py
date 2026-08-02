@@ -7,7 +7,7 @@ import pytest
 
 from maais.operations.backups import BackupMetadata, create_database_backup
 
-DATABASE_URL = "postgresql+psycopg://maais:maais@localhost:5432/maais"
+DATABASE_URL = "postgresql+psycopg://maais:maais@localhost:5432/maais"  # pragma: allowlist secret
 
 
 def test_disk_full_leaves_no_partial_backup_bundle(
