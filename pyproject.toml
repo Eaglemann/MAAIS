@@ -25,6 +25,9 @@ dependencies = [
     "websockets>=13.0",
 ]
 
+[project.scripts]
+maais = "maais.cli:main"
+
 [dependency-groups]
 dev = [
     "detect-secrets>=1.5",
