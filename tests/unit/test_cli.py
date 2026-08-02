@@ -71,6 +71,15 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "180",
         ]
     )
+    soak_verdict = parser.parse_args(
+        [
+            "soak-verdict",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--output",
+            "artifacts/readiness",
+        ]
+    )
     acknowledge = parser.parse_args(
         [
             "acknowledge-incident",
@@ -111,6 +120,8 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert preflight.minimum_free_gb == 5
     assert health.maximum_lag_seconds == 180
     assert not health.allow_stopped
+    assert soak_verdict.state == Path("artifacts/run-state/current.json")
+    assert soak_verdict.maximum_lag_seconds == 180
     assert acknowledge.actor == "denis"
     assert resolve.confirm_reviewed
     assert resolve.resolution.startswith("transient venue timestamp")

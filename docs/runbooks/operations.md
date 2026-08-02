@@ -22,6 +22,10 @@ uv run maais verify-ledger
 uv run maais health --experiment EXPERIMENT_ID --maximum-lag-seconds 180
 ```
 
+At the end of the separate 24-hour candidate, use the immutable `soak-verdict` command in
+`docs/runbooks/seven-day-experiment.md`. A dashboard screenshot or a green point-in-time
+health response is not a substitute for that verdict.
+
 Add `--alert` to the health command to emit a structured critical alert and, if
 `TELEGRAM_BOT_TOKEN` plus `TELEGRAM_CHAT_ID` are configured, send it to the
 sole operator. Notifications are supplementary; Mission Control and persisted

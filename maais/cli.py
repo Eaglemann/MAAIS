@@ -33,6 +33,10 @@ from maais.operations.reporting import (
     write_daily_report_bundle,
 )
 from maais.operations.restores import restore_configured_database
+from maais.operations.soak_readiness import (
+    build_configured_soak_readiness,
+    write_soak_readiness_bundle,
+)
 from maais.operations.verification import verify_configured_ledger
 
 
@@ -138,6 +142,19 @@ def build_parser() -> argparse.ArgumentParser:
     health.add_argument("--maximum-lag-seconds", type=_positive_int, default=180)
     health.add_argument("--allow-stopped", action="store_true")
     health.add_argument("--alert", action="store_true")
+    soak_verdict = commands.add_parser(
+        "soak-verdict",
+        help="write the immutable fail-closed verdict for an official 24-hour soak",
+    )
+    soak_verdict.add_argument("--experiment", type=UUID, required=True)
+    soak_verdict.add_argument(
+        "--state",
+        type=Path,
+        default=Path("artifacts/run-state/current.json"),
+    )
+    soak_verdict.add_argument("--repository", type=Path, default=Path.cwd())
+    soak_verdict.add_argument("--output", type=Path, required=True)
+    soak_verdict.add_argument("--maximum-lag-seconds", type=_positive_int, default=180)
     acknowledge = commands.add_parser(
         "acknowledge-incident",
         help="append an audited operator acknowledgement to an incident",
@@ -295,6 +312,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(report, sort_keys=True))
         return 0 if report["healthy"] is True else 1
+    if arguments.command == "soak-verdict":
+        report = asyncio.run(
+            build_configured_soak_readiness(
+                experiment_id=arguments.experiment,
+                state_path=arguments.state,
+                repository_root=arguments.repository,
+                maximum_lag=timedelta(seconds=arguments.maximum_lag_seconds),
+            )
+        )
+        paths = write_soak_readiness_bundle(report, arguments.output)
+        print(
+            json.dumps(
+                {
+                    "passed": report["passed"],
+                    "verdict": report["verdict"],
+                    "report_id": report["report_id"],
+                    "directory": str(paths.directory),
+                    "json": str(paths.json_path),
+                    "markdown": str(paths.markdown_path),
+                    "bundle_manifest": str(paths.manifest_path),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0 if report["passed"] is True else 1
     if arguments.command in {"acknowledge-incident", "resolve-incident"}:
         resolving = arguments.command == "resolve-incident"
         result = asyncio.run(

@@ -16,6 +16,25 @@ The required fault matrix and process-drill boundaries are defined in
 `docs/testing/fault-injection.md`. Process-kill drills use a disposable candidate and are
 completed before the clean 24-hour soak begins.
 
+After at least 24 uninterrupted hours, while all three supervised processes are still
+running, freeze the soak decision:
+
+```bash
+uv run maais soak-verdict \
+  --experiment EXPERIMENT_ID \
+  --state artifacts/run-state/current.json \
+  --repository . \
+  --output artifacts/readiness
+```
+
+The command exits nonzero unless the candidate identity and preflight match, the full
+duration elapsed, every symbol has contiguous one-minute decision cardinality, runtime and
+ledger health pass, every required data-quality failure was quarantined rather than
+admitted, no process restarted, and the worker/dashboard logs contain only structured JSON
+with no error-level event. Its JSON,
+Markdown, and SHA-256 manifest form the readiness verdict; a failed bundle is evidence to
+investigate, never permission to begin the week.
+
 ## During the run
 
 - Do not change code, dependencies, manifest, thresholds, symbols, agent weights, fees, latency, or risk settings.
