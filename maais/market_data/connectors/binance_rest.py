@@ -27,10 +27,11 @@ logger = get_logger(__name__)
 
 _FAPI_BASE = "https://fapi.binance.com"
 _VISION_BASE = "https://data.binance.vision"
-_KLINES_LIMIT = 1500          # max candles per REST request
-_FUNDING_LIMIT = 1000         # max funding rate records per request
-_RATE_LIMIT_WEIGHT_PER_MIN = 1200   # conservative (actual limit: 2400)
-_WEIGHT_INTERVAL = 60 / _RATE_LIMIT_WEIGHT_PER_MIN   # seconds per weight unit
+_KLINES_LIMIT = 1500  # max candles per REST request
+_FUNDING_LIMIT = 1000  # max funding rate records per request
+_RATE_LIMIT_WEIGHT_PER_MIN = 1200  # conservative (actual limit: 2400)
+_WEIGHT_INTERVAL = 60 / _RATE_LIMIT_WEIGHT_PER_MIN  # seconds per weight unit
+QueryValue = str | int | float
 
 
 def _ms_to_dt(ms: int) -> datetime:
@@ -90,7 +91,7 @@ class BinanceRestConnector:
                 await asyncio.sleep(required_gap - elapsed)
             self._last_request_time = asyncio.get_event_loop().time()
 
-    async def _get(self, path: str, params: dict, weight: int = 2) -> list | dict:
+    async def _get(self, path: str, params: dict[str, QueryValue], weight: int = 2) -> object:
         assert self._client, "Use as async context manager"
         await self._throttle(weight)
         resp = await self._client.get(path, params=params)
@@ -119,9 +120,17 @@ class BinanceRestConnector:
         """Fetch up to `limit` 1m candles in one API call."""
         raw = await self._get(
             "/fapi/v1/klines",
-            {"symbol": symbol, "interval": interval, "startTime": start_ms, "endTime": end_ms, "limit": limit},
+            {
+                "symbol": symbol,
+                "interval": interval,
+                "startTime": start_ms,
+                "endTime": end_ms,
+                "limit": limit,
+            },
             weight=2,
         )
+        if not isinstance(raw, list) or not all(isinstance(row, list) for row in raw):
+            raise TypeError("expected a list of kline rows")
         return [_parse_kline_row(row, symbol, interval) for row in raw]
 
     async def iter_klines(
@@ -165,15 +174,19 @@ class BinanceRestConnector:
                 {"symbol": symbol, "startTime": cursor, "endTime": end_ms, "limit": _FUNDING_LIMIT},
                 weight=1,
             )
+            if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
+                raise TypeError("expected a list of funding-rate objects")
             if not raw:
                 break
             for item in raw:
-                results.append(FundingRateData(
-                    symbol=item["symbol"],
-                    funding_time=_ms_to_dt(int(item["fundingTime"])),
-                    funding_rate=Decimal(str(item["fundingRate"])),
-                    mark_price=Decimal(str(item.get("markPrice", "0"))),
-                ))
+                results.append(
+                    FundingRateData(
+                        symbol=item["symbol"],
+                        funding_time=_ms_to_dt(int(item["fundingTime"])),
+                        funding_rate=Decimal(str(item["fundingRate"])),
+                        mark_price=Decimal(str(item.get("markPrice", "0"))),
+                    )
+                )
             cursor = int(raw[-1]["fundingTime"]) + 1
 
         return results
@@ -181,6 +194,8 @@ class BinanceRestConnector:
     async def get_mark_price(self, symbol: str) -> Decimal:
         """Current mark price for cross-exchange divergence check (Rule 16)."""
         data = await self._get("/fapi/v1/premiumIndex", {"symbol": symbol}, weight=1)
+        if not isinstance(data, dict):
+            raise TypeError("expected a mark-price object")
         return Decimal(str(data["markPrice"]))
 
     async def get_spot_price(self, symbol: str) -> Decimal:
@@ -191,7 +206,10 @@ class BinanceRestConnector:
         async with httpx.AsyncClient(base_url="https://api.binance.com", timeout=10.0) as spot:
             resp = await spot.get("/api/v3/ticker/price", params={"symbol": symbol})
             resp.raise_for_status()
-            return Decimal(resp.json()["price"])
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise TypeError("expected a spot-price object")
+            return Decimal(str(data["price"]))
 
     # ── Bulk download from data.binance.vision ────────────────────────────────
 

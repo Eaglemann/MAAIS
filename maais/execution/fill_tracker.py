@@ -11,12 +11,17 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from maais.core.logging import get_logger
-from maais.execution.binance_client import BinanceFuturesClient
+from maais.execution.protocols import AuthenticatedExecutionClient
 from maais.execution.schemas import FillRecord, OrderSide, OrderStatus
 
 logger = get_logger(__name__)
 
-_TERMINAL_STATES = {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED}
+_TERMINAL_STATES = {
+    OrderStatus.FILLED,
+    OrderStatus.CANCELED,
+    OrderStatus.REJECTED,
+    OrderStatus.EXPIRED,
+}
 _MAX_POLLS = 5
 _BASE_DELAY = 0.5
 
@@ -24,10 +29,12 @@ _BASE_DELAY = 0.5
 class FillTracker:
     """Polls Binance until an order reaches a terminal state."""
 
-    def __init__(self, client: BinanceFuturesClient) -> None:
+    def __init__(self, client: AuthenticatedExecutionClient) -> None:
         self._client = client
 
-    async def wait_for_fill(self, symbol: str, order_id: str) -> tuple[OrderStatus, FillRecord | None]:
+    async def wait_for_fill(
+        self, symbol: str, order_id: str
+    ) -> tuple[OrderStatus, FillRecord | None]:
         """Poll until terminal state. Returns (status, FillRecord | None).
 
         FillRecord is only populated when status is FILLED.
@@ -39,11 +46,14 @@ class FillTracker:
 
             if status in _TERMINAL_STATES:
                 fill = _parse_fill(raw) if status == OrderStatus.FILLED else None
-                logger.info("order_terminal", order_id=order_id, status=status.value,
-                            attempt=attempt + 1)
+                logger.info(
+                    "order_terminal", order_id=order_id, status=status.value, attempt=attempt + 1
+                )
                 return status, fill
 
-            logger.debug("order_pending", order_id=order_id, status=status.value, attempt=attempt + 1)
+            logger.debug(
+                "order_pending", order_id=order_id, status=status.value, attempt=attempt + 1
+            )
             await asyncio.sleep(delay)
             delay = min(delay * 2, 8.0)
 

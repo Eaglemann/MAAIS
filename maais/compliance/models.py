@@ -18,14 +18,13 @@ from maais.db.connection import Base
 
 class TradeLot(Base):
     """Open position lot — the FIFO unit. Created on open, consumed on close."""
-    __tablename__ = "trade_lots"
-    __table_args__ = (
-        sa.Index("ix_lots_asset_side_opened", "asset", "side", "opened_at"),
-    )
 
-    trade_id: Mapped[str] = mapped_column(sa.String(36), primary_key=True)   # UUID
+    __tablename__ = "trade_lots"
+    __table_args__ = (sa.Index("ix_lots_asset_side_opened", "asset", "side", "opened_at"),)
+
+    trade_id: Mapped[str] = mapped_column(sa.String(36), primary_key=True)  # UUID
     asset: Mapped[str] = mapped_column(sa.String(20), nullable=False)
-    side: Mapped[str] = mapped_column(sa.String(5), nullable=False)           # "long"|"short"
+    side: Mapped[str] = mapped_column(sa.String(5), nullable=False)  # "long"|"short"
     entry_price: Mapped[Decimal] = mapped_column(sa.Numeric(20, 8), nullable=False)
     original_size: Mapped[Decimal] = mapped_column(sa.Numeric(30, 8), nullable=False)
     remaining_size: Mapped[Decimal] = mapped_column(sa.Numeric(30, 8), nullable=False)
@@ -34,11 +33,15 @@ class TradeLot(Base):
     opened_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
 
     def __repr__(self) -> str:
-        return f"<TradeLot {self.trade_id[:8]} {self.asset} {self.side} remaining={self.remaining_size}>"
+        return (
+            f"<TradeLot {self.trade_id[:8]} {self.asset} {self.side} "
+            f"remaining={self.remaining_size}>"
+        )
 
 
 class TradeRecord(Base):
     """Completed trade record — all 11 mandatory fields (Rule 8, BEHAVIOURS.md)."""
+
     __tablename__ = "trade_records"
     __table_args__ = (
         sa.Index("ix_trades_asset_ts", "asset", "timestamp"),
@@ -78,10 +81,9 @@ class TradeRecord(Base):
 
 class PostTradeReasoning(Base):
     """Agent outputs and EV calculation stored with every trade (supports Batch 9)."""
+
     __tablename__ = "post_trade_reasoning"
-    __table_args__ = (
-        sa.Index("ix_reasoning_trade", "trade_id"),
-    )
+    __table_args__ = (sa.Index("ix_reasoning_trade", "trade_id"),)
 
     id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
     trade_id: Mapped[str] = mapped_column(

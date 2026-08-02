@@ -21,7 +21,6 @@ from maais.agents.order_flow_toxicity import OrderFlowToxicityAgent
 from maais.agents.regime_gate import filter_compatible_agents
 from maais.agents.stop_run_detection import StopRunDetectionAgent
 from maais.agents.technical_structure import TechnicalStructureAgent
-from maais.config.constants import AgentName
 from maais.core.logging import get_logger
 from maais.feature_pipeline.features import FeatureSet
 

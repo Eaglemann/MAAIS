@@ -15,20 +15,20 @@ class FeatureSet:
     timestamp: datetime
 
     # ── Z-score (Rule 6) ─────────────────────────────────────────────────────
-    zscore: float | None = None          # Z = (Price − Mean) / Std; |Z| > 3 triggers
+    zscore: float | None = None  # Z = (Price − Mean) / Std; |Z| > 3 triggers
     zscore_mean: float | None = None
     zscore_std: float | None = None
 
     # ── Momentum ──────────────────────────────────────────────────────────────
-    ema_fast: float | None = None        # fast EMA (default: 9 periods)
-    ema_slow: float | None = None        # slow EMA (default: 21 periods)
-    ema_signal: float | None = None      # ema_fast − ema_slow (positive = bullish bias)
-    roc_short: float | None = None       # rate-of-change, short window
-    roc_long: float | None = None        # rate-of-change, long window
+    ema_fast: float | None = None  # fast EMA (default: 9 periods)
+    ema_slow: float | None = None  # slow EMA (default: 21 periods)
+    ema_signal: float | None = None  # ema_fast − ema_slow (positive = bullish bias)
+    roc_short: float | None = None  # rate-of-change, short window
+    roc_long: float | None = None  # rate-of-change, long window
 
     # ── Volatility ────────────────────────────────────────────────────────────
-    atr: float | None = None             # Average True Range (default: 14 periods)
-    rolling_std: float | None = None     # rolling std of close-to-close returns
+    atr: float | None = None  # Average True Range (default: 14 periods)
+    rolling_std: float | None = None  # rolling std of close-to-close returns
 
     # ── Order Book ────────────────────────────────────────────────────────────
     bid_ask_spread: float | None = None  # (best_ask − best_bid) / mid_price
@@ -37,7 +37,7 @@ class FeatureSet:
     # ── Funding Rate ──────────────────────────────────────────────────────────
     funding_rate: float | None = None
     annualized_funding: float | None = None
-    funding_bias: str | None = None      # "long_heavy" | "short_heavy" | "neutral"
+    funding_bias: str | None = None  # "long_heavy" | "short_heavy" | "neutral"
 
     # ── Regime (Rule 13) ─────────────────────────────────────────────────────
     regime: str | None = None  # "trending"|"range_bound"|"high_volatility"|"low_volatility"

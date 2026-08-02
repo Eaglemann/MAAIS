@@ -32,7 +32,9 @@ def aggregate_klines(candles_1m: list[KlineData], target_timeframe: str) -> list
         List of aggregated candles. Incomplete final windows are dropped.
     """
     if target_timeframe not in TIMEFRAME_MINUTES:
-        raise ValueError(f"Unknown timeframe: {target_timeframe!r}. Valid: {list(TIMEFRAME_MINUTES)}")
+        raise ValueError(
+            f"Unknown timeframe: {target_timeframe!r}. Valid: {list(TIMEFRAME_MINUTES)}"
+        )
 
     window_size = TIMEFRAME_MINUTES[target_timeframe]  # minutes per aggregated candle
     if window_size <= 1:
@@ -55,7 +57,7 @@ def aggregate_klines(candles_1m: list[KlineData], target_timeframe: str) -> list
 
     for candle in candles_1m:
         if not candle.is_closed:
-            continue   # skip live/unclosed candles
+            continue  # skip live/unclosed candles
         window_key = _window_start_minute(candle)
         if current_window_key is None:
             current_window_key = window_key

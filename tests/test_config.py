@@ -14,7 +14,9 @@ def test_zscore_trigger():
 
 
 def test_drawdown_thresholds_are_ordered():
-    assert C.DRAWDOWN_REDUCE_25_THRESHOLD < C.DRAWDOWN_REDUCE_50_THRESHOLD < C.DRAWDOWN_HALT_THRESHOLD
+    assert (
+        C.DRAWDOWN_REDUCE_25_THRESHOLD < C.DRAWDOWN_REDUCE_50_THRESHOLD < C.DRAWDOWN_HALT_THRESHOLD
+    )
 
 
 def test_drawdown_reduction_factors():
@@ -23,7 +25,11 @@ def test_drawdown_reduction_factors():
 
 
 def test_correlation_thresholds_are_ordered():
-    assert C.CORRELATION_FULL_THRESHOLD < C.CORRELATION_REDUCE_20_THRESHOLD < C.CORRELATION_REDUCE_40_THRESHOLD
+    assert (
+        C.CORRELATION_FULL_THRESHOLD
+        < C.CORRELATION_REDUCE_20_THRESHOLD
+        < C.CORRELATION_REDUCE_40_THRESHOLD
+    )
 
 
 def test_exactly_eight_agents():
@@ -43,6 +49,10 @@ def test_capital_phase_thresholds_are_ordered():
 
 
 def test_strategy_stages_defined():
-    stages = {C.StrategyStage.RESEARCH, C.StrategyStage.SIMULATION,
-              C.StrategyStage.PILOT, C.StrategyStage.FULL_PRODUCTION}
+    stages = {
+        C.StrategyStage.RESEARCH,
+        C.StrategyStage.SIMULATION,
+        C.StrategyStage.PILOT,
+        C.StrategyStage.FULL_PRODUCTION,
+    }
     assert len(stages) == 4

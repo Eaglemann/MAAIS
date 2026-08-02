@@ -11,7 +11,7 @@ range-bound and low-volatility regimes.
 import math
 
 from maais.agents.base import AgentOutput, BaseAgent, _clip, _neutral
-from maais.config.constants import AgentName, Regime, ZSCORE_TRIGGER
+from maais.config.constants import ZSCORE_TRIGGER, AgentName, Regime
 from maais.feature_pipeline.features import FeatureSet
 
 _NAME = AgentName.MEAN_REVERSION
@@ -32,7 +32,7 @@ class MeanReversionAgent(BaseAgent):
 
         # Probability: scales from 0.60 at |Z|=3 to 0.90 at |Z|≥6
         probability = _clip(0.50 + math.tanh((abs_z - ZSCORE_TRIGGER) * 0.5) * 0.40)
-        confidence = _clip((abs_z - ZSCORE_TRIGGER) / 4.0)   # 0 at Z=3, 1.0 at Z=7
+        confidence = _clip((abs_z - ZSCORE_TRIGGER) / 4.0)  # 0 at Z=3, 1.0 at Z=7
         risk = _volatility_risk(features)
 
         return AgentOutput(
@@ -46,7 +46,7 @@ class MeanReversionAgent(BaseAgent):
 
 def _volatility_risk(features: FeatureSet) -> float:
     if features.rolling_std is not None:
-        return _clip(features.rolling_std * 20.0)   # scale small return-std to [0,1]
+        return _clip(features.rolling_std * 20.0)  # scale small return-std to [0,1]
     if features.atr is not None and features.zscore_mean and features.zscore_mean > 0:
         return _clip(features.atr / features.zscore_mean)
     return 0.3

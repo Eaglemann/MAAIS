@@ -62,14 +62,12 @@ class FundingRate(Base):
 
 class OrderBookSnapshot(Base):
     __tablename__ = "order_book_snapshots"
-    __table_args__ = (
-        sa.Index("ix_ob_symbol_time", "symbol", "timestamp"),
-    )
+    __table_args__ = (sa.Index("ix_ob_symbol_time", "symbol", "timestamp"),)
 
     id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(sa.String(20), nullable=False)
     timestamp: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
-    bids: Mapped[list] = mapped_column(JSONB, nullable=False)   # [[price, qty], ...]
+    bids: Mapped[list] = mapped_column(JSONB, nullable=False)  # [[price, qty], ...]
     asks: Mapped[list] = mapped_column(JSONB, nullable=False)
     last_update_id: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
 

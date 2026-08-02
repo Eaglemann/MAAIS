@@ -49,8 +49,12 @@ class BlackSwanGuard:
                     f"rolling_std={features.rolling_std:.6f} > "
                     f"threshold={vol_threshold:.6f}"
                 )
-                logger.warning("black_swan_vol", symbol=features.symbol,
-                               rolling_std=features.rolling_std, threshold=vol_threshold)
+                logger.warning(
+                    "black_swan_vol",
+                    symbol=features.symbol,
+                    rolling_std=features.rolling_std,
+                    threshold=vol_threshold,
+                )
                 return False, reason
 
         if features.bid_ask_spread is not None:
@@ -60,8 +64,12 @@ class BlackSwanGuard:
                     f"spread={features.bid_ask_spread:.4f} > "
                     f"threshold={self._liquidity_threshold:.4f}"
                 )
-                logger.warning("black_swan_liquidity", symbol=features.symbol,
-                               spread=features.bid_ask_spread, threshold=self._liquidity_threshold)
+                logger.warning(
+                    "black_swan_liquidity",
+                    symbol=features.symbol,
+                    spread=features.bid_ask_spread,
+                    threshold=self._liquidity_threshold,
+                )
                 return False, reason
 
         if total_exposure_pct > self._exposure_ceiling:
@@ -70,8 +78,9 @@ class BlackSwanGuard:
                 f"exposure={total_exposure_pct:.2%} > "
                 f"ceiling={self._exposure_ceiling:.2%}"
             )
-            logger.warning("black_swan_exposure", exposure=total_exposure_pct,
-                           ceiling=self._exposure_ceiling)
+            logger.warning(
+                "black_swan_exposure", exposure=total_exposure_pct, ceiling=self._exposure_ceiling
+            )
             return False, reason
 
         return True, None

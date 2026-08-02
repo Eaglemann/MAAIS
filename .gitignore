@@ -214,3 +214,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MAAIS local runtime and design-session state
+.superpowers/
+artifacts/
+backups/
+data/

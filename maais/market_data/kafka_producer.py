@@ -33,6 +33,16 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _serialize_value(value: object) -> bytes:
+    return json.dumps(value).encode("utf-8")
+
+
+def _serialize_key(key: object) -> bytes:
+    if not isinstance(key, str):
+        raise TypeError("Kafka market-data keys must be strings")
+    return key.encode("utf-8")
+
+
 class MarketDataProducer:
     """Synchronous Kafka producer wrapping kafka-python-ng.
 
@@ -45,8 +55,8 @@ class MarketDataProducer:
         settings = get_settings()
         self._producer = KafkaProducer(
             bootstrap_servers=settings.kafka_bootstrap_servers.split(","),
-            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-            key_serializer=lambda k: k.encode("utf-8") if k else None,
+            value_serializer=_serialize_value,
+            key_serializer=_serialize_key,
             acks="all",
             retries=3,
             linger_ms=10,

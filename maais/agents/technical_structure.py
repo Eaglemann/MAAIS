@@ -18,7 +18,7 @@ class TechnicalStructureAgent(BaseAgent):
         if features.ema_fast is not None and features.ema_slow is not None:
             # Both EMAs trending same direction
             if features.ema_fast > features.ema_slow:
-                votes += 1.5   # bullish structure
+                votes += 1.5  # bullish structure
             else:
                 votes -= 1.5
             total += 1.5

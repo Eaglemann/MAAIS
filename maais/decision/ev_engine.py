@@ -42,8 +42,8 @@ def compute_ev(
         # Fallback: assume 0.5% move (conservative)
         atr_pct = 0.005
 
-    expected_gain_pct = atr_pct      # target: 1× ATR
-    expected_loss_pct = atr_pct      # stop: 1× ATR (symmetric default)
+    expected_gain_pct = atr_pct  # target: 1× ATR
+    expected_loss_pct = atr_pct  # stop: 1× ATR (symmetric default)
 
     gross_ev = p_win * expected_gain_pct - p_loss * expected_loss_pct
 

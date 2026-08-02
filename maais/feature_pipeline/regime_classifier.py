@@ -37,7 +37,9 @@ def classify_regime(
         return Regime.RANGE_BOUND
 
     # Compute baseline volatility over the full lookback window
-    returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes[-lookback:]))]
+    returns = [
+        (closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes[-lookback:]))
+    ]
     if len(returns) < 2:
         return Regime.RANGE_BOUND
 

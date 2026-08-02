@@ -24,7 +24,7 @@ class PortfolioRiskLimiter:
 
     def __init__(self, cap_pct: float = PORTFOLIO_RISK_LIMIT_PCT) -> None:
         self._cap_pct = cap_pct
-        self._positions: dict[str, float] = {}   # symbol → notional_usd
+        self._positions: dict[str, float] = {}  # symbol → notional_usd
 
     def add_position(self, symbol: str, notional_usd: float) -> None:
         """Record an open position."""
@@ -61,11 +61,16 @@ class PortfolioRiskLimiter:
         if new_pct > self._cap_pct:
             reason = (
                 f"portfolio_cap_exceeded: "
-                f"current={current_total/capital:.2%}, "
-                f"proposed_addition={proposed_usd/capital:.2%}, "
+                f"current={current_total / capital:.2%}, "
+                f"proposed_addition={proposed_usd / capital:.2%}, "
                 f"cap={self._cap_pct:.2%}"
             )
-            logger.info("portfolio_cap_rejected", symbol=symbol, new_exposure_pct=f"{new_pct:.2%}", cap=f"{self._cap_pct:.2%}")
+            logger.info(
+                "portfolio_cap_rejected",
+                symbol=symbol,
+                new_exposure_pct=f"{new_pct:.2%}",
+                cap=f"{self._cap_pct:.2%}",
+            )
             return False, reason
 
         return True, None

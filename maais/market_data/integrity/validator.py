@@ -73,8 +73,13 @@ class DataIntegrityValidator:
 
         if gaps:
             return ValidationResult(
-                "missing_data", False, symbol,
-                f"{len(gaps)} gap(s) detected: {'; '.join(gaps[:3])}{'...' if len(gaps) > 3 else ''}",
+                "missing_data",
+                False,
+                symbol,
+                (
+                    f"{len(gaps)} gap(s) detected: {'; '.join(gaps[:3])}"
+                    f"{'...' if len(gaps) > 3 else ''}"
+                ),
             )
         return ValidationResult("missing_data", True, symbol)
 
@@ -101,14 +106,16 @@ class DataIntegrityValidator:
             return ValidationResult("price_outliers", True, symbol)
 
         outliers = [
-            f"index={i+1} close={candles[i+1].close} Z={abs((changes[i] - mean) / stdev):.2f}"
+            f"index={i + 1} close={candles[i + 1].close} Z={abs((changes[i] - mean) / stdev):.2f}"
             for i, c in enumerate(changes)
             if stdev > 0 and abs((c - mean) / stdev) > z_threshold
         ]
 
         if outliers:
             return ValidationResult(
-                "price_outliers", False, symbol,
+                "price_outliers",
+                False,
+                symbol,
                 f"{len(outliers)} outlier(s): {'; '.join(outliers[:3])}",
             )
         return ValidationResult("price_outliers", True, symbol)
@@ -129,7 +136,9 @@ class DataIntegrityValidator:
         divergence = abs(float(futures_price - spot_price) / float(spot_price))
         if divergence > threshold:
             return ValidationResult(
-                "cross_exchange", False, symbol,
+                "cross_exchange",
+                False,
+                symbol,
                 f"divergence={divergence:.4%} futures={futures_price} spot={spot_price}",
             )
         return ValidationResult("cross_exchange", True, symbol)
@@ -158,7 +167,9 @@ class DataIntegrityValidator:
 
         if bad:
             return ValidationResult(
-                "timestamp_sync", False, symbol,
+                "timestamp_sync",
+                False,
+                symbol,
                 f"{len(bad)} misaligned timestamp(s): {'; '.join(bad[:3])}",
             )
         return ValidationResult("timestamp_sync", True, symbol)
@@ -176,7 +187,9 @@ class DataIntegrityValidator:
         age_seconds = (now - last_received_at).total_seconds()
         if age_seconds > timeout_seconds:
             return ValidationResult(
-                "api_outage", False, symbol,
+                "api_outage",
+                False,
+                symbol,
                 f"no data for {age_seconds:.0f}s (threshold={timeout_seconds}s)",
             )
         return ValidationResult("api_outage", True, symbol)
@@ -193,7 +206,9 @@ class DataIntegrityValidator:
         """Verify coverage: actual candle count vs expected count for the date range."""
         if not candles:
             return ValidationResult(
-                "historical_completeness", False, "",
+                "historical_completeness",
+                False,
+                "",
                 f"no candles returned for {start.isoformat()} → {end.isoformat()}",
             )
 
@@ -207,7 +222,9 @@ class DataIntegrityValidator:
         coverage = actual_count / expected_count if expected_count else 1.0
         if coverage < 0.99:
             return ValidationResult(
-                "historical_completeness", False, symbol,
+                "historical_completeness",
+                False,
+                symbol,
                 f"coverage={coverage:.2%} actual={actual_count} expected≈{expected_count}",
             )
         return ValidationResult("historical_completeness", True, symbol)

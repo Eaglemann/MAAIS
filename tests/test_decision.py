@@ -1,22 +1,23 @@
 """Tests for the Decision Engine (Batch 5)."""
 
-import pytest
 from datetime import datetime, timezone
+
+import pytest
 
 from maais.agents.base import AgentOutput
 from maais.config.constants import AgentName, Regime
-from maais.decision.adversarial import run_adversarial, _ADVERSARIAL_BLOCK_THRESHOLD
+from maais.decision.adversarial import _ADVERSARIAL_BLOCK_THRESHOLD, run_adversarial
 from maais.decision.consensus import compute_consensus
-from maais.decision.cost_estimator import estimate_costs, TAKER_FEE_PCT
+from maais.decision.cost_estimator import TAKER_FEE_PCT, estimate_costs
 from maais.decision.engine import DecisionEngine
 from maais.decision.ev_engine import compute_ev
-from maais.decision.gate import evaluate_gate, alpha_valid
-from maais.decision.schemas import AdversarialSummary, CostEstimate, ConsensusResult, EVResult
-from maais.decision.weights import AgentWeightRegistry, DEFAULT_WEIGHT
+from maais.decision.gate import alpha_valid, evaluate_gate
+from maais.decision.schemas import AdversarialSummary, CostEstimate, EVResult
+from maais.decision.weights import DEFAULT_WEIGHT, AgentWeightRegistry
 from maais.feature_pipeline.features import FeatureSet
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _ts() -> datetime:
     return datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -49,7 +50,9 @@ def _features(
     )
 
 
-def _output(name: str, direction: str, prob: float = 0.7, conf: float = 0.6, risk: float = 0.3) -> AgentOutput:
+def _output(
+    name: str, direction: str, prob: float = 0.7, conf: float = 0.6, risk: float = 0.3
+) -> AgentOutput:
     return AgentOutput(
         agent_name=name,
         directional_hypothesis=direction,
@@ -60,6 +63,7 @@ def _output(name: str, direction: str, prob: float = 0.7, conf: float = 0.6, ris
 
 
 # ── AgentWeightRegistry ───────────────────────────────────────────────────────
+
 
 class TestAgentWeightRegistry:
     def test_all_agents_initialized_to_default(self):
@@ -111,6 +115,7 @@ class TestAgentWeightRegistry:
 
 
 # ── Consensus ─────────────────────────────────────────────────────────────────
+
 
 class TestConsensus:
     def test_empty_outputs_returns_neutral(self):
@@ -167,9 +172,9 @@ class TestConsensus:
         reg = AgentWeightRegistry()
         reg.update_weight(AgentName.MOMENTUM, 3.0)  # momentum gets 3× weight
         outputs = [
-            _output(AgentName.MOMENTUM, "long"),    # weight 3.0
+            _output(AgentName.MOMENTUM, "long"),  # weight 3.0
             _output(AgentName.LIQUIDITY, "short"),  # weight 1.0
-            _output(AgentName.CARRY_YIELD, "short"), # weight 1.0
+            _output(AgentName.CARRY_YIELD, "short"),  # weight 1.0
         ]
         result = compute_consensus(outputs, reg)
         assert result.direction == "long"  # 3 > 2
@@ -194,6 +199,7 @@ class TestConsensus:
 
 
 # ── Adversarial ───────────────────────────────────────────────────────────────
+
 
 class TestAdversarial:
     def test_no_dissenters_challenge_not_accepted(self):
@@ -245,6 +251,7 @@ class TestAdversarial:
 
 # ── Cost Estimator ────────────────────────────────────────────────────────────
 
+
 class TestCostEstimator:
     def test_round_trip_fee_is_2x_taker(self):
         result = estimate_costs(_features(atr=None, bid_ask_spread=None))
@@ -279,17 +286,28 @@ class TestCostEstimator:
 
 # ── EV Engine ─────────────────────────────────────────────────────────────────
 
+
 class TestEVEngine:
     def test_high_probability_positive_ev(self):
         feats = _features(atr=500.0, zscore_mean=50000.0)
-        costs = CostEstimate(exchange_fee_pct=0.0008, slippage_pct=0.001, total_cost_pct=0.0018, funding_carry_pct=0.0)
+        costs = CostEstimate(
+            exchange_fee_pct=0.0008,
+            slippage_pct=0.001,
+            total_cost_pct=0.0018,
+            funding_carry_pct=0.0,
+        )
         result = compute_ev(p_win=0.75, features=feats, costs=costs, direction="long")
         # P(win)×gain − P(loss)×loss = 0.75×0.01 − 0.25×0.01 = 0.005 → net after 0.0018 cost > 0
         assert result.is_positive
 
     def test_low_probability_negative_ev(self):
         feats = _features(atr=500.0, zscore_mean=50000.0)
-        costs = CostEstimate(exchange_fee_pct=0.0008, slippage_pct=0.005, total_cost_pct=0.0058, funding_carry_pct=0.0)
+        costs = CostEstimate(
+            exchange_fee_pct=0.0008,
+            slippage_pct=0.005,
+            total_cost_pct=0.0058,
+            funding_carry_pct=0.0,
+        )
         result = compute_ev(p_win=0.51, features=feats, costs=costs, direction="long")
         # Near coin-flip with high costs → negative
         assert not result.is_positive
@@ -304,7 +322,7 @@ class TestEVEngine:
         feats = _features(annualized_funding=0.365, funding_bias="long_heavy")
         costs = CostEstimate(0.0008, 0.001, 0.0018, funding_carry_pct=0.365 / (365 * 3))
         ev_short = compute_ev(0.6, feats, costs, "short")  # short earns carry
-        ev_long = compute_ev(0.6, feats, costs, "long")    # long pays carry
+        ev_long = compute_ev(0.6, feats, costs, "long")  # long pays carry
         assert ev_short.net_ev > ev_long.net_ev
 
     def test_fallback_atr_when_none(self):
@@ -315,6 +333,7 @@ class TestEVEngine:
 
 
 # ── Gate ──────────────────────────────────────────────────────────────────────
+
 
 class TestGate:
     def _ev(self, is_positive: bool) -> EVResult:
@@ -354,6 +373,7 @@ class TestGate:
 
 
 # ── Decision Engine (Integration) ─────────────────────────────────────────────
+
 
 class TestDecisionEngine:
     def test_strong_consensus_approves(self):
@@ -421,7 +441,12 @@ class TestDecisionEngine:
         outputs = [
             _output(AgentName.MOMENTUM, "long", prob=0.70, conf=0.5),
             # High-confidence dissenter
-            _output(AgentName.MEAN_REVERSION, "short", prob=0.75, conf=_ADVERSARIAL_BLOCK_THRESHOLD + 0.05),
+            _output(
+                AgentName.MEAN_REVERSION,
+                "short",
+                prob=0.75,
+                conf=_ADVERSARIAL_BLOCK_THRESHOLD + 0.05,
+            ),
         ]
         result = engine.evaluate(feats, outputs)
         if result.adversarial.challenge_accepted:

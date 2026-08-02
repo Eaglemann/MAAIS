@@ -7,8 +7,8 @@ The pipeline produces one FeatureSet per call, optionally saving to DuckDB.
 """
 
 from maais.config.constants import PRIMARY_TIMEFRAME
-from maais.feature_pipeline.features import FeatureSet
 from maais.feature_pipeline.feature_store import FeatureStore
+from maais.feature_pipeline.features import FeatureSet
 from maais.feature_pipeline.funding_features import compute_funding_features
 from maais.feature_pipeline.momentum import compute_momentum_features
 from maais.feature_pipeline.orderbook_features import compute_orderbook_features

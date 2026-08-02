@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from maais.core.logging import get_logger
-from maais.monitoring.schemas import ComponentName, HealthStatus
+from maais.monitoring.schemas import HealthStatus
 
 logger = get_logger(__name__)
 
@@ -45,8 +45,9 @@ class SystemHealthTracker:
         status.error_count += 1
         status.last_error = error
         status.is_healthy = False
-        logger.warning("component_error", component=component, error=error,
-                       error_count=status.error_count)
+        logger.warning(
+            "component_error", component=component, error=error, error_count=status.error_count
+        )
 
     def get_status(self, component: str) -> HealthStatus:
         """Return current health status. Components never seen are unhealthy."""

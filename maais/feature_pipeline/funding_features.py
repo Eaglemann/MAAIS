@@ -3,11 +3,19 @@
 Annualized funding = rate × 3 × 365 (funding paid 3× per day on Binance Futures).
 """
 
+from typing import TypedDict
+
 from maais.config.constants import FUNDING_ANNUAL_MULTIPLIER, FUNDING_BIAS_THRESHOLD
 from maais.market_data.schemas import FundingRateData
 
 
-def compute_funding_features(funding: FundingRateData | None) -> dict[str, float | str | None]:
+class FundingFeatures(TypedDict):
+    funding_rate: float | None
+    annualized_funding: float | None
+    funding_bias: str | None
+
+
+def compute_funding_features(funding: FundingRateData | None) -> FundingFeatures:
     if funding is None:
         return {"funding_rate": None, "annualized_funding": None, "funding_bias": None}
 
@@ -15,7 +23,7 @@ def compute_funding_features(funding: FundingRateData | None) -> dict[str, float
     annualized = rate * FUNDING_ANNUAL_MULTIPLIER
 
     if rate > FUNDING_BIAS_THRESHOLD:
-        bias = "long_heavy"   # longs are paying; bearish pressure
+        bias = "long_heavy"  # longs are paying; bearish pressure
     elif rate < -FUNDING_BIAS_THRESHOLD:
         bias = "short_heavy"  # shorts are paying; bullish pressure
     else:

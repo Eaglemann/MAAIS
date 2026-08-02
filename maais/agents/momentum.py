@@ -23,18 +23,26 @@ class MomentumAgent(BaseAgent):
 
         # Short-term momentum
         if features.roc_short is not None:
-            votes += (1.0 if features.roc_short > 0 else -1.0) * min(1.0, abs(features.roc_short) * 20)
+            votes += (1.0 if features.roc_short > 0 else -1.0) * min(
+                1.0, abs(features.roc_short) * 20
+            )
             total += 1.0
 
         # Long-term momentum (half weight)
         if features.roc_long is not None:
-            votes += (1.0 if features.roc_long > 0 else -1.0) * 0.5 * min(1.0, abs(features.roc_long) * 10)
+            votes += (
+                (1.0 if features.roc_long > 0 else -1.0)
+                * 0.5
+                * min(1.0, abs(features.roc_long) * 10)
+            )
             total += 0.5
 
         if total == 0:
             return _neutral(_NAME)
 
-        signals_present = sum(1 for x in [features.ema_signal, features.roc_short, features.roc_long] if x is not None)
+        signals_present = sum(
+            1 for x in [features.ema_signal, features.roc_short, features.roc_long] if x is not None
+        )
         confidence = _clip(signals_present / 3.0)
         risk = _clip(features.rolling_std * 15.0) if features.rolling_std else 0.35
 

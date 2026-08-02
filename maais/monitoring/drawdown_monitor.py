@@ -21,7 +21,7 @@ from maais.risk.drawdown import DrawdownController
 
 logger = get_logger(__name__)
 
-_DRAWDOWN_CRITICAL_THRESHOLD = 0.15   # 15% → CRITICAL alert
+_DRAWDOWN_CRITICAL_THRESHOLD = 0.15  # 15% → CRITICAL alert
 
 
 class DrawdownMonitor:
@@ -36,7 +36,7 @@ class DrawdownMonitor:
         self._dd = drawdown_controller
         self._alerts = alert_dispatcher
         self._kill_switch = kill_switch
-        self._last_alerted_tier: float = 0.0   # avoid repeated alerts for the same tier
+        self._last_alerted_tier: float = 0.0  # avoid repeated alerts for the same tier
 
     async def check(self) -> None:
         """Read current drawdown state and fire appropriate alerts."""
@@ -48,7 +48,10 @@ class DrawdownMonitor:
             await self._alerts.send_critical(
                 component="drawdown_monitor",
                 title="TRADING HALT — Max Drawdown Exceeded",
-                message=f"Drawdown {pct:.2%} >= {DRAWDOWN_HALT_THRESHOLD:.0%} threshold. All trading suspended.",
+                message=(
+                    f"Drawdown {pct:.2%} >= {DRAWDOWN_HALT_THRESHOLD:.0%} threshold. "
+                    "All trading suspended."
+                ),
                 drawdown_pct=f"{pct:.4f}",
                 peak=state.peak_capital,
                 current=state.current_capital,
@@ -57,7 +60,10 @@ class DrawdownMonitor:
                 self._kill_switch.halt(f"drawdown_halt: {pct:.2%}")
             return
 
-        if pct >= _DRAWDOWN_CRITICAL_THRESHOLD and self._last_alerted_tier < _DRAWDOWN_CRITICAL_THRESHOLD:
+        if (
+            pct >= _DRAWDOWN_CRITICAL_THRESHOLD
+            and self._last_alerted_tier < _DRAWDOWN_CRITICAL_THRESHOLD
+        ):
             self._last_alerted_tier = _DRAWDOWN_CRITICAL_THRESHOLD
             await self._alerts.send_critical(
                 component="drawdown_monitor",
@@ -67,7 +73,10 @@ class DrawdownMonitor:
             )
             return
 
-        if pct >= DRAWDOWN_REDUCE_50_THRESHOLD and self._last_alerted_tier < DRAWDOWN_REDUCE_50_THRESHOLD:
+        if (
+            pct >= DRAWDOWN_REDUCE_50_THRESHOLD
+            and self._last_alerted_tier < DRAWDOWN_REDUCE_50_THRESHOLD
+        ):
             self._last_alerted_tier = DRAWDOWN_REDUCE_50_THRESHOLD
             await self._alerts.send_warning(
                 component="drawdown_monitor",
@@ -77,7 +86,10 @@ class DrawdownMonitor:
             )
             return
 
-        if pct >= DRAWDOWN_REDUCE_25_THRESHOLD and self._last_alerted_tier < DRAWDOWN_REDUCE_25_THRESHOLD:
+        if (
+            pct >= DRAWDOWN_REDUCE_25_THRESHOLD
+            and self._last_alerted_tier < DRAWDOWN_REDUCE_25_THRESHOLD
+        ):
             self._last_alerted_tier = DRAWDOWN_REDUCE_25_THRESHOLD
             await self._alerts.send_warning(
                 component="drawdown_monitor",

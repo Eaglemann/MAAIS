@@ -94,7 +94,7 @@ def _parse_agg_trade_event(data: dict) -> TradeData | None:
         price=Decimal(data["p"]),
         quantity=Decimal(data["q"]),
         is_buyer_maker=bool(data["m"]),
-        trade_id=int(data["l"]),   # last trade ID in the aggregate
+        trade_id=int(data["l"]),  # last trade ID in the aggregate
     )
 
 
@@ -123,7 +123,7 @@ class BinanceWebSocketConnector:
         self._queue: asyncio.Queue[MarketEvent] = asyncio.Queue(maxsize=10_000)
         self._running = False
 
-    def _parse_message(self, raw: str) -> MarketEvent | None:
+    def _parse_message(self, raw: str | bytes) -> MarketEvent | None:
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:
@@ -150,7 +150,7 @@ class BinanceWebSocketConnector:
                 connect_time = asyncio.get_event_loop().time()
                 async with websockets.connect(self._url, ping_interval=20, ping_timeout=10) as ws:
                     logger.info("websocket_connected", symbols=len(self._symbols))
-                    backoff = _BACKOFF_BASE   # reset on successful connect
+                    backoff = _BACKOFF_BASE  # reset on successful connect
                     async for raw in ws:
                         if not self._running:
                             return
@@ -161,7 +161,10 @@ class BinanceWebSocketConnector:
                             except asyncio.QueueFull:
                                 logger.warning("event_queue_full_dropping_event")
                         # If connection has been stable, reset backoff
-                        if asyncio.get_event_loop().time() - connect_time > _STABLE_CONNECTION_SECONDS:
+                        if (
+                            asyncio.get_event_loop().time() - connect_time
+                            > _STABLE_CONNECTION_SECONDS
+                        ):
                             backoff = _BACKOFF_BASE
 
             except ConnectionClosed as exc:

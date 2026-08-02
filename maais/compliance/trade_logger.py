@@ -41,7 +41,6 @@ class TradeLogger:
 
     async def update_lot_remaining(self, trade_id: str, remaining_size) -> None:
         """Update the remaining size of a lot after a partial close."""
-        from decimal import Decimal
 
         from sqlalchemy import update
 

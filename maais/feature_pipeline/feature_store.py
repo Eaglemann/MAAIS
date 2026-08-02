@@ -46,13 +46,24 @@ INSERT OR REPLACE INTO features VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 
 def _to_row(f: FeatureSet) -> tuple:
     return (
-        f.symbol, f.timeframe, f.timestamp,
-        f.zscore, f.zscore_mean, f.zscore_std,
-        f.ema_fast, f.ema_slow, f.ema_signal,
-        f.roc_short, f.roc_long,
-        f.atr, f.rolling_std,
-        f.bid_ask_spread, f.book_imbalance,
-        f.funding_rate, f.annualized_funding, f.funding_bias,
+        f.symbol,
+        f.timeframe,
+        f.timestamp,
+        f.zscore,
+        f.zscore_mean,
+        f.zscore_std,
+        f.ema_fast,
+        f.ema_slow,
+        f.ema_signal,
+        f.roc_short,
+        f.roc_long,
+        f.atr,
+        f.rolling_std,
+        f.bid_ask_spread,
+        f.book_imbalance,
+        f.funding_rate,
+        f.annualized_funding,
+        f.funding_bias,
         f.regime,
     )
 
@@ -88,7 +99,9 @@ class FeatureStore:
         end: datetime,
     ) -> list[FeatureSet]:
         rows = self._conn.execute(
-            "SELECT * FROM features WHERE symbol=? AND timeframe=? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp",
+            "SELECT * FROM features "
+            "WHERE symbol=? AND timeframe=? AND timestamp >= ? AND timestamp <= ? "
+            "ORDER BY timestamp",
             [symbol, timeframe, start, end],
         ).fetchall()
         return [_row_to_feature(r) for r in rows]

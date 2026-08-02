@@ -22,22 +22,24 @@ def _make_candles(
         ot = base + timedelta(minutes=i * interval)
         ct = ot + timedelta(minutes=interval, seconds=-1)
         close = Decimal(str(close_prices[i])) if close_prices else Decimal("100.0")
-        candles.append(KlineData(
-            symbol=symbol,
-            timeframe=timeframe,
-            open_time=ot,
-            open=Decimal("100.0"),
-            high=Decimal("101.0"),
-            low=Decimal("99.0"),
-            close=close,
-            volume=Decimal("10.0"),
-            close_time=ct,
-            quote_volume=Decimal("1000.0"),
-            trade_count=50,
-            taker_buy_volume=Decimal("5.0"),
-            taker_buy_quote_volume=Decimal("500.0"),
-            is_closed=True,
-        ))
+        candles.append(
+            KlineData(
+                symbol=symbol,
+                timeframe=timeframe,
+                open_time=ot,
+                open=Decimal("100.0"),
+                high=Decimal("101.0"),
+                low=Decimal("99.0"),
+                close=close,
+                volume=Decimal("10.0"),
+                close_time=ct,
+                quote_volume=Decimal("1000.0"),
+                trade_count=50,
+                taker_buy_volume=Decimal("5.0"),
+                taker_buy_quote_volume=Decimal("500.0"),
+                is_closed=True,
+            )
+        )
     return candles
 
 
@@ -80,7 +82,7 @@ class TestPriceOutliers:
         # With Z threshold=3.0, a 100% jump on a flat series is detectable.
         # Max achievable Z for a single outlier in n samples ≈ sqrt(n-1),
         # so we use a lower threshold for this test.
-        prices = [100.0] * 19 + [200.0]   # 100% jump at the end
+        prices = [100.0] * 19 + [200.0]  # 100% jump at the end
         candles = _make_candles(20, close_prices=prices)
         result = validator.check_price_outliers(candles, z_threshold=3.0)
         assert not result.passed
@@ -94,13 +96,17 @@ class TestPriceOutliers:
 class TestCrossExchangeDivergence:
     def test_within_threshold_passes(self):
         result = validator.check_cross_exchange_divergence(
-            "BTCUSDT", Decimal("50000"), Decimal("50500")  # 1% divergence
+            "BTCUSDT",
+            Decimal("50000"),
+            Decimal("50500"),  # 1% divergence
         )
         assert result.passed
 
     def test_over_threshold_fails(self):
         result = validator.check_cross_exchange_divergence(
-            "BTCUSDT", Decimal("50000"), Decimal("45000")  # 10% divergence
+            "BTCUSDT",
+            Decimal("50000"),
+            Decimal("45000"),  # 10% divergence
         )
         assert not result.passed
 
@@ -140,7 +146,7 @@ class TestApiOutage:
 class TestHistoricalCompleteness:
     def test_complete_dataset_passes(self):
         start = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        end = datetime(2024, 1, 1, 0, 10, tzinfo=timezone.utc)   # 10 minutes
+        end = datetime(2024, 1, 1, 0, 10, tzinfo=timezone.utc)  # 10 minutes
         candles = _make_candles(10, start_minute=0)
         result = validator.check_historical_completeness(candles, start, end, "1m")
         assert result.passed
@@ -163,7 +169,7 @@ class TestValidateAll:
     def test_all_checks_run(self):
         candles = _make_candles(10)
         results = validator.validate_candles(candles, "1m")
-        assert len(results) == 3   # missing_data, price_outliers, timestamp_sync
+        assert len(results) == 3  # missing_data, price_outliers, timestamp_sync
 
     def test_all_passed_helper(self):
         candles = _make_candles(10)

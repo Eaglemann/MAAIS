@@ -15,22 +15,30 @@ from maais.feature_pipeline.volatility import compute_atr, compute_rolling_std
 from maais.feature_pipeline.zscore import compute_zscore, is_mean_reversion_signal
 from maais.market_data.schemas import FundingRateData, KlineData, OrderBookSnapshot
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _candle(minute: int, close: float, high: float | None = None, low: float | None = None) -> KlineData:
+
+def _candle(
+    minute: int, close: float, high: float | None = None, low: float | None = None
+) -> KlineData:
     ot = datetime(2024, 1, 1, 0, minute % 60, 0, tzinfo=timezone.utc)
     ct = datetime(2024, 1, 1, 0, minute % 60, 59, tzinfo=timezone.utc)
     c = Decimal(str(close))
     return KlineData(
-        symbol="BTCUSDT", timeframe="1m",
-        open_time=ot, open=c,
+        symbol="BTCUSDT",
+        timeframe="1m",
+        open_time=ot,
+        open=c,
         high=Decimal(str(high or close + 0.5)),
         low=Decimal(str(low or close - 0.5)),
-        close=c, volume=Decimal("10"),
-        close_time=ct, quote_volume=Decimal("1000"),
-        trade_count=50, taker_buy_volume=Decimal("5"),
-        taker_buy_quote_volume=Decimal("500"), is_closed=True,
+        close=c,
+        volume=Decimal("10"),
+        close_time=ct,
+        quote_volume=Decimal("1000"),
+        trade_count=50,
+        taker_buy_volume=Decimal("5"),
+        taker_buy_quote_volume=Decimal("500"),
+        is_closed=True,
     )
 
 
@@ -39,6 +47,7 @@ def _candles(prices: list[float]) -> list[KlineData]:
 
 
 # ── Z-score ───────────────────────────────────────────────────────────────────
+
 
 class TestZscore:
     def test_insufficient_data_returns_none(self):
@@ -78,6 +87,7 @@ class TestZscore:
 
 
 # ── Momentum ──────────────────────────────────────────────────────────────────
+
 
 class TestEma:
     def test_insufficient_data_returns_none(self):
@@ -132,6 +142,7 @@ class TestMomentumFeatures:
 
 # ── Volatility ────────────────────────────────────────────────────────────────
 
+
 class TestAtr:
     def test_insufficient_data_returns_none(self):
         candles = _candles([100.0] * 5)
@@ -164,6 +175,7 @@ class TestRollingStd:
 
 
 # ── Order Book ────────────────────────────────────────────────────────────────
+
 
 class TestOrderbookFeatures:
     def _snapshot(self, bids, asks) -> OrderBookSnapshot:
@@ -204,6 +216,7 @@ class TestOrderbookFeatures:
 
 # ── Funding Features ─────────────────────────────────────────────────────────
 
+
 class TestFundingFeatures:
     def _funding(self, rate: float) -> FundingRateData:
         return FundingRateData(
@@ -237,6 +250,7 @@ class TestFundingFeatures:
 
 # ── Regime Classifier ─────────────────────────────────────────────────────────
 
+
 class TestRegimeClassifier:
     def test_insufficient_data_returns_range_bound(self):
         result = classify_regime([100.0] * 5, None, None, None)
@@ -252,7 +266,8 @@ class TestRegimeClassifier:
         # Alternate between 100 and 110 → high rolling std
         prices = [100.0 + (i % 2) * 10.0 for i in range(60)]
         import statistics
-        returns = [(prices[i] - prices[i-1]) / prices[i-1] for i in range(1, len(prices))]
+
+        returns = [(prices[i] - prices[i - 1]) / prices[i - 1] for i in range(1, len(prices))]
         std = statistics.stdev(returns)
         result = classify_regime(prices, rolling_std=std * 3, ema_fast=105.0, ema_slow=100.0)
         assert result == Regime.HIGH_VOLATILITY
@@ -261,7 +276,8 @@ class TestRegimeClassifier:
         # Steady uptrend → EMA fast >> EMA slow → Trending
         prices = [100.0 + i * 0.5 for i in range(60)]
         import statistics
-        returns = [(prices[i] - prices[i-1]) / prices[i-1] for i in range(1, len(prices))]
+
+        returns = [(prices[i] - prices[i - 1]) / prices[i - 1] for i in range(1, len(prices))]
         std = statistics.stdev(returns)
         # Use moderate rolling_std (not extreme)
         result = classify_regime(prices, rolling_std=std, ema_fast=130.0, ema_slow=110.0)
@@ -275,6 +291,7 @@ class TestRegimeClassifier:
 
 
 # ── Pipeline Integration ──────────────────────────────────────────────────────
+
 
 class TestFeaturePipeline:
     def test_empty_candles_returns_none(self):

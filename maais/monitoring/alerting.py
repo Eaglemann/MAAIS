@@ -43,33 +43,39 @@ class AlertDispatcher:
 
     async def send_critical(self, component: str, title: str, message: str, **meta) -> None:
         """Convenience method for CRITICAL alerts."""
-        await self.send(AlertEvent(
-            level=AlertLevel.CRITICAL,
-            component=component,
-            title=title,
-            message=message,
-            metadata=meta,
-        ))
+        await self.send(
+            AlertEvent(
+                level=AlertLevel.CRITICAL,
+                component=component,
+                title=title,
+                message=message,
+                metadata=meta,
+            )
+        )
 
     async def send_warning(self, component: str, title: str, message: str, **meta) -> None:
         """Convenience method for WARNING alerts."""
-        await self.send(AlertEvent(
-            level=AlertLevel.WARNING,
-            component=component,
-            title=title,
-            message=message,
-            metadata=meta,
-        ))
+        await self.send(
+            AlertEvent(
+                level=AlertLevel.WARNING,
+                component=component,
+                title=title,
+                message=message,
+                metadata=meta,
+            )
+        )
 
     async def send_info(self, component: str, title: str, message: str, **meta) -> None:
         """Convenience method for INFO alerts."""
-        await self.send(AlertEvent(
-            level=AlertLevel.INFO,
-            component=component,
-            title=title,
-            message=message,
-            metadata=meta,
-        ))
+        await self.send(
+            AlertEvent(
+                level=AlertLevel.INFO,
+                component=component,
+                title=title,
+                message=message,
+                metadata=meta,
+            )
+        )
 
     async def _send_telegram(self, event: AlertEvent) -> None:
         text = (

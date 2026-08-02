@@ -1,5 +1,7 @@
 """Tests for the Risk Engine (Batch 6)."""
 
+from datetime import datetime, timezone
+
 import pytest
 
 from maais.config.constants import (
@@ -20,11 +22,9 @@ from maais.risk.drawdown import DrawdownController, _get_multiplier
 from maais.risk.engine import RiskEngine
 from maais.risk.kelly import half_kelly_fraction, volatility_adjusted_fraction
 from maais.risk.portfolio import PortfolioRiskLimiter
-from maais.risk.schemas import DrawdownState, PositionSize
-from datetime import datetime, timezone
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _ts():
     return datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -64,6 +64,7 @@ def _engine(capital: float = 100_000.0) -> RiskEngine:
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
+
 class TestConstants:
     def test_correlation_rolling_window_is_60(self):
         assert CORRELATION_ROLLING_WINDOW == 60
@@ -86,6 +87,7 @@ class TestConstants:
 
 
 # ── Half-Kelly ────────────────────────────────────────────────────────────────
+
 
 class TestHalfKelly:
     def test_coin_flip_zero_kelly(self):
@@ -121,6 +123,7 @@ class TestHalfKelly:
 
 # ── Volatility-Adjusted Sizing ────────────────────────────────────────────────
 
+
 class TestVolatilityAdjusted:
     def test_higher_atr_smaller_fraction(self):
         # ATR=2000 → atr_pct=0.04 → fraction=0.5 → capped at 0.25
@@ -148,6 +151,7 @@ class TestVolatilityAdjusted:
 
 
 # ── Drawdown Controller ───────────────────────────────────────────────────────
+
 
 class TestDrawdownController:
     def test_no_drawdown_normal_multiplier(self):
@@ -214,6 +218,7 @@ class TestDrawdownController:
 
 # ── Correlation Controller ────────────────────────────────────────────────────
 
+
 class TestCorrelationController:
     def _fill(self, ctrl: CorrelationController, sym: str, returns: list[float]) -> None:
         for r in returns:
@@ -275,6 +280,7 @@ class TestCorrelationController:
 
 # ── Portfolio Risk Limiter ────────────────────────────────────────────────────
 
+
 class TestPortfolioRiskLimiter:
     def test_empty_portfolio_allows_new_position(self):
         limiter = PortfolioRiskLimiter()
@@ -327,6 +333,7 @@ class TestPortfolioRiskLimiter:
 
 # ── Risk Engine (Integration) ──────────────────────────────────────────────────
 
+
 class TestRiskEngine:
     def test_normal_conditions_approved(self):
         engine = _engine()
@@ -377,7 +384,10 @@ class TestRiskEngine:
 
         engine = RiskEngine(DrawdownController(100_000.0), ctrl, PortfolioRiskLimiter())
         result = engine.evaluate(
-            "ETHUSDT", 100_000.0, _ev(0.65), _features(),
+            "ETHUSDT",
+            100_000.0,
+            _ev(0.65),
+            _features(),
             open_symbols=["BTCUSDT"],
         )
         assert not result.approved

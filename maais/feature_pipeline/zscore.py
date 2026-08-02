@@ -6,6 +6,7 @@ Lookback default: 20 periods (ZSCORE_LOOKBACK in config/constants.py).
 """
 
 import statistics
+
 from maais.config.constants import ZSCORE_LOOKBACK, ZSCORE_TRIGGER
 
 
