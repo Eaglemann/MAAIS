@@ -19,7 +19,13 @@ Mission Control is available at [http://127.0.0.1:8000](http://127.0.0.1:8000).
 ```bash
 scripts/status-paper-week.sh
 uv run maais verify-ledger
+uv run maais health --experiment EXPERIMENT_ID --maximum-lag-seconds 180
 ```
+
+Add `--alert` to the health command to emit a structured critical alert and, if
+`TELEGRAM_BOT_TOKEN` plus `TELEGRAM_CHAT_ID` are configured, send it to the
+sole operator. Notifications are supplementary; Mission Control and persisted
+incidents remain authoritative.
 
 Review Mission Control at least twice daily. Confirm:
 

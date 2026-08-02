@@ -59,6 +59,15 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/restore-drills/latest/restore-verification.json",
         ]
     )
+    health = parser.parse_args(
+        [
+            "health",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--maximum-lag-seconds",
+            "180",
+        ]
+    )
 
     assert prepare.output == Path("candidate.json")
     assert not prepare.force
@@ -72,6 +81,8 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert restore.target_database == "maais_week_restore"
     assert preflight.repository == Path.cwd()
     assert preflight.minimum_free_gb == 5
+    assert health.maximum_lag_seconds == 180
+    assert not health.allow_stopped
 
     with pytest.raises(SystemExit):
         parser.parse_args(["mission-control", "--port", "0"])

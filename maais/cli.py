@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import json
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -18,6 +18,7 @@ from maais.live import (
     run_live_paper_manifest,
 )
 from maais.operations.backups import backup_configured_database
+from maais.operations.health import collect_configured_experiment_health
 from maais.operations.preflight import run_candidate_preflight
 from maais.operations.reporting import (
     build_configured_daily_report,
@@ -102,6 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--repository", type=Path, default=Path.cwd())
     preflight.add_argument("--dashboard-dir", type=Path, default=Path("dashboard/dist"))
     preflight.add_argument("--minimum-free-gb", type=_positive_int, default=5)
+    health = commands.add_parser(
+        "health",
+        help="verify ledger, runtime lease, cursor freshness, incidents, and controls",
+    )
+    health.add_argument("--experiment", type=UUID, required=True)
+    health.add_argument("--maximum-lag-seconds", type=_positive_int, default=180)
+    health.add_argument("--allow-stopped", action="store_true")
+    health.add_argument("--alert", action="store_true")
     return parser
 
 
@@ -204,6 +213,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(report, sort_keys=True))
         return 0 if report["passed"] is True else 1
+    if arguments.command == "health":
+        report = asyncio.run(
+            collect_configured_experiment_health(
+                arguments.experiment,
+                maximum_lag=timedelta(seconds=arguments.maximum_lag_seconds),
+                allow_stopped=arguments.allow_stopped,
+                send_alert=arguments.alert,
+            )
+        )
+        print(json.dumps(report, sort_keys=True))
+        return 0 if report["healthy"] is True else 1
     manifest = load_manifest_file(arguments.manifest)
     asyncio.run(run_live_paper_manifest(manifest, settings=settings))
     return 0
