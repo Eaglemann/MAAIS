@@ -10,7 +10,7 @@ scripts/start-paper-week.sh \
   artifacts/restore-drills/<drill>/restore-verification.json
 ```
 
-The script starts PostgreSQL, applies migrations, runs fail-closed preflight, starts Mission Control on localhost, starts the paper worker, and waits for a running checkpoint plus active lease. Process IDs, immutable inputs, preflight output, and logs are recorded under `artifacts/run-state/`.
+The script starts PostgreSQL, applies migrations, runs fail-closed preflight, starts Mission Control on localhost, starts the paper worker, waits for a running checkpoint plus active lease, and starts a tracked OS sleep inhibitor. Process IDs, immutable inputs, preflight output, and logs are recorded under `artifacts/run-state/`. Startup fails if neither `caffeinate` nor `systemd-inhibit` is available.
 
 Mission Control is available at [http://127.0.0.1:8000](http://127.0.0.1:8000).
 

@@ -40,14 +40,19 @@ RUN_MODE=paper_live uv run maais preflight \
 
 dashboard_log="${log_dir}/mission-control.log"
 worker_log="${log_dir}/paper-worker.log"
+awake_log="${log_dir}/sleep-inhibitor.log"
 nohup uv run maais mission-control --port "${mission_control_port}" \
   >> "${dashboard_log}" 2>&1 &
 dashboard_pid=$!
 
 worker_pid=""
+awake_pid=""
 cleanup_startup() {
   if [[ "${worker_pid}" =~ ^[0-9]+$ ]]; then
     paper_signal_process_tree "${worker_pid}"
+  fi
+  if [[ "${awake_pid}" =~ ^[0-9]+$ ]]; then
+    kill -TERM "${awake_pid}" 2>/dev/null || true
   fi
   kill -TERM "${dashboard_pid}" 2>/dev/null || true
 }
@@ -92,6 +97,20 @@ if [[ "${worker_ready}" != true ]]; then
   exit 1
 fi
 
+if ! paper_start_sleep_inhibitor "${worker_pid}" "${awake_log}"; then
+  echo "paper worker cannot start without a supported sleep inhibitor" >&2
+  cleanup_startup
+  exit 1
+fi
+awake_pid="${PAPER_SLEEP_INHIBITOR_PID}"
+awake_kind="${PAPER_SLEEP_INHIBITOR_KIND}"
+sleep 1
+if ! kill -0 "${awake_pid}" 2>/dev/null; then
+  echo "sleep inhibitor exited during startup; inspect ${awake_log}" >&2
+  cleanup_startup
+  exit 1
+fi
+
 temporary_state="${current_state}.tmp"
 jq -n \
   --arg experiment_id "${experiment_id}" \
@@ -101,10 +120,12 @@ jq -n \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson worker_pid "${worker_pid}" \
   --argjson dashboard_pid "${dashboard_pid}" \
+  --argjson awake_pid "${awake_pid}" \
+  --arg awake_kind "${awake_kind}" \
   --argjson port "${mission_control_port}" \
-  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,mission_control_port:$port}' \
+  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,mission_control_port:$port}' \
   > "${temporary_state}"
 mv "${temporary_state}" "${current_state}"
 
 trap - ERR INT TERM
-echo "paper week started: experiment=${experiment_id} worker_pid=${worker_pid} dashboard=http://127.0.0.1:${mission_control_port}"
+echo "paper week started: experiment=${experiment_id} worker_pid=${worker_pid} awake=${awake_kind}:${awake_pid} dashboard=http://127.0.0.1:${mission_control_port}"
