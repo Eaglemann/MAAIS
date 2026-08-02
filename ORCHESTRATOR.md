@@ -1,7 +1,14 @@
 # ORCHESTRATOR.md — Development Process
 
-> This document governs how the MAAIS system is built.
-> **Nothing is assumed. Everything is asked.**
+> Historical batch mechanics remain useful, but the current paper-platform
+> build is governed by the approved 2026-08-02 design and master delivery plan.
+
+## CURRENT NEXT ACTION
+
+Execute Phase 0 baseline safety: explicit runtime modes, Demo/Testnet-only
+authenticated execution, fail-closed legacy authorization, reproducible
+PostgreSQL, and enforced quality/security checks. Phase completion authorizes
+planning the next platform phase; it does not authorize a timed experiment.
 
 ---
 

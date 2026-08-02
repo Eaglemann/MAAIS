@@ -1,11 +1,16 @@
-# SHIPPED.md — What Has Been Built
+# SHIPPED.md — Historical Implemented Component Inventory
 
-> Tracks all completed and deployed components of the MAAIS system.
-> Updated after each completed batch in the development process.
+> Tracks code that has been implemented. "Shipped" here does not mean deployed,
+> production-ready, paper-experiment-ready, scientifically validated, or safe
+> for live money. Current readiness is defined only by the 2026-08-02 design and
+> master delivery plan.
 
 ---
 
-## STATUS: BATCH 0 COMPLETE
+## STATUS: COMPONENT PROTOTYPE — PLATFORM READINESS IN PROGRESS
+
+The historical test counts below are snapshots from their batch dates, not
+current evidence. No timed paper experiment may start from this document.
 
 ---
 
