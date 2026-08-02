@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import cast
 from uuid import UUID
 
@@ -13,7 +14,7 @@ from maais.domain.enums import ExperimentStatus, StrategyStage
 from maais.domain.events import NewDomainEvent
 from maais.domain.json import JsonValue, MutableJsonValue, freeze_json, to_json_data
 from maais.experiments.manifest import AgentManifestEntry, ExperimentManifest
-from maais.experiments.service import ExperimentTransition
+from maais.experiments.service import ExperimentLifecycle, ExperimentTransition
 
 
 class ImmutableManifestError(RuntimeError):
@@ -212,3 +213,38 @@ class ExperimentRepository:
         if model is None:
             raise LookupError(f"experiment not found: {experiment_id}")
         return ExperimentManifest.from_dict(cast(dict[str, object], model.manifest_json))
+
+    async def fail_active(
+        self,
+        manifest: ExperimentManifest,
+        *,
+        reason: str,
+        failed_at: datetime,
+    ) -> bool:
+        """Fail a running/paused experiment idempotently inside the current transaction."""
+
+        model = await self._session.scalar(
+            select(ExperimentModel)
+            .where(ExperimentModel.id == manifest.experiment_id)
+            .with_for_update()
+        )
+        if model is None:
+            raise LookupError(f"experiment not found: {manifest.experiment_id}")
+        if model.manifest_hash != manifest.manifest_hash:
+            raise ImmutableManifestError("stored manifest identity does not match halt manifest")
+        if model.status == ExperimentStatus.FAILED.value:
+            if model.failure_reason != reason:
+                raise RuntimeError("experiment is already failed for a different reason")
+            return False
+        status = ExperimentStatus(model.status)
+        if status not in {ExperimentStatus.RUNNING, ExperimentStatus.PAUSED}:
+            raise RuntimeError(f"cannot persistently halt experiment from {status.value}")
+        version = await self._events.stream_version(manifest.experiment_id, "experiment")
+        transition = ExperimentLifecycle(
+            manifest,
+            status,
+            version,
+            now=lambda: failed_at,
+        ).fail(reason)
+        await self.transition(manifest, transition)
+        return True

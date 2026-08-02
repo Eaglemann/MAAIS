@@ -14,6 +14,7 @@
 - 2026-08-02: Revision `0009` now persists normalized quality rows, ingestion cursors, recovery runs, incidents, and worker checkpoints with event/outbox streams, optimistic versions, restart loaders, ledger checks, rollback/concurrency coverage, and a verified downgrade/upgrade drill. REST recovery orchestration and the live worker remain pending.
 - 2026-08-02: The official agent matrix now always returns eight ordered visible rows with manifest maturity, proxy labels, deterministic or monotonic durations, input contributions, and blocking failure metadata. Pure official monitoring and risk gates now fail closed on price/stop, Kelly, correlation warmup, portfolio loss at stop, drawdown, health, black-swan warmup, liquidity, and benchmark provenance. Atomic orchestration remains pending.
 - 2026-08-02: The pure orchestrator now produces deterministic quarantine and mandatory-agent-failure bundles with incidents, plus admitted neutral, rejected-counterfactual, approved-executed, and approved-but-unfillable halt outcomes. Directional decisions use Decimal consensus, adversarial, cost, EV, benchmark, monitoring, risk, exchange, and broker-capacity gates; successful entries carry exact gate-hash authorization, paper fills, reconciled account/exit state, and sensitivity scenarios. Atomic outcome persistence, protective-exit driving, funding lifecycle, public adapters, and worker resume remain pending.
+- 2026-08-02: Atomic outcome persistence and restart loaders are complete. Revision `0010` persists restartable stop/target trigger reason, venue/local timing, trigger price, executable price, and `Regular`/`Special` funding lineage. Protective marks continue while entries are halted; successful exits and funding reconcile through restart, while unfillable exits atomically persist the triggered plan, critical incident, and terminal experiment halt. Public adapters and worker lifecycle remain pending.
 
 ## Current defects this phase must retire
 
@@ -87,6 +88,7 @@
 - `maais/db/repositories/incidents.py` - idempotent halt/incident writes.
 - `maais/db/repositories/orchestration.py` - atomic cycle outcome coordinator.
 - `alembic/versions/0009_orchestrator.py` - Phase 3 schema and constraints.
+- `alembic/versions/0010_exit_trigger_state.py` - restartable protective-exit trigger state.
 
 ### Tests and evidence
 
@@ -182,8 +184,8 @@ Gate: red tests cover every historical permissive default and prove it now fails
 - [x] Produce rejected directional proposals plus isolated counterfactual state.
 - [x] Produce approved proposals only after monitoring, drawdown, correlation, portfolio-risk, leverage, exchange-filter, and broker-capacity gates.
 - [x] Issue a short-lived execution capability bound to the exact persisted gate-chain hash.
-- [ ] Apply official paper fills, sensitivities, account, exit plans, and funding.
-- [ ] Evaluate protective exits on every eligible mark even when entry admission is halted.
+- [x] Apply official paper fills, sensitivities, account, exit plans, and funding.
+- [x] Evaluate protective exits on every eligible mark even when entry admission is halted.
 - [ ] Convert unfillable exits and compliance/persistence failures into persistent experiment halts.
 
 Gate: no public method can call the broker with a raw unapproved quantity or bypass a required gate.
@@ -197,7 +199,7 @@ Gate: no public method can call the broker with a raw unapproved quantity or byp
 - [x] Add restart loaders for cursors, active recoveries, pending orders, open positions, exit plans, and unresolved counterfactuals.
 - [x] Extend ledger consistency checks across new projections.
 
-Gate: rollback, concurrent duplicate, conflicting retry, and restart tests pass on PostgreSQL revision `0009`.
+Gate: rollback, concurrent duplicate, conflicting retry, and restart tests pass on PostgreSQL revision `0010`.
 
 ## Task 9 - Verified public-data adapters
 

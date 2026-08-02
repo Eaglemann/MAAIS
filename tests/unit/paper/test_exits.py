@@ -45,6 +45,33 @@ def test_exit_plan_uses_actual_fill_and_triggers_boundaries(
     assert result.intent.reduce_only
 
 
+def test_triggered_exit_plan_retains_restartable_intent_metadata() -> None:
+    plan = ExitPlan.create(
+        plan_id=UUID(int=1),
+        position_id=UUID(int=2),
+        side=Direction.LONG,
+        quantity=Decimal("0.5"),
+        average_entry=Decimal("100"),
+        expected_loss_fraction=Decimal("0.01"),
+        expected_gain_fraction=Decimal("0.01"),
+        created_at=NOW,
+    )
+    triggered_at = NOW + timedelta(seconds=1)
+
+    evaluation = plan.evaluate_mark(
+        Decimal("99"),
+        triggered_at,
+        executable_price=Decimal("98.9"),
+    )
+
+    assert evaluation.intent is not None
+    assert evaluation.plan.trigger_reason is ExitReason.STOP
+    assert evaluation.plan.triggered_at == triggered_at
+    assert evaluation.plan.trigger_price == Decimal("99")
+    assert evaluation.plan.trigger_executable_price == Decimal("98.9")
+    assert evaluation.plan.pending_intent() == evaluation.intent
+
+
 def test_maximum_hold_and_opposite_signal_are_closed_bar_based() -> None:
     plan = ExitPlan.create(
         plan_id=UUID(int=1),
@@ -62,6 +89,7 @@ def test_maximum_hold_and_opposite_signal_are_closed_bar_based() -> None:
             decision_direction=Direction.NEUTRAL,
             decision_approved=False,
             closed_at=NOW + timedelta(minutes=bar),
+            executable_price=Decimal("99"),
         )
         assert result.intent is None
         plan = result.plan
@@ -69,6 +97,7 @@ def test_maximum_hold_and_opposite_signal_are_closed_bar_based() -> None:
         decision_direction=Direction.NEUTRAL,
         decision_approved=False,
         closed_at=NOW + timedelta(minutes=60),
+        executable_price=Decimal("99"),
     )
     assert result.intent is not None
     assert result.intent.reason is ExitReason.MAXIMUM_HOLD
@@ -88,21 +117,25 @@ def test_maximum_hold_and_opposite_signal_are_closed_bar_based() -> None:
         decision_direction=Direction.SHORT,
         decision_approved=True,
         closed_at=NOW + timedelta(minutes=1),
+        executable_price=Decimal("99"),
     )
     reset = first.plan.observe_closed_bar(
         decision_direction=Direction.NEUTRAL,
         decision_approved=False,
         closed_at=NOW + timedelta(minutes=2),
+        executable_price=Decimal("99"),
     )
     first_again = reset.plan.observe_closed_bar(
         decision_direction=Direction.SHORT,
         decision_approved=True,
         closed_at=NOW + timedelta(minutes=3),
+        executable_price=Decimal("99"),
     )
     second = first_again.plan.observe_closed_bar(
         decision_direction=Direction.SHORT,
         decision_approved=True,
         closed_at=NOW + timedelta(minutes=4),
+        executable_price=Decimal("99"),
     )
     assert first.intent is None
     assert reset.plan.opposite_signal_streak == 0
@@ -149,7 +182,10 @@ def test_emergency_flatten_is_exact_and_reduce_only() -> None:
         maximum_bars=60,
     )
 
-    result = plan.emergency_flatten(NOW + timedelta(seconds=1))
+    result = plan.emergency_flatten(
+        NOW + timedelta(seconds=1),
+        executable_price=Decimal("99"),
+    )
 
     assert result.intent is not None
     assert result.intent.reason is ExitReason.EMERGENCY

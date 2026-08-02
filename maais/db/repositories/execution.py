@@ -35,7 +35,7 @@ from maais.domain.enums import (
 from maais.domain.events import NewDomainEvent
 from maais.domain.json import JsonValue, MutableJsonValue, content_hash, freeze_json, to_json_data
 from maais.execution.paper.account import AccountState
-from maais.execution.paper.exits import ExitPlan, ExitPlanStatus
+from maais.execution.paper.exits import ExitPlan, ExitPlanStatus, ExitReason
 from maais.execution.paper.filters import ExchangeFilterSnapshot
 from maais.execution.paper.orders import OrderTransition, PaperOrder
 from maais.execution.paper.positions import PositionLot, PositionState
@@ -422,6 +422,7 @@ class PaperExecutionRepository:
                 .join(PositionModel, PositionModel.id == ExitPlanModel.position_id)
                 .where(
                     PositionModel.experiment_id == experiment_id,
+                    PositionModel.status == "open",
                     ExitPlanModel.status.in_(
                         (ExitPlanStatus.ACTIVE.value, ExitPlanStatus.TRIGGERED.value)
                     ),
@@ -447,9 +448,69 @@ class PaperExecutionRepository:
                 created_at=row.created_at,
                 changed_at=row.changed_at,
                 version=row.version,
+                trigger_reason=(
+                    ExitReason(row.trigger_reason) if row.trigger_reason is not None else None
+                ),
+                triggered_at=row.triggered_at,
+                trigger_price=row.trigger_price,
+                trigger_executable_price=row.trigger_executable_price,
             )
             for row in rows
         )
+
+    async def record_account_state(
+        self,
+        account: AccountState,
+        exit_plan: ExitPlan,
+        *,
+        source_event_id: str,
+        source_event_kind: str,
+    ) -> bool:
+        """Persist a non-order account transition exactly once by source event."""
+
+        if not source_event_id or not source_event_kind:
+            raise ValueError("account state source identity is required")
+        if not any(
+            position.position_id == exit_plan.position_id for position in account.positions.values()
+        ):
+            raise ValueError("exit plan position does not exist in account state")
+        snapshot_id = uuid5(
+            NAMESPACE_URL,
+            f"maais://paper-account/{account.experiment_id}/{source_event_kind}/{source_event_id}",
+        )
+        existing = await self._session.get(AccountSnapshotModel, snapshot_id)
+        if existing is not None:
+            return False
+        latest = await self._session.scalar(
+            select(AccountSnapshotModel)
+            .where(AccountSnapshotModel.experiment_id == account.experiment_id)
+            .order_by(AccountSnapshotModel.account_version.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        existing = await self._session.get(AccountSnapshotModel, snapshot_id)
+        if existing is not None:
+            return False
+        if latest is None or account.version != latest.account_version + 1:
+            raise StaleExecutionState(
+                "account state must advance exactly one version from persisted state"
+            )
+        created = await self._persist_account(
+            account,
+            exit_plan,
+            snapshot_id=snapshot_id,
+        )
+        if not created:
+            raise StaleExecutionState("account source event conflicts with persisted version")
+        await self._append_account_snapshot(
+            account,
+            metadata={
+                "source_event_id": source_event_id,
+                "source_event_kind": source_event_kind,
+                "exit_plan_id": str(exit_plan.plan_id),
+            },
+        )
+        return True
 
     async def record_sensitivities(
         self,
@@ -565,8 +626,10 @@ class PaperExecutionRepository:
                 id=funding.id,
                 experiment_id=funding.experiment_id,
                 position_id=funding.position_id,
+                funding_at=funding.funding_at,
                 observed_at=funding.observed_at,
                 rate=funding.rate,
+                rate_type=funding.rate_type,
                 notional=funding.notional,
                 amount=funding.amount,
                 market_event_id=funding.market_event_id,
@@ -605,7 +668,10 @@ class PaperExecutionRepository:
                         {
                             "position_id": funding.position_id,
                             "market_event_id": funding.market_event_id,
+                            "funding_at": funding.funding_at,
+                            "observed_at": funding.observed_at,
                             "rate": funding.rate,
+                            "rate_type": funding.rate_type,
                             "notional": funding.notional,
                             "amount": funding.amount,
                         }
@@ -691,8 +757,10 @@ class PaperExecutionRepository:
         return (
             row.id == funding.id
             and row.position_id == funding.position_id
+            and row.funding_at == funding.funding_at
             and row.observed_at == funding.observed_at
             and row.rate == funding.rate
+            and row.rate_type == funding.rate_type
             and row.notional == funding.notional
             and row.amount == funding.amount
         )
@@ -701,6 +769,8 @@ class PaperExecutionRepository:
         self,
         account: AccountState,
         exit_plan: ExitPlan | None,
+        *,
+        snapshot_id: UUID | None = None,
     ) -> bool:
         for position in account.positions.values():
             row = await self._session.get(PositionModel, position.position_id)
@@ -755,7 +825,10 @@ class PaperExecutionRepository:
             raise ValueError("persisted account must have an update timestamp")
         snapshot = account.snapshot()
         risk_at_stop = Decimal("0")
-        if exit_plan is not None and exit_plan.status is ExitPlanStatus.ACTIVE:
+        if exit_plan is not None and exit_plan.status in {
+            ExitPlanStatus.ACTIVE,
+            ExitPlanStatus.TRIGGERED,
+        }:
             risk_at_stop = abs(exit_plan.average_entry - exit_plan.stop_price) * exit_plan.quantity
         elif account.positions:
             active_exit = await self._session.scalar(
@@ -763,7 +836,9 @@ class PaperExecutionRepository:
                     ExitPlanModel.position_id.in_(
                         position.position_id for position in account.positions.values()
                     ),
-                    ExitPlanModel.status == ExitPlanStatus.ACTIVE.value,
+                    ExitPlanModel.status.in_(
+                        (ExitPlanStatus.ACTIVE.value, ExitPlanStatus.TRIGGERED.value)
+                    ),
                 )
             )
             if active_exit is not None:
@@ -773,7 +848,7 @@ class PaperExecutionRepository:
         snapshot_id = await self._session.scalar(
             insert(AccountSnapshotModel)
             .values(
-                id=uuid4(),
+                id=snapshot_id or uuid4(),
                 experiment_id=account.experiment_id,
                 account_version=account.version,
                 snapshot_at=snapshot_at,
@@ -845,6 +920,12 @@ class PaperExecutionRepository:
             "opposite_signal_streak": plan.opposite_signal_streak,
             "created_at": plan.created_at,
             "changed_at": plan.changed_at,
+            "trigger_reason": plan.trigger_reason.value
+            if plan.trigger_reason is not None
+            else None,
+            "triggered_at": plan.triggered_at,
+            "trigger_price": plan.trigger_price,
+            "trigger_executable_price": plan.trigger_executable_price,
         }
 
     async def _append_events(

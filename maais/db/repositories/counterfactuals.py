@@ -16,7 +16,7 @@ from maais.db.repositories.events import EventRepository
 from maais.domain.enums import Direction, GateType, PaperOrderSide
 from maais.domain.events import NewDomainEvent
 from maais.domain.json import JsonValue, MutableJsonValue, content_hash, freeze_json, to_json_data
-from maais.execution.paper.exits import ExitPlan, ExitPlanStatus
+from maais.execution.paper.exits import ExitPlan, ExitPlanStatus, ExitReason
 from maais.execution.paper.fills import FillSlice, PaperFill
 from maais.execution.paper.market import BookLevel, BookSnapshot
 from maais.research.counterfactuals import (
@@ -108,6 +108,10 @@ def _exit_dict(plan: ExitPlan) -> dict[str, object]:
         "created_at": plan.created_at,
         "changed_at": plan.changed_at,
         "version": plan.version,
+        "trigger_reason": plan.trigger_reason,
+        "triggered_at": plan.triggered_at,
+        "trigger_price": plan.trigger_price,
+        "trigger_executable_price": plan.trigger_executable_price,
     }
 
 
@@ -462,6 +466,10 @@ def _fill_from_json(data: Mapping[str, object]) -> PaperFill:
 
 
 def _exit_from_json(data: Mapping[str, object]) -> ExitPlan:
+    status = ExitPlanStatus(str(data["status"]))
+    trigger_reason = data.get("trigger_reason")
+    triggered_at = data.get("triggered_at")
+    trigger_executable_price = data.get("trigger_executable_price")
     return ExitPlan(
         plan_id=_uuid(data["plan_id"]),
         position_id=_uuid(data["position_id"]),
@@ -475,8 +483,16 @@ def _exit_from_json(data: Mapping[str, object]) -> ExitPlan:
         maximum_bars=_integer(data["maximum_bars"]),
         bars_elapsed=_integer(data["bars_elapsed"]),
         opposite_signal_streak=_integer(data["opposite_signal_streak"]),
-        status=ExitPlanStatus(str(data["status"])),
+        status=status,
         created_at=_datetime(data["created_at"]),
         changed_at=_datetime(data["changed_at"]),
         version=_integer(data["version"]),
+        trigger_reason=(ExitReason(str(trigger_reason)) if trigger_reason is not None else None),
+        triggered_at=(_datetime(triggered_at) if triggered_at is not None else None),
+        trigger_price=(
+            _decimal(data["trigger_price"]) if data.get("trigger_price") is not None else None
+        ),
+        trigger_executable_price=(
+            _decimal(trigger_executable_price) if trigger_executable_price is not None else None
+        ),
     )

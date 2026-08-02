@@ -435,8 +435,10 @@ async def test_observed_funding_persists_with_reconciled_account_snapshot(
         experiment_id=record.account.experiment_id,
         position_id=position.position_id,
         market_event_id="funding-2026-08-02T20:00:00Z",
+        funding_at=funding_at,
         observed_at=funding_at,
         rate=rate,
+        rate_type="Regular",
         notional=notional,
         amount=-notional * rate,
     )
@@ -477,8 +479,10 @@ async def test_entry_funding_stop_gap_exit_and_restart_reconstruct_exactly(
         experiment_id=entry.account.experiment_id,
         position_id=position.position_id,
         market_event_id="funding-full-sequence",
+        funding_at=funding_at,
         observed_at=funding_at,
         rate=funding_rate,
+        rate_type="Regular",
         notional=position.gross_notional,
         amount=-position.gross_notional * funding_rate,
     )

@@ -112,15 +112,22 @@ class FundingRecord:
     experiment_id: UUID
     position_id: UUID
     market_event_id: str
+    funding_at: datetime
     observed_at: datetime
     rate: Decimal
+    rate_type: str
     notional: Decimal
     amount: Decimal
 
     def __post_init__(self) -> None:
         if not self.market_event_id:
             raise ValueError("market_event_id is required")
+        require_utc(self.funding_at, "funding_at")
         require_utc(self.observed_at, "observed_at")
+        if self.observed_at < self.funding_at:
+            raise ValueError("funding cannot be observed before its venue timestamp")
+        if self.rate_type not in {"Regular", "Special"}:
+            raise ValueError("funding rate_type must be Regular or Special")
         require_positive_decimal(self.notional, "funding notional")
         for value, field in ((self.rate, "rate"), (self.amount, "amount")):
             if not isinstance(value, Decimal) or not value.is_finite():

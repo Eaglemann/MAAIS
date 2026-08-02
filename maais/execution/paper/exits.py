@@ -62,6 +62,36 @@ class ExitPlan:
     created_at: datetime
     changed_at: datetime
     version: int
+    trigger_reason: ExitReason | None
+    triggered_at: datetime | None
+    trigger_price: Decimal | None
+    trigger_executable_price: Decimal | None
+
+    def __post_init__(self) -> None:
+        trigger_fields = (
+            self.trigger_reason,
+            self.triggered_at,
+            self.trigger_executable_price,
+        )
+        if self.status is ExitPlanStatus.ACTIVE and any(
+            value is not None for value in (*trigger_fields, self.trigger_price)
+        ):
+            raise ValueError("active exit plan cannot contain trigger metadata")
+        if self.status in {ExitPlanStatus.TRIGGERED, ExitPlanStatus.CLOSED} and any(
+            value is None for value in trigger_fields
+        ):
+            raise ValueError("triggered and closed exit plans require restart metadata")
+        if self.triggered_at is not None:
+            require_utc(self.triggered_at, "triggered_at")
+            if self.triggered_at < self.created_at:
+                raise ValueError("exit trigger cannot precede plan creation")
+        if self.trigger_price is not None:
+            require_positive_decimal(self.trigger_price, "trigger_price")
+        if self.trigger_executable_price is not None:
+            require_positive_decimal(
+                self.trigger_executable_price,
+                "trigger_executable_price",
+            )
 
     @classmethod
     def create(
@@ -109,22 +139,54 @@ class ExitPlan:
             created_at=created_at,
             changed_at=created_at,
             version=1,
+            trigger_reason=None,
+            triggered_at=None,
+            trigger_price=None,
+            trigger_executable_price=None,
         )
 
-    def evaluate_mark(self, mark_price: Decimal, observed_at: datetime) -> ExitEvaluation:
+    def evaluate_mark(
+        self,
+        mark_price: Decimal,
+        observed_at: datetime,
+        *,
+        executable_price: Decimal | None = None,
+    ) -> ExitEvaluation:
         self._require_active()
         require_positive_decimal(mark_price, "mark_price")
         require_utc(observed_at, "observed_at")
+        if executable_price is not None:
+            require_positive_decimal(executable_price, "executable_price")
         if self.side is Direction.LONG:
             if mark_price <= self.stop_price:
-                return self._trigger(ExitReason.STOP, observed_at, mark_price)
+                return self._trigger(
+                    ExitReason.STOP,
+                    observed_at,
+                    mark_price,
+                    executable_price or mark_price,
+                )
             if mark_price >= self.target_price:
-                return self._trigger(ExitReason.TARGET, observed_at, mark_price)
+                return self._trigger(
+                    ExitReason.TARGET,
+                    observed_at,
+                    mark_price,
+                    executable_price or mark_price,
+                )
         else:
             if mark_price >= self.stop_price:
-                return self._trigger(ExitReason.STOP, observed_at, mark_price)
+                return self._trigger(
+                    ExitReason.STOP,
+                    observed_at,
+                    mark_price,
+                    executable_price or mark_price,
+                )
             if mark_price <= self.target_price:
-                return self._trigger(ExitReason.TARGET, observed_at, mark_price)
+                return self._trigger(
+                    ExitReason.TARGET,
+                    observed_at,
+                    mark_price,
+                    executable_price or mark_price,
+                )
         return ExitEvaluation(self, None)
 
     def observe_closed_bar(
@@ -133,9 +195,11 @@ class ExitPlan:
         decision_direction: Direction,
         decision_approved: bool,
         closed_at: datetime,
+        executable_price: Decimal,
     ) -> ExitEvaluation:
         self._require_active()
         require_utc(closed_at, "closed_at")
+        require_positive_decimal(executable_price, "executable_price")
         opposing = decision_approved and (
             (self.side is Direction.LONG and decision_direction is Direction.SHORT)
             or (self.side is Direction.SHORT and decision_direction is Direction.LONG)
@@ -149,9 +213,19 @@ class ExitPlan:
             version=self.version + 1,
         )
         if streak >= 2:
-            return updated._trigger(ExitReason.OPPOSING_SIGNAL, closed_at, None)
+            return updated._trigger(
+                ExitReason.OPPOSING_SIGNAL,
+                closed_at,
+                None,
+                executable_price,
+            )
         if updated.bars_elapsed >= updated.maximum_bars:
-            return updated._trigger(ExitReason.MAXIMUM_HOLD, closed_at, None)
+            return updated._trigger(
+                ExitReason.MAXIMUM_HOLD,
+                closed_at,
+                None,
+                executable_price,
+            )
         return ExitEvaluation(updated, None)
 
     def resize(
@@ -202,10 +276,38 @@ class ExitPlan:
             version=self.version + 1,
         )
 
-    def emergency_flatten(self, triggered_at: datetime) -> ExitEvaluation:
+    def emergency_flatten(
+        self,
+        triggered_at: datetime,
+        *,
+        executable_price: Decimal,
+    ) -> ExitEvaluation:
         self._require_active()
         require_utc(triggered_at, "triggered_at")
-        return self._trigger(ExitReason.EMERGENCY, triggered_at, None)
+        require_positive_decimal(executable_price, "executable_price")
+        return self._trigger(
+            ExitReason.EMERGENCY,
+            triggered_at,
+            None,
+            executable_price,
+        )
+
+    def pending_intent(self) -> ExitIntent:
+        if self.status is not ExitPlanStatus.TRIGGERED:
+            raise RuntimeError("only a triggered exit plan has a pending intent")
+        assert self.trigger_reason is not None
+        assert self.triggered_at is not None
+        side = PaperOrderSide.SELL if self.side is Direction.LONG else PaperOrderSide.BUY
+        return ExitIntent(
+            position_id=self.position_id,
+            side=side,
+            order_type=PaperOrderType.MARKET,
+            quantity=self.quantity,
+            reduce_only=True,
+            reason=self.trigger_reason,
+            triggered_at=self.triggered_at,
+            trigger_price=self.trigger_price,
+        )
 
     def close(self, closed_at: datetime) -> ExitPlan:
         require_utc(closed_at, "closed_at")
@@ -223,6 +325,7 @@ class ExitPlan:
         reason: ExitReason,
         triggered_at: datetime,
         trigger_price: Decimal | None,
+        trigger_executable_price: Decimal,
     ) -> ExitEvaluation:
         side = PaperOrderSide.SELL if self.side is Direction.LONG else PaperOrderSide.BUY
         triggered = replace(
@@ -230,6 +333,10 @@ class ExitPlan:
             status=ExitPlanStatus.TRIGGERED,
             changed_at=triggered_at,
             version=self.version + 1,
+            trigger_reason=reason,
+            triggered_at=triggered_at,
+            trigger_price=trigger_price,
+            trigger_executable_price=trigger_executable_price,
         )
         return ExitEvaluation(
             triggered,

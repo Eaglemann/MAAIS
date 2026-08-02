@@ -373,7 +373,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
                 .join(PositionModel, PositionModel.id == ExitPlanModel.position_id)
                 .where(
                     PositionModel.experiment_id == experiment.id,
-                    ExitPlanModel.status == "active",
+                    ExitPlanModel.status.in_(("active", "triggered")),
                 )
             )
         ).all()

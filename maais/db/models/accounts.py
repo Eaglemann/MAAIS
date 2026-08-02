@@ -112,7 +112,15 @@ class ExitPlanModel(Base):
             "uq_exit_one_active_position",
             "position_id",
             unique=True,
-            postgresql_where=text("status = 'active'"),
+            postgresql_where=text("status IN ('active', 'triggered')"),
+        ),
+        CheckConstraint(
+            "(status = 'active' AND trigger_reason IS NULL AND triggered_at IS NULL "
+            "AND trigger_price IS NULL AND trigger_executable_price IS NULL) OR "
+            "(status IN ('triggered', 'closed') AND trigger_reason IS NOT NULL "
+            "AND triggered_at IS NOT NULL AND trigger_executable_price > 0) OR "
+            "status = 'superseded'",
+            name="ck_exit_trigger_state",
         ),
     )
 
@@ -134,6 +142,10 @@ class ExitPlanModel(Base):
     opposite_signal_streak: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    trigger_reason: Mapped[str | None] = mapped_column(String(32))
+    triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trigger_price: Mapped[Decimal | None] = mapped_column(MONEY)
+    trigger_executable_price: Mapped[Decimal | None] = mapped_column(MONEY)
 
 
 class AccountSnapshotModel(Base):
@@ -169,6 +181,11 @@ class FundingEntryModel(Base):
     __tablename__ = "funding_entries"
     __table_args__ = (
         UniqueConstraint("experiment_id", "market_event_id", name="uq_funding_market_event"),
+        CheckConstraint("funding_at <= observed_at", name="ck_funding_observation_order"),
+        CheckConstraint(
+            "rate_type IN ('Regular', 'Special')",
+            name="ck_funding_rate_type",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -178,8 +195,10 @@ class FundingEntryModel(Base):
     position_id: Mapped[UUID] = mapped_column(
         ForeignKey("positions.id", ondelete="RESTRICT"), nullable=False
     )
+    funding_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     rate: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    rate_type: Mapped[str] = mapped_column(String(16), nullable=False)
     notional: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     market_event_id: Mapped[str] = mapped_column(String(128), nullable=False)

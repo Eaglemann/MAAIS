@@ -7,6 +7,7 @@ from maais.db.models.accounts import (
     PositionLotModel,
     PositionModel,
 )
+from maais.db.models.agents import AgentWeightModel
 from maais.db.models.counterfactuals import CounterfactualModel
 from maais.db.models.decisions import (
     AgentEvaluationModel,
@@ -35,6 +36,7 @@ from maais.db.models.operations import (
 __all__ = [
     "AccountSnapshotModel",
     "AgentVersionModel",
+    "AgentWeightModel",
     "AgentEvaluationModel",
     "CounterfactualModel",
     "DecisionCycleModel",

@@ -21,6 +21,7 @@ from maais.db.repositories.execution import (
     PaperExecutionRepository,
     PaperExecutionResult,
 )
+from maais.db.repositories.experiments import ExperimentRepository
 from maais.db.repositories.incidents import IncidentRepository
 from maais.db.repositories.market_data import (
     MarketDataRepository,
@@ -34,12 +35,17 @@ from maais.db.repositories.market_data import (
     _parse_datetime,
 )
 from maais.domain.json import MutableJsonValue, content_hash
+from maais.experiments.manifest import ExperimentManifest
 from maais.market_data.integrity.state_machine import IntegrityAssessment, IntegrityCheck
 from maais.market_data.recovery import MarketCursor
 from maais.orchestration.checkpoints import (
     CheckpointTransition,
     WorkerCheckpoint,
     WorkerStatus,
+)
+from maais.orchestration.protection import (
+    FundingApplicationOutcome,
+    ProtectionOutcome,
 )
 from maais.orchestration.results import OrchestrationOutcome
 
@@ -53,6 +59,14 @@ class OrchestrationPersistResult:
     execution: PaperExecutionResult | None
     sensitivity_rows_created: int
     incident: OperationalPersistResult | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProtectionPersistResult:
+    account_state_created: bool
+    execution: PaperExecutionResult | None
+    incident: OperationalPersistResult | None
+    experiment_halted: bool
 
 
 def _checkpoint_state(checkpoint: WorkerCheckpoint) -> dict[str, MutableJsonValue]:
@@ -107,6 +121,7 @@ class OrchestrationRepository:
         self._counterfactuals = CounterfactualRepository(session, events)
         self._paper_execution = PaperExecutionRepository(session, events)
         self._incidents = IncidentRepository(session, events)
+        self._experiments = ExperimentRepository(session, events)
 
     async def record_outcome(
         self,
@@ -175,6 +190,53 @@ class OrchestrationRepository:
             sensitivity_rows_created=sensitivity_rows,
             incident=incident_result,
         )
+
+    async def record_protection_outcome(
+        self,
+        outcome: ProtectionOutcome,
+        *,
+        manifest: ExperimentManifest,
+    ) -> ProtectionPersistResult:
+        if outcome.account.experiment_id != manifest.experiment_id:
+            raise ValueError("protection outcome and manifest experiment differ")
+        execution_result: PaperExecutionResult | None = None
+        account_state_created = False
+        if outcome.execution is not None:
+            execution_result = await self._paper_execution.record(outcome.execution)
+        else:
+            account_state_created = await self._paper_execution.record_account_state(
+                outcome.account,
+                outcome.exit_plan,
+                source_event_id=outcome.market_event_id,
+                source_event_kind="protective_mark",
+            )
+        incident_result = (
+            await self._incidents.record(outcome.incident) if outcome.incident is not None else None
+        )
+        experiment_halted = False
+        if outcome.requires_persistent_halt:
+            if outcome.incident is None:
+                raise ValueError("persistent protection halt requires an incident")
+            experiment_halted = await self._experiments.fail_active(
+                manifest,
+                reason=(
+                    f"position_protection:{outcome.incident.reason_code}:"
+                    f"{outcome.incident.incident_id}"
+                ),
+                failed_at=outcome.incident.detected_at,
+            )
+        return ProtectionPersistResult(
+            account_state_created=account_state_created,
+            execution=execution_result,
+            incident=incident_result,
+            experiment_halted=experiment_halted,
+        )
+
+    async def record_funding_outcome(
+        self,
+        outcome: FundingApplicationOutcome,
+    ) -> bool:
+        return await self._paper_execution.record_funding(outcome.record, outcome.account)
 
     async def record_checkpoint(self, checkpoint: WorkerCheckpoint) -> OperationalPersistResult:
         state = _checkpoint_state(checkpoint)

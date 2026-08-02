@@ -259,6 +259,7 @@ class CounterfactualState:
             decision_direction=decision_direction,
             decision_approved=decision_approved,
             closed_at=closed_at,
+            executable_price=mark_price,
         )
         updated = replace(updated, exit_plan=evaluation.plan)
         if evaluation.intent is not None:
