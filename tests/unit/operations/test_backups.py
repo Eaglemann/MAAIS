@@ -11,7 +11,10 @@ from maais.operations.backups import (
     postgres_cli_connection,
 )
 
-DATABASE_URL = "postgresql+psycopg://maais:local-password@localhost:5432/maais"
+DATABASE_URL = (
+    "postgresql+psycopg://maais:"
+    "local-password@localhost:5432/maais"  # pragma: allowlist secret
+)
 
 
 def _metadata() -> BackupMetadata:
@@ -38,7 +41,7 @@ def test_postgres_cli_connection_keeps_password_out_of_arguments() -> None:
         "maais",
     ]
     assert "local-password" not in " ".join(arguments)
-    assert environment["PGPASSWORD"] == "local-password"
+    assert environment["PGPASSWORD"] == "local-password"  # pragma: allowlist secret
 
 
 def test_database_backup_is_immutable_validated_and_hashed(tmp_path: Path) -> None:

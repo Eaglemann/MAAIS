@@ -62,7 +62,7 @@ def test_candidate_preflight_explains_all_failed_gates() -> None:
         repository=repository,
         settings=Settings(
             run_mode=RunMode.REPLAY,
-            binance_demo_api_key="configured",
+            binance_demo_api_key="configured",  # pragma: allowlist secret
         ),
         database_name="maais",
         database_schema_revision="0014",

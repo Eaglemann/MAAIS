@@ -14,7 +14,10 @@ from maais.operations.restores import (
     write_restore_verification,
 )
 
-DATABASE_URL = "postgresql+psycopg://maais:local-password@localhost:5432/maais"
+DATABASE_URL = (
+    "postgresql+psycopg://maais:"
+    "local-password@localhost:5432/maais"  # pragma: allowlist secret
+)
 
 
 def _backup_bundle(tmp_path: Path) -> Path:

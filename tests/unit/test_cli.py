@@ -152,7 +152,7 @@ async def test_paper_live_refuses_even_demo_credentials() -> None:
     manifest = _live_manifest(schema_revision="0015")
     settings = Settings(
         run_mode=RunMode.PAPER_LIVE,
-        binance_demo_api_key="configured",
+        binance_demo_api_key="configured",  # pragma: allowlist secret
     )
 
     with pytest.raises(ValueError, match="refuses configured exchange credentials"):

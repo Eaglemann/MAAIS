@@ -15,7 +15,7 @@ describe("Mission Control formatting", () => {
   });
 
   it("keeps both ends of immutable hashes visible", () => {
-    expect(shortHash("1234567890abcdef")).toBe("12345678…abcdef");
+    expect(shortHash("1234567890abcdef")).toBe("12345678…abcdef"); // pragma: allowlist secret
   });
 
   it("does not crash the workstation on a malformed upstream timestamp", () => {
