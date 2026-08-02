@@ -92,6 +92,10 @@ class LivePaperPolicy:
     benchmark_symbol: str
     benchmark_horizon_bars: int
     benchmark_source: str
+    strategy_key: str
+    strategy_version: str
+    strategy_implementation_hash: str
+    strategy_parameters: Mapping[str, object]
     exchange_filter_hashes: Mapping[str, str]
 
     @classmethod
@@ -131,6 +135,19 @@ class LivePaperPolicy:
             raise RuntimePolicyError("benchmark symbol must be subscribed by the experiment")
         if not 2 <= benchmark_horizon_bars <= history_bars:
             raise RuntimePolicyError("benchmark horizon must fit the retained history")
+
+        strategy = _mapping(manifest.configuration, "strategy")
+        strategy_key = _text(strategy, "key")
+        strategy_version = _text(strategy, "version")
+        if _text(strategy, "stage") != "simulation":
+            raise RuntimePolicyError("live paper strategy stage must be simulation")
+        strategy_implementation_hash = _text(strategy, "implementation_hash")
+        if len(strategy_implementation_hash) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in strategy_implementation_hash
+        ):
+            raise RuntimePolicyError("strategy implementation_hash must be SHA-256")
+        strategy_parameters = _mapping(strategy, "parameters")
 
         latency_ms = _integer(manifest.clock_policy, "latency_ms")
         decision_lag_ms = _integer(manifest.clock_policy, "maximum_decision_lag_ms")
@@ -185,6 +202,10 @@ class LivePaperPolicy:
             benchmark_symbol=benchmark_symbol,
             benchmark_horizon_bars=benchmark_horizon_bars,
             benchmark_source=benchmark_source,
+            strategy_key=strategy_key,
+            strategy_version=strategy_version,
+            strategy_implementation_hash=strategy_implementation_hash,
+            strategy_parameters=MappingProxyType(dict(strategy_parameters)),
             exchange_filter_hashes=MappingProxyType(filter_hashes),
         )
 

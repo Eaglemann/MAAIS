@@ -23,6 +23,13 @@ def _live_manifest(**overrides):
                 "horizon_bars": 60,
                 "source": "binance_spot_close",
             },
+            "strategy": {
+                "key": "maais_primary",
+                "version": "1.0.0",
+                "stage": "simulation",
+                "implementation_hash": "b" * 64,
+                "parameters": {"timeframe": "1m"},
+            },
         },
         "component_versions": {
             "features": "v1",
@@ -63,6 +70,10 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
     assert policy.taker_fee_rate == Decimal("0.0004")
     assert policy.history_bars == 240
     assert policy.benchmark_symbol == "BTCUSDT"
+    assert policy.strategy_key == "maais_primary"
+    assert policy.strategy_version == "1.0.0"
+    assert policy.strategy_implementation_hash == "b" * 64
+    assert policy.strategy_parameters == {"timeframe": "1m"}
     assert policy.exchange_filter_hashes == {"BTCUSDT": "f" * 64}
     assert policy.integrity_policy().max_decision_lag == policy.maximum_decision_lag
 
@@ -72,6 +83,24 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
     (
         ({"mode": RunMode.REPLAY}, "mode=paper_live"),
         ({"configuration": {"risk": {"leverage": 1}}}, "runtime"),
+        (
+            {
+                "configuration": {
+                    "risk": {"leverage": 1},
+                    "runtime": {
+                        "proposal_ttl_seconds": "30",
+                        "book_wait_timeout_seconds": "5",
+                        "history_bars": 240,
+                    },
+                    "benchmark": {
+                        "symbol": "BTCUSDT",
+                        "horizon_bars": 60,
+                        "source": "binance_spot_close",
+                    },
+                }
+            },
+            "strategy",
+        ),
         (
             {
                 "configuration": {
