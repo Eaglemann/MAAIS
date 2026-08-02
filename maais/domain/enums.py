@@ -72,6 +72,7 @@ class GateType(StrEnum):
 
 class ReasonCode(StrEnum):
     ACCEPTED = "accepted"
+    PRIOR_GATE_FAILED = "prior_gate_failed"
     NEUTRAL_CONSENSUS = "neutral_consensus"
     DISABLED_AGENT = "disabled_agent"
     INCOMPATIBLE_REGIME = "incompatible_regime"

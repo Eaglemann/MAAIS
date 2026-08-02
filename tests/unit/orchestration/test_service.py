@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
+from decimal import Decimal
 from uuid import UUID
 
 import pytest
 
-from maais.agents.base import BaseAgent
+from maais.agents.base import AgentOutput, BaseAgent
 from maais.agents.runner import build_agent_registry
 from maais.config.constants import ALL_AGENTS, AgentName, Regime
 from maais.domain.enums import (
@@ -13,17 +15,34 @@ from maais.domain.enums import (
     Direction,
     Disposition,
     GateType,
+    PaperOrderType,
+    ProposalStatus,
     ReasonCode,
 )
+from maais.execution.paper.account import AccountState
+from maais.execution.paper.authorization import ExecutionAuthorizer
+from maais.execution.paper.broker import PaperBroker
+from maais.execution.paper.clock import DeterministicClock
+from maais.execution.paper.fills import MarketFillEngine
+from maais.execution.paper.filters import ExchangeFilterSnapshot
+from maais.execution.paper.market import BookLevel, BookSnapshot
 from maais.feature_pipeline.features import FeatureSet
 from maais.market_data.integrity.state_machine import (
     FrameAdmission,
     IntegrityPolicy,
     MarketIntegrityStateMachine,
 )
-from maais.orchestration.commands import OrchestrationCommand
+from maais.monitoring.admission import (
+    BenchmarkObservation,
+    HealthObservation,
+    MonitoringAdmissionContext,
+    OfficialAdmissionPolicy,
+    RollingVolatilityBaseline,
+)
+from maais.orchestration.commands import EntryDecisionContext, OrchestrationCommand
 from maais.orchestration.results import OrchestrationDisposition
 from maais.orchestration.service import OfficialOrchestrationService
+from maais.risk.official import DrawdownSnapshot
 from tests.unit.experiments.test_manifest import _manifest
 from tests.unit.market_data.test_integrity_state_machine import _context, _frame
 
@@ -51,7 +70,29 @@ class _ThrowingAgent(BaseAgent):
         raise RuntimeError("simulated mandatory-agent failure")
 
 
-def _command(*, admitted: bool) -> OrchestrationCommand:
+class _FixedAgent(BaseAgent):
+    compatible_regimes = ()
+
+    def __init__(self, name: str, direction: Direction, probability: float = 0.9) -> None:
+        self.name = name
+        self._direction = direction
+        self._probability = probability
+
+    async def analyze(self, features):
+        return AgentOutput(
+            self.name,
+            self._direction.value,
+            self._probability,
+            0.8 if self._direction is not Direction.NEUTRAL else 0.0,
+            0.2,
+        )
+
+
+def _command(
+    *,
+    admitted: bool,
+    entry_context: EntryDecisionContext | None = None,
+) -> OrchestrationCommand:
     frame = _frame()
     context = _context(frame)
     if not admitted:
@@ -71,6 +112,7 @@ def _command(*, admitted: bool) -> OrchestrationCommand:
         agent_version_ids={name: UUID(int=index + 100) for index, name in enumerate(ALL_AGENTS)},
         evaluated_at=context.evaluated_at,
         completed_at=context.evaluated_at,
+        entry_context=entry_context,
     )
 
 
@@ -83,7 +125,7 @@ def _features() -> FeatureSet:
         ema_fast=101.0,
         ema_slow=100.0,
         ema_signal=1.0,
-        atr=1.0,
+        atr=2.5,
         rolling_std=0.01,
         bid_ask_spread=0.001,
         book_imbalance=0.2,
@@ -91,6 +133,103 @@ def _features() -> FeatureSet:
         annualized_funding=0.1095,
         funding_bias="long_heavy",
         zscore_mean=101.0,
+    )
+
+
+def _entry_context(*, kill_switch: bool = False) -> EntryDecisionContext:
+    command = _command(admitted=True)
+    evaluated_at = command.evaluated_at
+    policy = OfficialAdmissionPolicy.conservative()
+    account = AccountState.create(command.manifest.experiment_id, Decimal("10000"), "USDT")
+    health = tuple(
+        HealthObservation(
+            component,
+            True,
+            evaluated_at - timedelta(milliseconds=100),
+            None,
+        )
+        for component in policy.mandatory_components
+    )
+    monitoring = MonitoringAdmissionContext(
+        symbol="BTCUSDT",
+        timeframe="1m",
+        evaluated_at=evaluated_at,
+        kill_switch_active=kill_switch,
+        kill_switch_reason="operator_test" if kill_switch else None,
+        health=health,
+        volatility=RollingVolatilityBaseline(
+            symbol="BTCUSDT",
+            timeframe="1m",
+            sample_count=60,
+            baseline_std=Decimal("0.002"),
+            current_std=Decimal("0.0025"),
+            spread_fraction=Decimal("0.001"),
+            observed_at=evaluated_at - timedelta(milliseconds=100),
+        ),
+        benchmark=BenchmarkObservation(
+            symbol="BTCUSDT",
+            return_fraction=Decimal("0"),
+            observed_at=evaluated_at - timedelta(milliseconds=100),
+            source_event_id="benchmark-explicit-zero",
+        ),
+    )
+    filters = ExchangeFilterSnapshot(
+        symbol="BTCUSDT",
+        status="TRADING",
+        price_tick=Decimal("0.1"),
+        quantity_step=Decimal("0.001"),
+        minimum_quantity=Decimal("0.001"),
+        maximum_quantity=Decimal("200"),
+        minimum_notional=Decimal("5"),
+        supported_order_types=(PaperOrderType.MARKET,),
+        captured_at=command.frame.cutoff_at,
+    )
+    book_at = evaluated_at + timedelta(milliseconds=101)
+    book = BookSnapshot(
+        event_id="eligible-book",
+        symbol="BTCUSDT",
+        venue_event_at=book_at - timedelta(milliseconds=1),
+        observed_at=book_at,
+        sequence=200,
+        bids=(BookLevel(Decimal("100.4"), Decimal("200")),),
+        asks=(BookLevel(Decimal("100.5"), Decimal("200")),),
+        mark_price=Decimal("100.45"),
+    )
+    return EntryDecisionContext(
+        monitoring=monitoring,
+        drawdown=DrawdownSnapshot(account.peak_equity, account.equity),
+        open_positions=(),
+        correlations=(),
+        exchange_filters=filters,
+        account=account,
+        books=(book,),
+        active_exit_plan=None,
+        proposal_ttl=timedelta(seconds=30),
+        execution_latency=timedelta(milliseconds=100),
+        taker_fee_rate=Decimal("0.0004"),
+    )
+
+
+def _fixed_registry(direction: Direction) -> tuple[BaseAgent, ...]:
+    return tuple(_FixedAgent(name, direction) for name in ALL_AGENTS)
+
+
+def _execution_service(
+    computer: _FeatureComputer,
+    direction: Direction,
+) -> OfficialOrchestrationService:
+    key = b"orchestration test signing key of at least 32 bytes"
+    authorizer = ExecutionAuthorizer(key)
+    broker = PaperBroker(
+        clock=DeterministicClock(lambda: _command(admitted=True).completed_at),
+        authorizer=authorizer,
+        market_fills=MarketFillEngine(timedelta(seconds=1)),
+    )
+    return OfficialOrchestrationService(
+        computer,
+        agents=_fixed_registry(direction),
+        authorizer=authorizer,
+        paper_broker=broker,
     )
 
 
@@ -164,3 +303,95 @@ def test_command_rejects_mismatched_frame_assessment_and_incomplete_agent_ids() 
         replace(command, agent_version_ids={AgentName.MOMENTUM: UUID(int=100)})
     with pytest.raises(ValueError, match="experiment"):
         replace(command, manifest=_manifest(experiment_id=UUID(int=999)))
+
+
+async def test_admitted_neutral_cycle_has_all_gates_and_no_synthetic_proposal() -> None:
+    command = _command(admitted=True)
+    service = _execution_service(_FeatureComputer(_features()), Direction.NEUTRAL)
+
+    outcome = await service.process(command)
+
+    assert outcome.disposition is OrchestrationDisposition.NEUTRAL
+    assert outcome.bundle.cycle.status is DecisionStatus.COMPLETED
+    assert outcome.bundle.cycle.disposition is Disposition.NEUTRAL
+    assert outcome.bundle.proposal is None
+    assert outcome.incident is None
+    assert len(outcome.bundle.gates) == len(GateType)
+    assert outcome.bundle.gates[0].passed
+    assert not outcome.bundle.gates[2].passed
+    assert all(not gate.passed for gate in outcome.bundle.gates[2:])
+
+
+async def test_directional_monitoring_rejection_creates_isolated_counterfactual() -> None:
+    entry_context = _entry_context(kill_switch=True)
+    command = _command(admitted=True, entry_context=entry_context)
+    service = _execution_service(_FeatureComputer(_features()), Direction.LONG)
+
+    outcome = await service.process(command)
+
+    assert outcome.disposition is OrchestrationDisposition.REJECTED
+    assert outcome.bundle.cycle.disposition is Disposition.REJECTED
+    assert outcome.bundle.proposal is not None
+    assert outcome.bundle.proposal.status is ProposalStatus.REJECTED
+    assert outcome.counterfactual is not None
+    assert outcome.counterfactual.proposal_id == outcome.bundle.proposal.id
+    assert outcome.counterfactual.rejection_gate is GateType.MONITORING
+    assert outcome.capability is None
+    assert outcome.execution is None
+    assert outcome.incident is None
+    monitoring_gate = next(
+        gate for gate in outcome.bundle.gates if gate.gate_type is GateType.MONITORING
+    )
+    assert not monitoring_gate.passed
+    assert monitoring_gate.output["raw_reason"] == "kill_switch_active"
+
+
+async def test_fully_admitted_direction_executes_and_records_sensitivities() -> None:
+    entry_context = _entry_context()
+    command = _command(admitted=True, entry_context=entry_context)
+    service = _execution_service(_FeatureComputer(_features()), Direction.LONG)
+
+    outcome = await service.process(command)
+
+    assert outcome.disposition is OrchestrationDisposition.EXECUTED
+    assert outcome.bundle.cycle.disposition is Disposition.APPROVED
+    assert outcome.bundle.proposal is not None
+    assert outcome.bundle.proposal.status is ProposalStatus.APPROVED
+    assert all(gate.passed for gate in outcome.bundle.gates)
+    assert outcome.incident is None
+    assert outcome.counterfactual is None
+    assert outcome.capability is not None
+    assert outcome.execution is not None
+    assert outcome.execution.account is not None
+    assert outcome.execution.account.reconcile().ok
+    assert len(outcome.sensitivities) == 3
+    assert (
+        outcome.capability.claims.gate_chain_hash
+        == outcome.bundle.proposal.entry_policy["gate_chain_hash"]
+    )
+
+
+async def test_approved_but_unfillable_entry_becomes_operator_review_halt() -> None:
+    entry_context = _entry_context()
+    book = entry_context.books[0]
+    shallow = replace(
+        book,
+        bids=(BookLevel(book.best_bid, Decimal("0.1")),),
+        asks=(BookLevel(book.best_ask, Decimal("0.1")),),
+    )
+    command = _command(
+        admitted=True,
+        entry_context=replace(entry_context, books=(shallow,)),
+    )
+    service = _execution_service(_FeatureComputer(_features()), Direction.LONG)
+
+    outcome = await service.process(command)
+
+    assert outcome.disposition is OrchestrationDisposition.HALTED
+    assert outcome.bundle.cycle.disposition is Disposition.APPROVED
+    assert outcome.capability is not None
+    assert outcome.execution is None
+    assert outcome.incident is not None
+    assert outcome.incident.component == "paper_execution"
+    assert outcome.incident.reason_code == "approved_entry_execution_failed"
+    assert outcome.incident.requires_operator_review

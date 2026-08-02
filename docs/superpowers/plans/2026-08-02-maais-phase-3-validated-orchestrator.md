@@ -12,7 +12,8 @@
 
 - 2026-08-02: Tasks 1-3 pure contracts completed for immutable observed events, causal exactly-once frames, and mandatory tri-state integrity admission. Public adapters and PostgreSQL persistence remain pending, so this is not yet a runnable live worker.
 - 2026-08-02: Revision `0009` now persists normalized quality rows, ingestion cursors, recovery runs, incidents, and worker checkpoints with event/outbox streams, optimistic versions, restart loaders, ledger checks, rollback/concurrency coverage, and a verified downgrade/upgrade drill. REST recovery orchestration and the live worker remain pending.
-- 2026-08-02: The official agent matrix now always returns eight ordered visible rows with manifest maturity, proxy labels, deterministic or monotonic durations, input contributions, and blocking failure metadata. Pure official monitoring and risk gates now fail closed on price/stop, Kelly, correlation warmup, portfolio loss at stop, drawdown, health, black-swan warmup, liquidity, and benchmark provenance. Atomic orchestration and incident creation from matrix failures remain pending.
+- 2026-08-02: The official agent matrix now always returns eight ordered visible rows with manifest maturity, proxy labels, deterministic or monotonic durations, input contributions, and blocking failure metadata. Pure official monitoring and risk gates now fail closed on price/stop, Kelly, correlation warmup, portfolio loss at stop, drawdown, health, black-swan warmup, liquidity, and benchmark provenance. Atomic orchestration remains pending.
+- 2026-08-02: The pure orchestrator now produces deterministic quarantine and mandatory-agent-failure bundles with incidents, plus admitted neutral, rejected-counterfactual, approved-executed, and approved-but-unfillable halt outcomes. Directional decisions use Decimal consensus, adversarial, cost, EV, benchmark, monitoring, risk, exchange, and broker-capacity gates; successful entries carry exact gate-hash authorization, paper fills, reconciled account/exit state, and sensitivity scenarios. Atomic outcome persistence, protective-exit driving, funding lifecycle, public adapters, and worker resume remain pending.
 
 ## Current defects this phase must retire
 
@@ -154,7 +155,7 @@ Gate: crash/reconnect fixtures recover without duplicate frames or cycles and wi
 - [x] Use deterministic injected timing in replay and monotonic timing in live mode.
 - [x] Convert assertion-only agent validation into runtime exceptions.
 - [x] Force incompatible and disabled agents to neutral nonvoting rows.
-- [ ] Prove a throwing, missing, duplicated, or malformed mandatory agent blocks the cycle and creates an incident.
+- [x] Prove a throwing, missing, duplicated, or malformed mandatory agent blocks the cycle and creates an incident.
 
 Gate: every non-quarantined cycle has exactly eight unique agent names and replay-stable authoritative outputs.
 
@@ -174,13 +175,13 @@ Gate: red tests cover every historical permissive default and prove it now fails
 
 ## Task 7 - Pure ordered orchestration service
 
-- [ ] Define one command from an admitted or quarantined frame plus manifest-pinned dependencies.
+- [x] Define one command from an admitted or quarantined frame plus manifest-pinned dependencies.
 - [ ] For quarantine, persist the frame, eight neutral/nonvoting agent rows, a quarantined decision, data-quality gate, and incident without running features.
-- [ ] For admitted frames, compute features, eight evaluations, consensus, adversarial result, costs, EV, benchmark alpha, and all ordered gates.
-- [ ] Produce neutral cycles without proposals.
-- [ ] Produce rejected directional proposals plus isolated counterfactual state.
-- [ ] Produce approved proposals only after monitoring, drawdown, correlation, portfolio-risk, leverage, exchange-filter, and broker-capacity gates.
-- [ ] Issue a short-lived execution capability bound to the exact persisted gate-chain hash.
+- [x] For admitted frames, compute features, eight evaluations, consensus, adversarial result, costs, EV, benchmark alpha, and all ordered gates.
+- [x] Produce neutral cycles without proposals.
+- [x] Produce rejected directional proposals plus isolated counterfactual state.
+- [x] Produce approved proposals only after monitoring, drawdown, correlation, portfolio-risk, leverage, exchange-filter, and broker-capacity gates.
+- [x] Issue a short-lived execution capability bound to the exact persisted gate-chain hash.
 - [ ] Apply official paper fills, sensitivities, account, exit plans, and funding.
 - [ ] Evaluate protective exits on every eligible mark even when entry admission is halted.
 - [ ] Convert unfillable exits and compliance/persistence failures into persistent experiment halts.
