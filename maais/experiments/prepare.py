@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from types import MappingProxyType
+from typing import Callable, Protocol
 from uuid import UUID
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 from maais.config.constants import ALL_AGENTS, TRADING_PAIRS, AgentName
 from maais.config.modes import RunMode
@@ -27,6 +34,21 @@ _COMPONENTS = (
     "protection",
     "counterfactual",
 )
+_AGENT_SOURCES = {
+    AgentName.MOMENTUM: "maais/agents/momentum.py",
+    AgentName.TECHNICAL_STRUCTURE: "maais/agents/technical_structure.py",
+    AgentName.LIQUIDITY: "maais/agents/liquidity.py",
+    AgentName.ORDER_FLOW_TOXICITY: "maais/agents/order_flow_toxicity.py",
+    AgentName.STOP_RUN_DETECTION: "maais/agents/stop_run_detection.py",
+    AgentName.MEAN_REVERSION: "maais/agents/mean_reversion.py",
+    AgentName.CARRY_YIELD: "maais/agents/carry_yield.py",
+    AgentName.MACRO_SENTIMENT: "maais/agents/macro_sentiment.py",
+}
+GitRunner = Callable[[tuple[str, ...], Path], bytes]
+
+
+class _Digest(Protocol):
+    def update(self, data: bytes, /) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +76,62 @@ class RepositoryIdentity:
             "agent_implementation_hashes",
             MappingProxyType(hashes),
         )
+
+
+def capture_repository_identity(
+    root: Path,
+    *,
+    schema_revision: str | None = None,
+    git_runner: GitRunner | None = None,
+    agent_sources: Mapping[str, Path] | None = None,
+) -> RepositoryIdentity:
+    repository_root = root.resolve(strict=True)
+    run_git = git_runner or _run_git
+    git_sha = run_git(("rev-parse", "HEAD"), repository_root).decode("ascii").strip()
+    status = run_git(
+        ("status", "--porcelain=v1", "-z", "--untracked-files=all"),
+        repository_root,
+    )
+    worktree_hash = None
+    if status:
+        digest = hashlib.sha256()
+        _hash_chunk(digest, b"status", status)
+        _hash_chunk(
+            digest,
+            b"tracked-diff",
+            run_git(("diff", "--binary", "HEAD"), repository_root),
+        )
+        untracked = run_git(
+            ("ls-files", "--others", "--exclude-standard", "-z"),
+            repository_root,
+        )
+        for raw_path in sorted(item for item in untracked.split(b"\0") if item):
+            relative = Path(raw_path.decode("utf-8", errors="surrogateescape"))
+            candidate = (repository_root / relative).resolve(strict=True)
+            try:
+                candidate.relative_to(repository_root)
+            except ValueError as exc:
+                raise ValueError("untracked repository path escapes the worktree") from exc
+            _hash_chunk(digest, raw_path, candidate.read_bytes())
+        worktree_hash = digest.hexdigest()
+
+    lock_path = repository_root / "uv.lock"
+    sources = agent_sources or {
+        name: repository_root / relative for name, relative in _AGENT_SOURCES.items()
+    }
+    if set(sources) != set(ALL_AGENTS):
+        raise ValueError("agent source paths must cover every configured agent")
+    agent_hashes = {
+        name: hashlib.sha256(_safe_source(repository_root, path).read_bytes()).hexdigest()
+        for name, path in sources.items()
+    }
+    return RepositoryIdentity(
+        git_sha=git_sha,
+        worktree_hash=worktree_hash,
+        lock_hash=hashlib.sha256(lock_path.read_bytes()).hexdigest(),
+        schema_revision=schema_revision or _single_schema_head(repository_root),
+        agent_implementation_hashes=agent_hashes,
+    )
 
 
 def prepare_live_paper_manifest(
@@ -163,3 +241,39 @@ def _hex_hash(name: str, value: str, *, lengths: tuple[int, ...] = (64,)) -> Non
     if len(value) not in lengths or any(character not in "0123456789abcdef" for character in value):
         expected = " or ".join(str(length) for length in lengths)
         raise ValueError(f"{name} must be {expected} lowercase hexadecimal characters")
+
+
+def _run_git(arguments: tuple[str, ...], root: Path) -> bytes:
+    completed = subprocess.run(
+        ("git", *arguments),
+        cwd=root,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return completed.stdout
+
+
+def _hash_chunk(digest: _Digest, name: bytes, content: bytes) -> None:
+    digest.update(len(name).to_bytes(8, "big"))
+    digest.update(name)
+    digest.update(len(content).to_bytes(8, "big"))
+    digest.update(content)
+
+
+def _safe_source(root: Path, path: Path) -> Path:
+    candidate = path.resolve(strict=True)
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("agent source path escapes the repository") from exc
+    return candidate
+
+
+def _single_schema_head(root: Path) -> str:
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "alembic"))
+    heads = ScriptDirectory.from_config(config).get_heads()
+    if len(heads) != 1:
+        raise ValueError("runtime preparation requires exactly one Alembic head")
+    return heads[0]

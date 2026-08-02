@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -6,7 +7,11 @@ import pytest
 from maais.config.constants import ALL_AGENTS, TRADING_PAIRS
 from maais.config.modes import RunMode
 from maais.experiments.manifest import require_candidate_identity
-from maais.experiments.prepare import RepositoryIdentity, prepare_live_paper_manifest
+from maais.experiments.prepare import (
+    RepositoryIdentity,
+    capture_repository_identity,
+    prepare_live_paper_manifest,
+)
 from maais.experiments.runtime_policy import LivePaperPolicy
 from tests.unit.experiments.test_runtime_policy import _live_filter
 
@@ -76,3 +81,44 @@ def test_prepare_live_manifest_marks_dirty_development_identity_and_checks_cover
             primary_mapping_hash="4" * 64,
             secondary_mapping_hash="5" * 64,
         )
+
+
+def test_repository_identity_hashes_dirty_content_lock_and_agent_sources(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "uv.lock").write_bytes(b"locked dependencies")
+    agent_sources: dict[str, Path] = {}
+    for index, name in enumerate(ALL_AGENTS):
+        path = tmp_path / f"agent-{index}.py"
+        path.write_text(f"AGENT = {name!r}\n")
+        agent_sources[name] = path
+    untracked = tmp_path / "new.py"
+    untracked.write_text("NEW = True\n")
+
+    def git(arguments: tuple[str, ...], root: Path) -> bytes:
+        assert root == tmp_path
+        outputs = {
+            ("rev-parse", "HEAD"): b"a" * 40 + b"\n",
+            (
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ): b"?? new.py\0",
+            ("diff", "--binary", "HEAD"): b"tracked diff",
+            ("ls-files", "--others", "--exclude-standard", "-z"): b"new.py\0",
+        }
+        return outputs[arguments]
+
+    identity = capture_repository_identity(
+        tmp_path,
+        schema_revision="0015",
+        git_runner=git,
+        agent_sources=agent_sources,
+    )
+
+    assert identity.git_sha == "a" * 40
+    assert identity.worktree_hash is not None
+    assert len(identity.worktree_hash) == 64
+    assert len(identity.lock_hash) == 64
+    assert set(identity.agent_implementation_hashes) == set(ALL_AGENTS)
