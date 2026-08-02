@@ -8,6 +8,7 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_dir}/.." && pwd)"
+source "${script_dir}/paper-process.sh"
 manifest_path="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 restore_path="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 mission_control_port="${3:-8000}"
@@ -46,7 +47,7 @@ dashboard_pid=$!
 worker_pid=""
 cleanup_startup() {
   if [[ "${worker_pid}" =~ ^[0-9]+$ ]]; then
-    kill -INT "${worker_pid}" 2>/dev/null || true
+    paper_signal_process_tree "${worker_pid}"
   fi
   kill -TERM "${dashboard_pid}" 2>/dev/null || true
 }

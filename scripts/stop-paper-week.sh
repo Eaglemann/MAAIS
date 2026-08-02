@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_dir}/.." && pwd)"
+source "${script_dir}/paper-process.sh"
 state_dir="${repository_root}/artifacts/run-state"
 current_state="${state_dir}/current.json"
 
@@ -16,7 +17,7 @@ worker_pid="$(jq -r '.worker_pid' "${current_state}")"
 dashboard_pid="$(jq -r '.dashboard_pid' "${current_state}")"
 
 if kill -0 "${worker_pid}" 2>/dev/null; then
-  kill -INT "${worker_pid}"
+  paper_signal_process_tree "${worker_pid}"
   for _attempt in $(seq 1 60); do
     kill -0 "${worker_pid}" 2>/dev/null || break
     sleep 1
