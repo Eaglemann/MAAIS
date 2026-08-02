@@ -224,7 +224,10 @@ def parse_binance_spot_reference_tickers(
         close_at = _milliseconds(close_ms)
         bid_raw = _string(row, "bidPrice")
         ask_raw = _string(row, "askPrice")
-        source_event_id = f"{close_ms}:{first_id}:{last_id}:{count}:{bid_raw}:{ask_raw}"
+        observed_us = _datetime_microseconds(observed_at)
+        source_event_id = (
+            f"{close_ms}:{first_id}:{last_id}:{count}:{bid_raw}:{ask_raw}:{observed_us}"
+        )
         events.append(
             ObservedMarketEvent(
                 venue=BINANCE_SPOT_VENUE,
@@ -250,6 +253,16 @@ def parse_binance_spot_reference_tickers(
             )
         )
     return tuple(events)
+
+
+def _datetime_microseconds(value: datetime) -> int:
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    elapsed = value - epoch
+    return (
+        elapsed.days * 86_400_000_000
+        + elapsed.seconds * 1_000_000
+        + elapsed.microseconds
+    )
 
 
 class BinanceSpotConnector:

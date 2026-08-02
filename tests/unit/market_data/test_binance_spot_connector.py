@@ -165,7 +165,32 @@ def test_reference_ticker_retains_exact_quote_and_venue_time() -> None:
     assert event.payload.source_published_at == event.venue_event_at
     assert event.payload.source_quantity is None
     assert event.payload.source_side is None
-    assert event.payload.source_event_id == "1785672000000:100:200:101:100.00000000:100.50000000"
+    assert event.payload.source_event_id == (
+        "1785672000000:100:200:101:100.00000000:100.50000000:1785672000100000"
+    )
+
+
+def test_repeated_rest_snapshot_has_distinct_observation_identity() -> None:
+    mappings = parse_binance_spot_exchange_info(
+        _exchange_info(),
+        required_symbols=("BTCUSDT", "ETHUSDT"),
+        server_time=parse_binance_spot_server_time({"serverTime": SERVER_MS}),
+        observed_at=OBSERVED_AT,
+    ).mappings
+    first = parse_binance_spot_reference_tickers(
+        [_ticker("BTCUSDT"), _ticker("ETHUSDT", offset=1)],
+        mappings=mappings,
+        observed_at=OBSERVED_AT,
+    )[0]
+    second = parse_binance_spot_reference_tickers(
+        [_ticker("BTCUSDT"), _ticker("ETHUSDT", offset=1)],
+        mappings=mappings,
+        observed_at=OBSERVED_AT.replace(microsecond=200_000),
+    )[0]
+
+    assert first.event_id != second.event_id
+    assert first.identity != second.identity
+    assert first.content_hash != second.content_hash
 
 
 @pytest.mark.parametrize(
