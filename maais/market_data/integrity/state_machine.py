@@ -51,6 +51,7 @@ class IntegrityPolicy:
     sequence_rules: Mapping[str, SequenceRule]
     source_max_age: Mapping[str, timedelta]
     max_venue_timestamp_skew: timedelta
+    venue_timestamp_skew_overrides: Mapping[str, timedelta]
     max_venue_clock_drift: timedelta
     max_book_age: timedelta
     max_decision_lag: timedelta
@@ -81,6 +82,15 @@ class IntegrityPolicy:
             if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
                 raise ValueError(f"{field} must be a positive finite Decimal")
         object.__setattr__(self, "source_max_age", MappingProxyType(dict(self.source_max_age)))
+        if not set(self.venue_timestamp_skew_overrides).issubset(self.required_sources):
+            raise ValueError("venue timestamp skew overrides must name required sources")
+        if any(value <= timedelta(0) for value in self.venue_timestamp_skew_overrides.values()):
+            raise ValueError("venue timestamp skew overrides must be positive")
+        object.__setattr__(
+            self,
+            "venue_timestamp_skew_overrides",
+            MappingProxyType(dict(self.venue_timestamp_skew_overrides)),
+        )
         if not self.sequence_rules or not set(self.sequence_rules).issubset(self.required_sources):
             raise ValueError("sequence rules must name required sources")
         object.__setattr__(self, "sequence_rules", MappingProxyType(dict(self.sequence_rules)))
@@ -114,6 +124,10 @@ class IntegrityPolicy:
                 "symbol_state": timedelta(hours=24),
             },
             max_venue_timestamp_skew=timedelta(seconds=1),
+            venue_timestamp_skew_overrides={
+                "primary_spot": timedelta(seconds=5),
+                "secondary_venue": timedelta(seconds=2),
+            },
             max_venue_clock_drift=timedelta(seconds=1),
             max_book_age=timedelta(seconds=2),
             max_decision_lag=timedelta(seconds=5),
@@ -193,6 +207,30 @@ class IntegrityAssessment:
     results: tuple[IntegrityResult, ...]
     blocking_checks: tuple[IntegrityCheck, ...]
     content_hash: str
+
+    @property
+    def is_expected_warmup(self) -> bool:
+        """True only when every blocker is an ordinary causal-history warm-up gap."""
+
+        expected_reasons = {
+            IntegrityCheck.MISSING_INTERVAL: frozenset({"previous_bar_missing"}),
+            IntegrityCheck.HISTORICAL_COVERAGE: frozenset({"historical_warmup_incomplete"}),
+            IntegrityCheck.CLOSE_RETURN_OUTLIER: frozenset(
+                {"previous_close_missing", "return_warmup_incomplete"}
+            ),
+        }
+        if not self.blocking_checks:
+            return False
+        by_check = {result.check: result for result in self.results}
+        for check in self.blocking_checks:
+            result = by_check.get(check)
+            if (
+                result is None
+                or result.status is not QualityStatus.NOT_APPLICABLE
+                or result.reason_code not in expected_reasons.get(check, frozenset())
+            ):
+                return False
+        return True
 
 
 def _result(
@@ -344,23 +382,33 @@ class MarketIntegrityStateMachine:
         )
 
     def _venue_timestamp(self, context: IntegrityContext) -> IntegrityResult:
-        bad = [
-            name
-            for name, source in context.frame.source_manifest.items()
-            if abs(source.observed_at - source.venue_event_at)
-            > self._policy.max_venue_timestamp_skew
-        ]
+        bad: list[str] = []
+        observations: dict[str, dict[str, Decimal]] = {}
+        for name, source in sorted(context.frame.source_manifest.items()):
+            limit = self._policy.venue_timestamp_skew_overrides.get(
+                name,
+                self._policy.max_venue_timestamp_skew,
+            )
+            skew = abs(source.observed_at - source.venue_event_at)
+            observations[name] = {
+                "skew_seconds": Decimal(str(skew.total_seconds())),
+                "limit_seconds": Decimal(str(limit.total_seconds())),
+            }
+            if skew > limit:
+                bad.append(name)
         if bad:
             return _result(
                 IntegrityCheck.VENUE_TIMESTAMP,
                 QualityStatus.FAILED,
                 "venue_timestamp_skew",
-                sources=sorted(bad),
+                sources=bad,
+                observations=observations,
             )
         return _result(
             IntegrityCheck.VENUE_TIMESTAMP,
             QualityStatus.PASSED,
             "venue_timestamps_within_skew",
+            observations=observations,
         )
 
     def _observed_lag(self, context: IntegrityContext) -> IntegrityResult:

@@ -236,7 +236,7 @@ def _execution_service(
     )
 
 
-async def test_quarantine_creates_complete_visible_outcome_without_running_features() -> None:
+async def test_expected_warmup_creates_complete_visible_outcome_without_an_incident() -> None:
     command = _command(admitted=False)
     computer = _FeatureComputer(_features())
     service = OfficialOrchestrationService(computer)
@@ -261,12 +261,35 @@ async def test_quarantine_creates_complete_visible_outcome_without_running_featu
     assert first.bundle.market_frame.orderbook_snapshot["bids"]
     assert tuple(item.agent_name for item in first.bundle.agents) == ALL_AGENTS
     assert all(item.direction is Direction.NEUTRAL for item in first.bundle.agents)
-    assert all(ReasonCode.DATA_QUALITY_FAILED in item.reason_codes for item in first.bundle.agents)
+    assert first.bundle.cycle.reason_code is ReasonCode.INSUFFICIENT_HISTORY
+    assert all(ReasonCode.INSUFFICIENT_HISTORY in item.reason_codes for item in first.bundle.agents)
     assert tuple(item.gate_type for item in first.bundle.gates) == (GateType.DATA_QUALITY,)
     assert not first.bundle.gates[0].passed
-    assert first.incident is not None
-    assert first.incident.reason_code == "market_frame_quarantined"
+    assert first.incident is None
     first.bundle.validate()
+
+
+async def test_real_quality_failure_during_warmup_creates_operator_incident() -> None:
+    command = _command(admitted=True)
+    policy = replace(
+        IntegrityPolicy.official(),
+        max_venue_timestamp_skew=timedelta(microseconds=1),
+    )
+    integrity = MarketIntegrityStateMachine(policy).evaluate(
+        replace(
+            _context(command.frame),
+            historical_bar_count=0,
+            recent_close_returns=(),
+        )
+    )
+    service = OfficialOrchestrationService(_FeatureComputer(_features()))
+
+    outcome = await service.process(replace(command, integrity=integrity, entry_context=None))
+
+    assert outcome.disposition is OrchestrationDisposition.QUARANTINED
+    assert outcome.bundle.cycle.reason_code is ReasonCode.DATA_QUALITY_FAILED
+    assert outcome.incident is not None
+    assert outcome.incident.reason_code == "market_frame_quarantined"
 
 
 async def test_mandatory_agent_failure_blocks_cycle_with_eight_rows_and_incident() -> None:

@@ -176,3 +176,62 @@ def test_history_and_outlier_warmup_are_blocking_not_applicable() -> None:
         is QualityStatus.NOT_APPLICABLE
     )
     assert assessment.admission is FrameAdmission.QUARANTINED
+    assert assessment.is_expected_warmup
+
+
+def test_real_quality_failure_during_warmup_is_not_classified_as_expected() -> None:
+    policy = replace(
+        IntegrityPolicy.official(),
+        max_venue_timestamp_skew=timedelta(microseconds=1),
+    )
+    assessment = MarketIntegrityStateMachine(policy).evaluate(
+        _context(
+            _frame(),
+            previous_bar_close_at=None,
+            previous_close=None,
+            recent_close_returns=(),
+            historical_bar_count=0,
+        )
+    )
+
+    assert _result(assessment, IntegrityCheck.VENUE_TIMESTAMP).status is QualityStatus.FAILED
+    assert assessment.admission is FrameAdmission.QUARANTINED
+    assert not assessment.is_expected_warmup
+
+
+def test_rest_reference_uses_source_specific_skew_and_records_measured_evidence() -> None:
+    events = list(_inputs())
+    spot_index = next(index for index, item in enumerate(events) if item.venue == "binance_spot")
+    spot = events[spot_index]
+    events[spot_index] = replace(
+        spot,
+        venue_event_at=spot.observed_at - timedelta(milliseconds=2500),
+    )
+
+    within_limit = MarketIntegrityStateMachine(IntegrityPolicy.official()).evaluate(
+        _context(_frame(events))
+    )
+    result = _result(within_limit, IntegrityCheck.VENUE_TIMESTAMP)
+
+    assert result.status is QualityStatus.PASSED
+    assert result.details["observations"] == {
+        "closed_bar": {"limit_seconds": "1", "skew_seconds": "0.001"},
+        "mark_funding": {"limit_seconds": "1", "skew_seconds": "0.001"},
+        "order_book": {"limit_seconds": "1", "skew_seconds": "0.001"},
+        "primary_spot": {"limit_seconds": "5", "skew_seconds": "2.5"},
+        "secondary_venue": {"limit_seconds": "2", "skew_seconds": "0.001"},
+        "symbol_state": {"limit_seconds": "1", "skew_seconds": "0.001"},
+        "venue_clock": {"limit_seconds": "1", "skew_seconds": "0.001"},
+    }
+
+    events[spot_index] = replace(
+        spot,
+        venue_event_at=spot.observed_at - timedelta(milliseconds=5001),
+    )
+    over_limit = MarketIntegrityStateMachine(IntegrityPolicy.official()).evaluate(
+        _context(_frame(events))
+    )
+
+    failed = _result(over_limit, IntegrityCheck.VENUE_TIMESTAMP)
+    assert failed.status is QualityStatus.FAILED
+    assert failed.details["sources"] == ("primary_spot",)

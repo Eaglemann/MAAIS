@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from maais.decisions.bundle import DecisionBundle
-from maais.domain.enums import ProposalStatus
+from maais.domain.enums import ProposalStatus, ReasonCode
 from maais.execution.paper.authorization import ExecutionCapability
 from maais.execution.paper.records import PaperExecutionRecord
 from maais.execution.paper.sensitivity import SensitivityOutcome, SensitivityScenario
@@ -36,15 +36,13 @@ class OrchestrationOutcome:
             self.incident.experiment_id != self.bundle.cycle.experiment_id
         ):
             raise ValueError("incident and decision bundle experiment differ")
-        if (
-            self.disposition
-            in {
-                OrchestrationDisposition.QUARANTINED,
-                OrchestrationDisposition.HALTED,
-            }
-            and self.incident is None
+        if self.disposition is OrchestrationDisposition.HALTED and self.incident is None:
+            raise ValueError("halted outcomes require an incident")
+        if self.disposition is OrchestrationDisposition.QUARANTINED and (
+            (self.bundle.cycle.reason_code is ReasonCode.INSUFFICIENT_HISTORY)
+            != (self.incident is None)
         ):
-            raise ValueError("quarantined and halted outcomes require an incident")
+            raise ValueError("only expected-history quarantine may omit an operator incident")
         proposal = self.bundle.proposal
         if self.counterfactual is not None and (
             proposal is None

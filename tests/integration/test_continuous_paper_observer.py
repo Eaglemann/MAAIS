@@ -53,7 +53,12 @@ def _policy(command) -> LivePaperPolicy:
         benchmark_symbol="BTCUSDT",
         benchmark_horizon_bars=60,
         benchmark_source="binance_spot_close",
+        strategy_key="maais_primary",
+        strategy_version="1.0.0",
+        strategy_implementation_hash="b" * 64,
+        strategy_parameters={"timeframe": "1m"},
         exchange_filter_hashes={"BTCUSDT": command.entry_context.exchange_filters.content_hash},
+        exchange_filters={"BTCUSDT": command.entry_context.exchange_filters},
     )
 
 

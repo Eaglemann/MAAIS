@@ -143,6 +143,13 @@ class OfficialOrchestrationService:
 
     def _quarantined(self, command: OrchestrationCommand) -> OrchestrationOutcome:
         cycle_id = self._cycle_id(command)
+        expected_warmup = command.integrity.is_expected_warmup
+        reason_code = (
+            ReasonCode.INSUFFICIENT_HISTORY if expected_warmup else ReasonCode.DATA_QUALITY_FAILED
+        )
+        feature_execution = (
+            "skipped_due_to_history_warmup" if expected_warmup else "skipped_due_to_data_quality"
+        )
         agents = tuple(
             AgentEvaluationRecord(
                 id=_id("agent-evaluation", cycle_id, entry.agent_name),
@@ -159,16 +166,17 @@ class OfficialOrchestrationService:
                 input_snapshot={
                     "frame_content_hash": command.frame.content_hash,
                     "integrity_hash": command.integrity.content_hash,
-                    "feature_execution": "skipped",
+                    "feature_execution": feature_execution,
                 },
                 reason_codes=(
-                    (ReasonCode.DATA_QUALITY_FAILED, ReasonCode.DISABLED_AGENT)
+                    (reason_code, ReasonCode.DISABLED_AGENT)
                     if not entry.enabled
-                    else (ReasonCode.DATA_QUALITY_FAILED,)
+                    else (reason_code,)
                 ),
                 explanation={
                     "admission": command.integrity.admission,
                     "blocking_checks": command.integrity.blocking_checks,
+                    "expected_warmup": expected_warmup,
                     "maturity": entry.maturity,
                     "voting": False,
                 },
@@ -183,20 +191,29 @@ class OfficialOrchestrationService:
                 command,
                 cycle_id=cycle_id,
                 status=DecisionStatus.QUARANTINED,
-                reason=ReasonCode.DATA_QUALITY_FAILED,
+                reason=reason_code,
                 regime="quarantined",
-                feature_snapshot={"execution": "skipped_due_to_data_quality"},
+                feature_snapshot={
+                    "execution": feature_execution,
+                    "expected_warmup": expected_warmup,
+                },
             ),
             agents=agents,
-            summary=self._neutral_summary(cycle_id, "data_quality_quarantine"),
+            summary=self._neutral_summary(
+                cycle_id,
+                "history_warmup" if expected_warmup else "data_quality_quarantine",
+            ),
             gates=(
                 self._gate(
                     cycle_id,
                     GateType.DATA_QUALITY,
                     1,
                     False,
-                    ReasonCode.DATA_QUALITY_FAILED,
-                    input={"integrity_hash": command.integrity.content_hash},
+                    reason_code,
+                    input={
+                        "integrity_hash": command.integrity.content_hash,
+                        "expected_warmup": expected_warmup,
+                    },
                     output={
                         "admission": command.integrity.admission,
                         "blocking_checks": command.integrity.blocking_checks,
@@ -206,19 +223,21 @@ class OfficialOrchestrationService:
             ),
             proposal=None,
         )
-        incident = self._incident(
-            command,
-            component="market_data",
-            reason="market_frame_quarantined",
-            evidence={
-                "frame_id": command.frame.frame_id,
-                "frame_content_hash": command.frame.content_hash,
-                "integrity_hash": command.integrity.content_hash,
-                "blocking_checks": command.integrity.blocking_checks,
-                "results": [item.to_dict() for item in command.integrity.results],
-            },
-            severity=IncidentSeverity.ERROR,
-        )
+        incident = None
+        if not expected_warmup:
+            incident = self._incident(
+                command,
+                component="market_data",
+                reason="market_frame_quarantined",
+                evidence={
+                    "frame_id": command.frame.frame_id,
+                    "frame_content_hash": command.frame.content_hash,
+                    "integrity_hash": command.integrity.content_hash,
+                    "blocking_checks": command.integrity.blocking_checks,
+                    "results": [item.to_dict() for item in command.integrity.results],
+                },
+                severity=IncidentSeverity.ERROR,
+            )
         return OrchestrationOutcome(OrchestrationDisposition.QUARANTINED, bundle, incident)
 
     def _feature_failure(

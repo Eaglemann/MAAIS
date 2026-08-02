@@ -89,6 +89,7 @@ async def _command_in_database(
     uow_factory: UnitOfWork,
     *,
     quarantine: bool,
+    quality_fault: bool = False,
     with_entry_context: bool = False,
     kill_switch: bool = False,
 ) -> OrchestrationCommand:
@@ -122,7 +123,14 @@ async def _command_in_database(
     context = _context(frame)
     if quarantine:
         context = replace(context, historical_bar_count=0, recent_close_returns=())
-    integrity = MarketIntegrityStateMachine(IntegrityPolicy.official()).evaluate(context)
+    integrity_policy = IntegrityPolicy.official()
+    if quality_fault:
+        integrity_policy = replace(
+            integrity_policy,
+            max_venue_timestamp_skew=timedelta(microseconds=1),
+            venue_timestamp_skew_overrides={},
+        )
+    integrity = MarketIntegrityStateMachine(integrity_policy).evaluate(context)
     return OrchestrationCommand(
         frame=frame,
         integrity=integrity,
@@ -170,7 +178,11 @@ async def _start_experiment(
 async def test_quarantine_outcome_cursor_incident_and_events_commit_atomically(
     uow_factory: UnitOfWork,
 ) -> None:
-    command = await _command_in_database(uow_factory, quarantine=True)
+    command = await _command_in_database(
+        uow_factory,
+        quarantine=True,
+        quality_fault=True,
+    )
     outcome = await OfficialOrchestrationService(_FeatureComputer(_features())).process(command)
     cursor = _cursor(command)
 
@@ -744,7 +756,11 @@ async def test_late_incident_conflict_rolls_back_decision_quality_and_cursor(
     uow_factory: UnitOfWork,
     db_engine: AsyncEngine,
 ) -> None:
-    command = await _command_in_database(uow_factory, quarantine=True)
+    command = await _command_in_database(
+        uow_factory,
+        quarantine=True,
+        quality_fault=True,
+    )
     outcome = await OfficialOrchestrationService(_FeatureComputer(_features())).process(command)
     assert outcome.incident is not None
     conflicting = replace(outcome.incident, evidence={"different": "immutable evidence"})
