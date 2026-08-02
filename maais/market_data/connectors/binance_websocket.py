@@ -1,194 +1,411 @@
-"""Binance Futures WebSocket connector.
+"""Managed keyless Binance USD-M WebSocket connector for official paper inputs."""
 
-Subscribes to combined streams for all configured pairs:
-  - <symbol>@kline_1m      — 1-minute candle updates
-  - <symbol>@depth20@500ms — order book (top 20 levels, 500ms updates)
-  - <symbol>@aggTrade      — aggregated trade stream
-  - <symbol>@markPrice@1s  — mark price + funding rate (every second)
-
-Architecture:
-  Messages are placed onto an asyncio.Queue and consumed by the caller.
-  This decouples ingestion speed from processing speed.
-
-Reconnection:
-  Exponential backoff starting at 1s, capped at 60s.
-  Resets to 1s on successful connection held for > 30s.
-"""
+from __future__ import annotations
 
 import asyncio
-import json
-from collections.abc import AsyncGenerator
+import random
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
+from enum import StrEnum
+from typing import Any, Protocol
 
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from maais.core.logging import get_logger
-from maais.market_data.schemas import FundingRateData, KlineData, OrderBookSnapshot, TradeData
+from maais.execution.paper.clock import require_utc
+from maais.market_data.connectors.binance_contracts import (
+    BinanceContractError,
+    BinanceDepthBook,
+    BinanceDepthDelta,
+    BinanceDepthSnapshot,
+    BinanceSequenceGap,
+    parse_websocket_message,
+)
+from maais.market_data.events import ObservedMarketEvent
 
-logger = get_logger(__name__)
-
-_WS_BASE = "wss://fstream.binance.com/stream"
+PUBLIC_FSTREAM_BASE_URL = "wss://fstream.binance.com/stream"
 _BACKOFF_BASE = 1.0
 _BACKOFF_MAX = 60.0
 _STABLE_CONNECTION_SECONDS = 30.0
+_DEFAULT_QUEUE_SIZE = 10_000
+_DEFAULT_DEPTH_BUFFER_SIZE = 2_000
+Sleep = Callable[[float], Awaitable[None]]
+ConnectFactory = Callable[[str], Any]
 
 
-def _ms_to_dt(ms: int) -> datetime:
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+class _RestDepthSource(Protocol):
+    @property
+    def preflight_complete(self) -> bool: ...
+
+    @property
+    def preflight_result(self) -> object: ...
+
+    async def get_depth_snapshot(self, symbol: str) -> BinanceDepthSnapshot: ...
 
 
-def _build_stream_url(symbols: list[str]) -> str:
-    streams = []
-    for sym in symbols:
-        s = sym.lower()
-        streams += [
-            f"{s}@kline_1m",
-            f"{s}@depth20@500ms",
-            f"{s}@aggTrade",
-            f"{s}@markPrice@1s",
-        ]
-    return f"{_WS_BASE}?streams=" + "/".join(streams)
+class _Socket(Protocol):
+    def __aiter__(self) -> AsyncIterator[str | bytes]: ...
+
+    async def close(self) -> None: ...
 
 
-def _parse_kline_event(data: dict) -> KlineData | None:
-    k = data.get("k")
-    if not k:
-        return None
-    return KlineData(
-        symbol=k["s"],
-        timeframe=k["i"],
-        open_time=_ms_to_dt(k["t"]),
-        open=Decimal(k["o"]),
-        high=Decimal(k["h"]),
-        low=Decimal(k["l"]),
-        close=Decimal(k["c"]),
-        volume=Decimal(k["v"]),
-        close_time=_ms_to_dt(k["T"]),
-        quote_volume=Decimal(k["q"]),
-        trade_count=int(k["n"]),
-        taker_buy_volume=Decimal(k["V"]),
-        taker_buy_quote_volume=Decimal(k["Q"]),
-        is_closed=bool(k["x"]),
+class ConnectorState(StrEnum):
+    STOPPED = "stopped"
+    STARTING = "starting"
+    READY = "ready"
+    RECOVERING = "recovering"
+    STOPPING = "stopping"
+    HALTED = "halted"
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorFailure:
+    reason_code: str
+    detail: str
+    error_type: str
+    detected_at: datetime
+    requires_operator_review: bool
+
+    def __post_init__(self) -> None:
+        if not self.reason_code or not self.error_type:
+            raise ValueError("connector failure identity is required")
+        require_utc(self.detected_at, "connector failure detected_at")
+
+
+class ConnectorHalt(RuntimeError):
+    def __init__(self, reason_code: str, detail: str) -> None:
+        self.reason_code = reason_code
+        self.detail = detail
+        super().__init__(f"{reason_code}: {detail}")
+
+
+class _RecoverableDisconnect(ConnectionError):
+    def __init__(self, reason_code: str, detail: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(detail)
+
+
+def _build_stream_url(symbols: tuple[str, ...] | list[str]) -> str:
+    streams: list[str] = []
+    for symbol in symbols:
+        stream_symbol = symbol.lower()
+        streams.extend(
+            (
+                f"{stream_symbol}@kline_1m",
+                f"{stream_symbol}@depth@500ms",
+                f"{stream_symbol}@aggTrade",
+                f"{stream_symbol}@markPrice@1s",
+            )
+        )
+    return f"{PUBLIC_FSTREAM_BASE_URL}?streams={'/'.join(streams)}"
+
+
+def _default_connect(url: str):
+    return websockets.connect(
+        url,
+        ping_interval=20,
+        ping_timeout=10,
+        close_timeout=5,
+        max_queue=1024,
     )
-
-
-def _parse_depth_event(data: dict) -> OrderBookSnapshot | None:
-    symbol = data.get("s")
-    if not symbol:
-        return None
-    return OrderBookSnapshot(
-        symbol=symbol,
-        timestamp=_ms_to_dt(data.get("T", 0) or int(datetime.now(timezone.utc).timestamp() * 1000)),
-        bids=[(Decimal(p), Decimal(q)) for p, q in data.get("b", [])],
-        asks=[(Decimal(p), Decimal(q)) for p, q in data.get("a", [])],
-        last_update_id=data.get("lastUpdateId", 0),
-    )
-
-
-def _parse_agg_trade_event(data: dict) -> TradeData | None:
-    return TradeData(
-        symbol=data["s"],
-        timestamp=_ms_to_dt(data["T"]),
-        price=Decimal(data["p"]),
-        quantity=Decimal(data["q"]),
-        is_buyer_maker=bool(data["m"]),
-        trade_id=int(data["l"]),  # last trade ID in the aggregate
-    )
-
-
-def _parse_mark_price_event(data: dict) -> FundingRateData | None:
-    fr = data.get("r")
-    if fr is None:
-        return None
-    return FundingRateData(
-        symbol=data["s"],
-        funding_time=_ms_to_dt(int(data.get("T", 0))),
-        funding_rate=Decimal(str(fr)),
-        mark_price=Decimal(str(data.get("p", "0"))),
-    )
-
-
-# Union type for all possible parsed events
-MarketEvent = KlineData | OrderBookSnapshot | TradeData | FundingRateData
 
 
 class BinanceWebSocketConnector:
-    """Connects to Binance Futures combined streams and emits parsed events."""
+    """Retained-task public stream with strict contracts and lossless backpressure."""
 
-    def __init__(self, symbols: list[str]) -> None:
-        self._symbols = symbols
-        self._url = _build_stream_url(symbols)
-        self._queue: asyncio.Queue[MarketEvent] = asyncio.Queue(maxsize=10_000)
+    def __init__(
+        self,
+        symbols: tuple[str, ...] | list[str],
+        *,
+        rest: _RestDepthSource,
+        connect: ConnectFactory = _default_connect,
+        observed_now: Callable[[], datetime] | None = None,
+        sleep: Sleep = asyncio.sleep,
+        jitter: Callable[[float, float], float] | None = None,
+        queue_size: int = _DEFAULT_QUEUE_SIZE,
+        depth_buffer_size: int = _DEFAULT_DEPTH_BUFFER_SIZE,
+        published_depth: int = 20,
+        ready_timeout: float = 30.0,
+    ) -> None:
+        normalized = tuple(symbols)
+        if not normalized or len(set(normalized)) != len(normalized):
+            raise ValueError("connector symbols must be nonempty and unique")
+        if any(
+            not symbol or symbol != symbol.upper() or not symbol.isalnum()
+            for symbol in normalized
+        ):
+            raise ValueError("connector symbols must be uppercase alphanumeric")
+        if min(queue_size, depth_buffer_size, published_depth) <= 0 or ready_timeout <= 0:
+            raise ValueError("connector capacities and ready timeout must be positive")
+        if not rest.preflight_complete:
+            raise RuntimeError("Binance REST preflight must complete before WebSocket setup")
+        admitted = {
+            item.symbol
+            for item in getattr(rest.preflight_result, "exchange_filters", ())
+        }
+        missing = sorted(set(normalized) - admitted)
+        if missing:
+            raise RuntimeError(f"WebSocket symbols were not admitted by preflight: {missing}")
+
+        self._symbols = normalized
+        self._url = _build_stream_url(normalized)
+        self._rest = rest
+        self._connect = connect
+        self._observed_now = observed_now or (lambda: datetime.now(timezone.utc))
+        self._sleep = sleep
+        self._jitter = jitter or random.SystemRandom().uniform
+        self._ready_timeout = ready_timeout
+        self._published_depth = published_depth
+        self._depth_buffer_size = depth_buffer_size
+        self._queue: asyncio.Queue[ObservedMarketEvent] = asyncio.Queue(maxsize=queue_size)
+        self._state = ConnectorState.STOPPED
         self._running = False
+        self._task: asyncio.Task[None] | None = None
+        self._socket: _Socket | None = None
+        self._ready = asyncio.Event()
+        self._books: dict[str, BinanceDepthBook] = {}
+        self._depth_buffers: dict[str, list[BinanceDepthDelta]] = {}
+        self._book_lock = asyncio.Lock()
+        self._failure: ConnectorFailure | None = None
+        self._recovery_count = 0
+        self._last_recovery_reason: str | None = None
+        self._last_recovery_detail: str | None = None
 
-    def _parse_message(self, raw: str | bytes) -> MarketEvent | None:
-        try:
-            msg = json.loads(raw)
-        except json.JSONDecodeError:
-            return None
+    @property
+    def state(self) -> ConnectorState:
+        return self._state
 
-        data = msg.get("data", msg)
-        event_type = data.get("e", "")
+    @property
+    def task(self) -> asyncio.Task[None] | None:
+        return self._task
 
-        if event_type == "kline":
-            return _parse_kline_event(data)
-        elif event_type == "depthUpdate":
-            return _parse_depth_event(data)
-        elif event_type == "aggTrade":
-            return _parse_agg_trade_event(data)
-        elif event_type == "markPriceUpdate":
-            return _parse_mark_price_event(data)
+    @property
+    def failure(self) -> ConnectorFailure | None:
+        return self._failure
 
-        return None
+    @property
+    def recovery_count(self) -> int:
+        return self._recovery_count
 
-    async def _run_connection(self) -> None:
-        backoff = _BACKOFF_BASE
-        while self._running:
-            try:
-                connect_time = asyncio.get_event_loop().time()
-                async with websockets.connect(self._url, ping_interval=20, ping_timeout=10) as ws:
-                    logger.info("websocket_connected", symbols=len(self._symbols))
-                    backoff = _BACKOFF_BASE  # reset on successful connect
-                    async for raw in ws:
-                        if not self._running:
-                            return
-                        event = self._parse_message(raw)
-                        if event is not None:
-                            try:
-                                self._queue.put_nowait(event)
-                            except asyncio.QueueFull:
-                                logger.warning("event_queue_full_dropping_event")
-                        # If connection has been stable, reset backoff
-                        if (
-                            asyncio.get_event_loop().time() - connect_time
-                            > _STABLE_CONNECTION_SECONDS
-                        ):
-                            backoff = _BACKOFF_BASE
+    @property
+    def last_recovery_reason(self) -> str | None:
+        return self._last_recovery_reason
 
-            except ConnectionClosed as exc:
-                logger.warning("websocket_disconnected", code=exc.code, reason=exc.reason)
-            except Exception as exc:
-                logger.error("websocket_error", error=str(exc))
-
-            if self._running:
-                logger.info("websocket_reconnecting", backoff_seconds=backoff)
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, _BACKOFF_MAX)
+    @property
+    def last_recovery_detail(self) -> str | None:
+        return self._last_recovery_detail
 
     async def start(self) -> None:
+        if self._state is not ConnectorState.STOPPED or self._task is not None:
+            raise RuntimeError("connector can be started exactly once")
         self._running = True
-        asyncio.create_task(self._run_connection(), name="ws_connector")
+        self._state = ConnectorState.STARTING
+        self._task = asyncio.create_task(self._run(), name="binance_public_websocket")
+        ready_wait = asyncio.create_task(self._ready.wait())
+        done, _ = await asyncio.wait(
+            {ready_wait, self._task},
+            timeout=self._ready_timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if ready_wait in done and ready_wait.result():
+            return
+        ready_wait.cancel()
+        await asyncio.gather(ready_wait, return_exceptions=True)
+        if self._task in done:
+            if self._failure is not None:
+                raise ConnectorHalt(self._failure.reason_code, self._failure.detail)
+            raise ConnectorHalt("startup_ended", "connector task ended before readiness")
+        await self._halt_from_outside(
+            ConnectorHalt("ready_timeout", "connector did not become ready before timeout")
+        )
+        raise ConnectorHalt("ready_timeout", "connector did not become ready before timeout")
 
     async def stop(self) -> None:
+        if self._state is ConnectorState.STOPPED:
+            return
+        halted = self._state is ConnectorState.HALTED
         self._running = False
+        if not halted:
+            self._state = ConnectorState.STOPPING
+        if self._socket is not None:
+            await self._socket.close()
+        if self._task is not None and not self._task.done():
+            await self._task
+        if not halted:
+            self._state = ConnectorState.STOPPED
 
-    async def events(self) -> AsyncGenerator[MarketEvent, None]:
-        """Async generator — yields parsed market events as they arrive."""
-        while self._running or not self._queue.empty():
+    async def wait_closed(self, *, timeout: float | None = None) -> None:
+        if self._task is None:
+            return
+        if timeout is None:
+            await self._task
+        else:
+            await asyncio.wait_for(asyncio.shield(self._task), timeout=timeout)
+
+    async def events(self) -> AsyncGenerator[ObservedMarketEvent, None]:
+        while True:
+            if not self._queue.empty():
+                yield self._queue.get_nowait()
+                continue
+            if self._state is ConnectorState.HALTED:
+                assert self._failure is not None
+                raise ConnectorHalt(self._failure.reason_code, self._failure.detail)
+            if self._state is ConnectorState.STOPPED and (
+                self._task is None or self._task.done()
+            ):
+                return
             try:
-                event = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-                yield event
+                yield await asyncio.wait_for(self._queue.get(), timeout=0.25)
             except asyncio.TimeoutError:
                 continue
+
+    async def _run(self) -> None:
+        backoff = _BACKOFF_BASE
+        try:
+            while self._running:
+                connected_at = asyncio.get_running_loop().time()
+                try:
+                    async with self._connect(self._url) as socket:
+                        self._socket = socket
+                        await self._run_session(socket)
+                except ConnectorHalt as exc:
+                    self._set_halt(exc)
+                    return
+                except BinanceContractError as exc:
+                    self._set_halt(ConnectorHalt("public_contract_violation", str(exc)))
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except BinanceSequenceGap as exc:
+                    reason = "depth_sequence_gap"
+                    detail = str(exc)
+                except ConnectionClosed as exc:
+                    reason = "websocket_connection_closed"
+                    detail = f"code={exc.code} reason={exc.reason}"
+                except _RecoverableDisconnect as exc:
+                    reason = exc.reason_code
+                    detail = str(exc)
+                except Exception as exc:
+                    reason = "websocket_connection_error"
+                    detail = f"{type(exc).__name__}: {exc}"
+                finally:
+                    self._socket = None
+
+                if not self._running:
+                    break
+                self._recovery_count += 1
+                self._last_recovery_reason = reason
+                self._last_recovery_detail = detail
+                self._state = ConnectorState.RECOVERING
+                if asyncio.get_running_loop().time() - connected_at >= _STABLE_CONNECTION_SECONDS:
+                    backoff = _BACKOFF_BASE
+                wait = backoff + self._jitter(0, backoff * 0.2)
+                await self._sleep(wait)
+                backoff = min(backoff * 2, _BACKOFF_MAX)
+        finally:
+            if self._state is not ConnectorState.HALTED:
+                self._state = ConnectorState.STOPPED
+
+    async def _run_session(self, socket: _Socket) -> None:
+        async with self._book_lock:
+            self._books = {}
+            self._depth_buffers = {symbol: [] for symbol in self._symbols}
+        initializer = asyncio.create_task(self._initialize_books(), name="binance_depth_snapshot")
+        reader = asyncio.create_task(self._read_messages(socket), name="binance_stream_reader")
+        try:
+            done, _ = await asyncio.wait(
+                {initializer, reader},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if reader in done:
+                await reader
+                raise _RecoverableDisconnect(
+                    "websocket_stream_ended",
+                    "public websocket stream ended before stop",
+                )
+            await initializer
+            await reader
+            raise _RecoverableDisconnect(
+                "websocket_stream_ended",
+                "public websocket stream ended before stop",
+            )
+        finally:
+            for task in (initializer, reader):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(initializer, reader, return_exceptions=True)
+
+    async def _initialize_books(self) -> None:
+        snapshots = await asyncio.gather(
+            *(self._rest.get_depth_snapshot(symbol) for symbol in self._symbols)
+        )
+        async with self._book_lock:
+            for snapshot in snapshots:
+                book = BinanceDepthBook.from_snapshot(
+                    snapshot,
+                    depth=self._published_depth,
+                )
+                self._books[snapshot.symbol] = book
+                for delta in self._depth_buffers[snapshot.symbol]:
+                    event = book.apply(delta)
+                    if event is not None:
+                        self._emit(event)
+                self._depth_buffers[snapshot.symbol] = []
+            self._state = ConnectorState.READY
+            self._ready.set()
+
+    async def _read_messages(self, socket: _Socket) -> None:
+        async for raw in socket:
+            observed_at = self._observed_now()
+            require_utc(observed_at, "observed_now")
+            parsed = parse_websocket_message(raw, observed_at=observed_at)
+            if parsed is None:
+                continue
+            if isinstance(parsed, BinanceDepthDelta):
+                async with self._book_lock:
+                    book = self._books.get(parsed.symbol)
+                    if book is None:
+                        buffer = self._depth_buffers[parsed.symbol]
+                        if len(buffer) >= self._depth_buffer_size:
+                            raise ConnectorHalt(
+                                "depth_buffer_saturated",
+                                f"depth buffer saturated for {parsed.symbol}",
+                            )
+                        buffer.append(parsed)
+                        continue
+                    event = book.apply(parsed)
+                    if event is not None:
+                        self._emit(event)
+                continue
+            self._emit(parsed)
+
+    def _emit(self, event: ObservedMarketEvent) -> None:
+        try:
+            self._queue.put_nowait(event)
+        except asyncio.QueueFull as exc:
+            raise ConnectorHalt(
+                "output_queue_saturated",
+                f"output queue saturated before event {event.event_id}",
+            ) from exc
+
+    def _set_halt(self, halt: ConnectorHalt) -> None:
+        self._running = False
+        detected_at = self._observed_now()
+        require_utc(detected_at, "observed_now")
+        self._failure = ConnectorFailure(
+            reason_code=halt.reason_code,
+            detail=halt.detail,
+            error_type=type(halt).__name__,
+            detected_at=detected_at,
+            requires_operator_review=True,
+        )
+        self._state = ConnectorState.HALTED
+
+    async def _halt_from_outside(self, halt: ConnectorHalt) -> None:
+        self._set_halt(halt)
+        if self._socket is not None:
+            await self._socket.close()
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
