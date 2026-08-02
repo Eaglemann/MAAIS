@@ -221,6 +221,14 @@ async def test_persisted_frame_restores_causal_feature_history(
     assert restored[0].bar.quote_volume == command.frame.bar.quote_volume
     assert restored[0].bar.trade_count == command.frame.bar.trade_count
     assert restored[0].bar.taker_buy_volume == command.frame.bar.taker_buy_volume
+    assert restored[0].primary_spot_price == command.frame.primary_spot_price
+    assert (
+        restored[0].primary_spot_event_id == command.frame.source_manifest["primary_spot"].event_id
+    )
+    assert (
+        restored[0].primary_spot_observed_at
+        == command.frame.source_manifest["primary_spot"].observed_at
+    )
     assert restored[0].source_sequences == {
         name: source.sequence
         for name, source in command.frame.source_manifest.items()

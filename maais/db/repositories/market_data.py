@@ -331,6 +331,20 @@ class MarketDataRepository:
                     taker_buy_quote_volume=Decimal("0"),
                     closed=True,
                 )
+            spot_price = (
+                Decimal(row.primary_spot_price) if row.primary_spot_price is not None else None
+            )
+            spot_event_id = None
+            spot_observed_at = None
+            raw_spot_source = row.source_manifest_json.get("primary_spot")
+            if spot_price is not None:
+                if not isinstance(raw_spot_source, Mapping):
+                    raise OperationalStateConflict("persisted primary spot source is missing")
+                raw_event_id = raw_spot_source.get("event_id")
+                if not isinstance(raw_event_id, str) or not raw_event_id:
+                    raise OperationalStateConflict("persisted primary spot event is invalid")
+                spot_event_id = raw_event_id
+                spot_observed_at = _parse_datetime(raw_spot_source.get("observed_at"))
             snapshots.append(
                 CommittedFrameSnapshot(
                     experiment_id=row.experiment_id,
@@ -338,6 +352,9 @@ class MarketDataRepository:
                     symbol=row.symbol,
                     timeframe=row.timeframe,
                     bar=bar,
+                    primary_spot_price=spot_price,
+                    primary_spot_event_id=spot_event_id,
+                    primary_spot_observed_at=spot_observed_at,
                     source_sequences=sequences,
                     content_hash=row.content_hash,
                 )

@@ -41,6 +41,9 @@ def _history_snapshots(count: int = 60) -> tuple[CommittedFrameSnapshot, ...]:
                     taker_buy_quote_volume=Decimal("500"),
                     closed=True,
                 ),
+                primary_spot_price=close - Decimal("0.01"),
+                primary_spot_event_id=f"spot-{index}",
+                primary_spot_observed_at=close_at,
                 source_sequences={"closed_bar": index + 40, "order_book": index + 30},
                 content_hash=f"{index + 1:064x}",
             )
@@ -85,6 +88,7 @@ def test_feature_staging_is_causal_and_does_not_mutate_committed_history() -> No
     assert integrity.previous_bar_close_at == frame.bar.bar_open_at
     assert integrity.prior_sequences == {"closed_bar": 99, "order_book": 89}
     assert len(integrity.recent_close_returns) == 59
+    assert history.benchmark_base("BTCUSDT", horizon_bars=60) == before[0]
 
 
 def test_committed_history_restores_identical_features_and_is_idempotent() -> None:

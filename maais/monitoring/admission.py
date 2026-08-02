@@ -126,6 +126,8 @@ class MonitoringAdmissionContext:
     evaluated_at: datetime
     kill_switch_active: bool
     kill_switch_reason: str | None
+    kill_switch_version: int
+    kill_switch_changed_at: datetime
     health: tuple[HealthObservation, ...]
     volatility: RollingVolatilityBaseline | None
     benchmark: BenchmarkObservation | None
@@ -134,8 +136,13 @@ class MonitoringAdmissionContext:
         if not self.symbol or self.symbol != self.symbol.upper() or not self.timeframe:
             raise ValueError("monitoring context identity is invalid")
         _require_utc(self.evaluated_at, "monitoring evaluated_at")
+        _require_utc(self.kill_switch_changed_at, "kill_switch_changed_at")
         if self.kill_switch_active != (self.kill_switch_reason is not None):
             raise ValueError("kill switch state and reason must appear together")
+        if self.kill_switch_version < 0:
+            raise ValueError("kill switch version cannot be negative")
+        if self.kill_switch_changed_at > self.evaluated_at:
+            raise ValueError("kill switch state cannot come from the future")
         names = tuple(item.component for item in self.health)
         if len(set(names)) != len(names):
             raise ValueError("health observations must be unique by component")
@@ -247,6 +254,8 @@ class OfficialMonitoringAdmission:
                     "evaluated_at": context.evaluated_at,
                     "kill_switch_active": context.kill_switch_active,
                     "kill_switch_reason": context.kill_switch_reason,
+                    "kill_switch_version": context.kill_switch_version,
+                    "kill_switch_changed_at": context.kill_switch_changed_at,
                     "health": [
                         {
                             "component": item.component,
@@ -307,11 +316,15 @@ class OfficialMonitoringAdmission:
                 QualityStatus.FAILED,
                 "kill_switch_active",
                 reason=context.kill_switch_reason,
+                version=context.kill_switch_version,
+                changed_at=context.kill_switch_changed_at,
             )
         return _gate(
             AdmissionCheck.KILL_SWITCH,
             QualityStatus.PASSED,
             "kill_switch_clear",
+            version=context.kill_switch_version,
+            changed_at=context.kill_switch_changed_at,
         )
 
     def _health(self, context: MonitoringAdmissionContext) -> AdmissionGateResult:

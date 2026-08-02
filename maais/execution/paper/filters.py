@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 from maais.domain.enums import PaperOrderSide, PaperOrderType
+from maais.domain.json import content_hash
 from maais.execution.paper.clock import require_utc
 
 
@@ -64,6 +65,23 @@ class ExchangeFilterSnapshot:
         if not self.supported_order_types:
             raise ValueError("supported_order_types cannot be empty")
         require_utc(self.captured_at, "captured_at")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "status": self.status,
+            "price_tick": self.price_tick,
+            "quantity_step": self.quantity_step,
+            "minimum_quantity": self.minimum_quantity,
+            "maximum_quantity": self.maximum_quantity,
+            "minimum_notional": self.minimum_notional,
+            "supported_order_types": self.supported_order_types,
+            "captured_at": self.captured_at,
+        }
+
+    @property
+    def content_hash(self) -> str:
+        return content_hash(self.to_dict())
 
     def quantize_quantity(self, value: Decimal) -> Decimal:
         _require_positive(value, "requested_quantity")

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
 
 from maais.config.modes import RunMode
 from maais.experiments.manifest import ExperimentManifest
@@ -69,9 +70,19 @@ def _integer(parent: Mapping[str, object], name: str) -> int:
     return value
 
 
+def _duration_seconds(value: Decimal, name: str, *, maximum: Decimal) -> timedelta:
+    if value <= 0 or value > maximum:
+        raise RuntimePolicyError(f"{name} must be in (0, {maximum}]")
+    microseconds = value * Decimal("1000000")
+    if microseconds != microseconds.to_integral_value():
+        raise RuntimePolicyError(f"{name} cannot be more precise than one microsecond")
+    return timedelta(microseconds=int(microseconds))
+
+
 @dataclass(frozen=True, slots=True)
 class LivePaperPolicy:
     proposal_ttl: timedelta
+    book_wait_timeout: timedelta
     execution_latency: timedelta
     maximum_decision_lag: timedelta
     maker_fee_rate: Decimal
@@ -81,6 +92,7 @@ class LivePaperPolicy:
     benchmark_symbol: str
     benchmark_horizon_bars: int
     benchmark_source: str
+    exchange_filter_hashes: Mapping[str, str]
 
     @classmethod
     def from_manifest(cls, manifest: ExperimentManifest) -> LivePaperPolicy:
@@ -94,9 +106,18 @@ class LivePaperPolicy:
 
         runtime = _mapping(manifest.configuration, "runtime")
         proposal_ttl_seconds = _decimal(runtime, "proposal_ttl_seconds")
+        book_wait_timeout_seconds = _decimal(runtime, "book_wait_timeout_seconds")
         history_bars = _integer(runtime, "history_bars")
-        if proposal_ttl_seconds <= 0 or proposal_ttl_seconds > 300:
-            raise RuntimePolicyError("proposal_ttl_seconds must be in (0, 300]")
+        proposal_ttl = _duration_seconds(
+            proposal_ttl_seconds,
+            "proposal_ttl_seconds",
+            maximum=Decimal("300"),
+        )
+        book_wait_timeout = _duration_seconds(
+            book_wait_timeout_seconds,
+            "book_wait_timeout_seconds",
+            maximum=Decimal("60"),
+        )
         if history_bars < 60 or history_bars > 10_000:
             raise RuntimePolicyError("history_bars must be in [60, 10000]")
 
@@ -129,6 +150,20 @@ class LivePaperPolicy:
             if _text(manifest.market_data_sources, name) != expected:
                 raise RuntimePolicyError(f"official {name} source must be {expected}")
 
+        if _text(manifest.exchange_metadata, "venue") != "binance_usdm":
+            raise RuntimePolicyError("official exchange venue must be binance_usdm")
+        if _text(manifest.exchange_metadata, "market") != "usdt_perpetual":
+            raise RuntimePolicyError("official exchange market must be usdt_perpetual")
+        raw_filter_hashes = _mapping(manifest.exchange_metadata, "filter_snapshot_hashes")
+        if set(raw_filter_hashes) != set(manifest.symbols):
+            raise RuntimePolicyError("exchange filter hashes must cover exact manifest symbols")
+        filter_hashes: dict[str, str] = {}
+        for symbol in manifest.symbols:
+            value = _text(raw_filter_hashes, symbol)
+            if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                raise RuntimePolicyError(f"exchange filter hash is invalid for {symbol}")
+            filter_hashes[symbol] = value
+
         versions = {
             name
             for name, version in manifest.component_versions.items()
@@ -139,7 +174,8 @@ class LivePaperPolicy:
             raise RuntimePolicyError(f"component versions missing: {', '.join(missing_versions)}")
 
         return cls(
-            proposal_ttl=timedelta(seconds=float(proposal_ttl_seconds)),
+            proposal_ttl=proposal_ttl,
+            book_wait_timeout=book_wait_timeout,
             execution_latency=timedelta(milliseconds=latency_ms),
             maximum_decision_lag=timedelta(milliseconds=decision_lag_ms),
             maker_fee_rate=maker,
@@ -149,6 +185,7 @@ class LivePaperPolicy:
             benchmark_symbol=benchmark_symbol,
             benchmark_horizon_bars=benchmark_horizon_bars,
             benchmark_source=benchmark_source,
+            exchange_filter_hashes=MappingProxyType(filter_hashes),
         )
 
     def integrity_policy(self) -> IntegrityPolicy:

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal
 from types import MappingProxyType
 from uuid import UUID
 
@@ -29,6 +30,9 @@ class CommittedFrameSnapshot:
     symbol: str
     timeframe: str
     bar: ClosedBarPayload
+    primary_spot_price: Decimal | None
+    primary_spot_event_id: str | None
+    primary_spot_observed_at: datetime | None
     source_sequences: Mapping[str, int]
     content_hash: str
 
@@ -39,6 +43,24 @@ class CommittedFrameSnapshot:
             raise ValueError("history snapshot identity is invalid")
         if self.bar.timeframe != self.timeframe or not self.bar.closed:
             raise ValueError("history snapshot requires a matching closed bar")
+        spot_values = (
+            self.primary_spot_price,
+            self.primary_spot_event_id,
+            self.primary_spot_observed_at,
+        )
+        if any(value is None for value in spot_values) != all(
+            value is None for value in spot_values
+        ):
+            raise ValueError("history primary spot evidence must be complete")
+        if self.primary_spot_price is not None and (
+            not self.primary_spot_price.is_finite() or self.primary_spot_price <= 0
+        ):
+            raise ValueError("history primary spot price must be positive and finite")
+        if self.primary_spot_observed_at is not None and (
+            self.primary_spot_observed_at.tzinfo is None
+            or self.primary_spot_observed_at.utcoffset() != timedelta(0)
+        ):
+            raise ValueError("history primary spot observation must be UTC-aware")
         if any(not name or value < 0 for name, value in self.source_sequences.items()):
             raise ValueError("history source sequences must be named and nonnegative")
         if len(self.content_hash) != 64:
@@ -51,12 +73,16 @@ class CommittedFrameSnapshot:
 
     @classmethod
     def from_frame(cls, frame: CausalMinuteFrame) -> CommittedFrameSnapshot:
+        spot_source = frame.source_manifest.get("primary_spot")
         return cls(
             experiment_id=frame.key.experiment_id,
             frame_id=frame.frame_id,
             symbol=frame.key.symbol,
             timeframe=frame.key.timeframe,
             bar=frame.bar,
+            primary_spot_price=frame.primary_spot_price,
+            primary_spot_event_id=(spot_source.event_id if spot_source is not None else None),
+            primary_spot_observed_at=(spot_source.observed_at if spot_source is not None else None),
             source_sequences={
                 name: source.sequence
                 for name, source in frame.source_manifest.items()
@@ -190,6 +216,25 @@ class CausalFrameHistory:
             return tuple(self._snapshots[symbol])
         except KeyError as exc:
             raise ValueError(f"history symbol is not configured: {symbol}") from exc
+
+    def close_series(self, symbol: str) -> tuple[tuple[datetime, Decimal], ...]:
+        return tuple((item.bar.bar_close_at, item.bar.close) for item in self.snapshots(symbol))
+
+    def benchmark_base(
+        self,
+        symbol: str,
+        *,
+        horizon_bars: int,
+    ) -> CommittedFrameSnapshot | None:
+        if horizon_bars < 2:
+            raise ValueError("benchmark horizon must contain at least two bars")
+        values = self.snapshots(symbol)
+        if len(values) < horizon_bars:
+            return None
+        candidate = values[-horizon_bars]
+        if candidate.primary_spot_price is None:
+            return None
+        return candidate
 
     def _prior(self, frame: CausalMinuteFrame) -> tuple[CommittedFrameSnapshot, ...]:
         self._validate_identity(

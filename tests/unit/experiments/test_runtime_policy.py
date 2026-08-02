@@ -13,7 +13,11 @@ def _live_manifest(**overrides):
         "mode": RunMode.PAPER_LIVE,
         "configuration": {
             "risk": {"leverage": 1},
-            "runtime": {"proposal_ttl_seconds": "30", "history_bars": 240},
+            "runtime": {
+                "proposal_ttl_seconds": "30",
+                "book_wait_timeout_seconds": "5",
+                "history_bars": 240,
+            },
             "benchmark": {
                 "symbol": "BTCUSDT",
                 "horizon_bars": 60,
@@ -32,6 +36,11 @@ def _live_manifest(**overrides):
             "counterfactual": "v1",
         },
         "clock_policy": {"latency_ms": 250, "maximum_decision_lag_ms": 5000},
+        "exchange_metadata": {
+            "venue": "binance_usdm",
+            "market": "usdt_perpetual",
+            "filter_snapshot_hashes": {"BTCUSDT": "f" * 64},
+        },
         "market_data_sources": {
             "futures": "binance_usdm",
             "primary_spot": "binance_spot",
@@ -47,12 +56,14 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
 
     assert policy.leverage == 1
     assert policy.proposal_ttl.total_seconds() == 30
+    assert policy.book_wait_timeout.total_seconds() == 5
     assert policy.execution_latency.total_seconds() == 0.25
     assert policy.maximum_decision_lag.total_seconds() == 5
     assert policy.maker_fee_rate == Decimal("0.0002")
     assert policy.taker_fee_rate == Decimal("0.0004")
     assert policy.history_bars == 240
     assert policy.benchmark_symbol == "BTCUSDT"
+    assert policy.exchange_filter_hashes == {"BTCUSDT": "f" * 64}
     assert policy.integrity_policy().max_decision_lag == policy.maximum_decision_lag
 
 
@@ -65,7 +76,11 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
             {
                 "configuration": {
                     "risk": {"leverage": 2},
-                    "runtime": {"proposal_ttl_seconds": "30", "history_bars": 240},
+                    "runtime": {
+                        "proposal_ttl_seconds": "30",
+                        "book_wait_timeout_seconds": "5",
+                        "history_bars": 240,
+                    },
                     "benchmark": {
                         "symbol": "BTCUSDT",
                         "horizon_bars": 60,
