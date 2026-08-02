@@ -59,7 +59,7 @@ paper_signal_process_tree 50560
     assert result.stdout.splitlines() == ["-INT 50566", "-INT 50560"]
 
 
-def test_sleep_inhibitor_tracks_caffeinate_process_and_worker_pid(tmp_path: Path) -> None:
+def test_sleep_inhibitor_executes_caffeinate_for_worker_pid(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_caffeinate = fake_bin / "caffeinate"
@@ -68,19 +68,35 @@ def test_sleep_inhibitor_tracks_caffeinate_process_and_worker_pid(tmp_path: Path
         encoding="utf-8",
     )
     fake_caffeinate.chmod(0o755)
-    inhibitor_log = tmp_path / "inhibitor.log"
     environment = os.environ.copy()
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
 
     result = _run_bash(
-        f"""
-paper_start_sleep_inhibitor 50560 {shlex.quote(str(inhibitor_log))}
-wait "$PAPER_SLEEP_INHIBITOR_PID"
-printf 'pid=%s\\n' "$PAPER_SLEEP_INHIBITOR_PID"
-""",
+        "paper_run_sleep_inhibitor 50560",
         environment=environment,
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("pid=")
-    assert inhibitor_log.read_text(encoding="utf-8").strip() == "-im -w 50560"
+    assert result.stdout.strip() == "-im -w 50560"
+
+
+def test_tmux_session_start_records_exact_pane_pid() -> None:
+    result = _run_bash(
+        """
+tmux() {
+  if [[ "$1" == "new-session" ]]; then
+    printf 'start:%s\\n' "$*"
+  elif [[ "$1" == "list-panes" ]]; then
+    printf '60560\\n'
+  fi
+}
+paper_start_tmux_session maais-worker-test 'exec worker --paper-only'
+printf 'pid=%s\\n' "$PAPER_TMUX_PANE_PID"
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "start:new-session -d -s maais-worker-test exec worker --paper-only",
+        "pid=60560",
+    ]

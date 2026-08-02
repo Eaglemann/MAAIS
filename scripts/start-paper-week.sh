@@ -18,6 +18,11 @@ current_state="${state_dir}/current.json"
 
 mkdir -p "${log_dir}" "${repository_root}/artifacts/reports" "${repository_root}/backups"
 
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tmux is required for durable paper-run supervision" >&2
+  exit 69
+fi
+
 if [[ -f "${current_state}" ]]; then
   existing_worker="$(jq -r '.worker_pid // empty' "${current_state}")"
   if [[ "${existing_worker}" =~ ^[0-9]+$ ]] && kill -0 "${existing_worker}" 2>/dev/null; then
@@ -38,13 +43,15 @@ RUN_MODE=paper_live uv run maais preflight \
   --dashboard-dir "${repository_root}/dashboard/dist" \
   > "${preflight_path}"
 
-dashboard_log="${log_dir}/mission-control.log"
-worker_log="${log_dir}/paper-worker.log"
-awake_log="${log_dir}/sleep-inhibitor.log"
-nohup uv run maais mission-control --port "${mission_control_port}" \
-  >> "${dashboard_log}" 2>&1 &
-dashboard_pid=$!
-
+experiment_id="$(jq -r '.experiment_id' "${manifest_path}")"
+session_suffix="${experiment_id%%-*}"
+dashboard_session="maais-dashboard-${session_suffix}"
+worker_session="maais-worker-${session_suffix}"
+awake_session="maais-awake-${session_suffix}"
+dashboard_log="${log_dir}/mission-control-${session_suffix}.log"
+worker_log="${log_dir}/paper-worker-${session_suffix}.log"
+awake_log="${log_dir}/sleep-inhibitor-${session_suffix}.log"
+dashboard_pid=""
 worker_pid=""
 awake_pid=""
 cleanup_startup() {
@@ -54,9 +61,20 @@ cleanup_startup() {
   if [[ "${awake_pid}" =~ ^[0-9]+$ ]]; then
     kill -TERM "${awake_pid}" 2>/dev/null || true
   fi
-  kill -TERM "${dashboard_pid}" 2>/dev/null || true
+  if [[ "${dashboard_pid}" =~ ^[0-9]+$ ]]; then
+    kill -TERM "${dashboard_pid}" 2>/dev/null || true
+  fi
+  paper_stop_tmux_session "${awake_session}"
+  paper_stop_tmux_session "${worker_session}"
+  paper_stop_tmux_session "${dashboard_session}"
 }
 trap cleanup_startup ERR INT TERM
+
+printf -v dashboard_command \
+  'cd %q && exec uv run maais mission-control --port %q >> %q 2>&1' \
+  "${repository_root}" "${mission_control_port}" "${dashboard_log}"
+paper_start_tmux_session "${dashboard_session}" "${dashboard_command}"
+dashboard_pid="${PAPER_TMUX_PANE_PID}"
 
 dashboard_ready=false
 for _attempt in $(seq 1 30); do
@@ -72,10 +90,11 @@ if [[ "${dashboard_ready}" != true ]]; then
   exit 1
 fi
 
-nohup env RUN_MODE=paper_live uv run maais paper-live --manifest "${manifest_path}" \
-  >> "${worker_log}" 2>&1 &
-worker_pid=$!
-experiment_id="$(jq -r '.experiment_id' "${manifest_path}")"
+printf -v worker_command \
+  'cd %q && exec env RUN_MODE=paper_live uv run maais paper-live --manifest %q >> %q 2>&1' \
+  "${repository_root}" "${manifest_path}" "${worker_log}"
+paper_start_tmux_session "${worker_session}" "${worker_command}"
+worker_pid="${PAPER_TMUX_PANE_PID}"
 
 worker_ready=false
 for _attempt in $(seq 1 90); do
@@ -97,13 +116,12 @@ if [[ "${worker_ready}" != true ]]; then
   exit 1
 fi
 
-if ! paper_start_sleep_inhibitor "${worker_pid}" "${awake_log}"; then
-  echo "paper worker cannot start without a supported sleep inhibitor" >&2
-  cleanup_startup
-  exit 1
-fi
-awake_pid="${PAPER_SLEEP_INHIBITOR_PID}"
-awake_kind="${PAPER_SLEEP_INHIBITOR_KIND}"
+awake_kind="$(paper_sleep_inhibitor_kind)"
+printf -v awake_command \
+  'exec bash %q hold-awake %q >> %q 2>&1' \
+  "${script_dir}/paper-process.sh" "${worker_pid}" "${awake_log}"
+paper_start_tmux_session "${awake_session}" "${awake_command}"
+awake_pid="${PAPER_TMUX_PANE_PID}"
 sleep 1
 if ! kill -0 "${awake_pid}" 2>/dev/null; then
   echo "sleep inhibitor exited during startup; inspect ${awake_log}" >&2
@@ -122,8 +140,12 @@ jq -n \
   --argjson dashboard_pid "${dashboard_pid}" \
   --argjson awake_pid "${awake_pid}" \
   --arg awake_kind "${awake_kind}" \
+  --arg supervisor "tmux" \
+  --arg worker_session "${worker_session}" \
+  --arg dashboard_session "${dashboard_session}" \
+  --arg awake_session "${awake_session}" \
   --argjson port "${mission_control_port}" \
-  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,mission_control_port:$port}' \
+  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
   > "${temporary_state}"
 mv "${temporary_state}" "${current_state}"
 

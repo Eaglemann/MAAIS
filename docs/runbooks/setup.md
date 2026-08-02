@@ -4,7 +4,7 @@ This platform supports public live market data with simulated execution only. It
 
 ## Requirements
 
-- macOS or Linux with Python 3.12, `uv`, Docker Compose, PostgreSQL 16 client tools, Node/npm, `curl`, and `jq`.
+- macOS or Linux with Python 3.12, `uv`, Docker Compose, PostgreSQL 16 client tools, Node/npm, `curl`, `jq`, and `tmux`.
 - `caffeinate` on macOS or `systemd-inhibit` on Linux so the operator script can block machine sleep for the timed run.
 - At least 5 GiB free disk space for the candidate gate; more is preferable for logs and daily backups.
 - A machine that remains powered and connected during the timed run.
