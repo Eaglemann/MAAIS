@@ -619,6 +619,10 @@ class PaperExecutionRepository:
         )
         if position is None:
             raise ValueError("funding position does not exist in account state")
+        if funding.mark_price != position.mark_price:
+            raise ValueError("funding mark price differs from official position mark")
+        if funding.notional != position.gross_notional:
+            raise ValueError("funding notional differs from official position notional")
         expected_amount = funding.notional * funding.rate
         if position.side is Direction.LONG:
             expected_amount = -expected_amount
@@ -657,6 +661,7 @@ class PaperExecutionRepository:
                 observed_at=funding.observed_at,
                 rate=funding.rate,
                 rate_type=funding.rate_type,
+                mark_price=funding.mark_price,
                 notional=funding.notional,
                 amount=funding.amount,
                 market_event_id=funding.market_event_id,
@@ -699,6 +704,7 @@ class PaperExecutionRepository:
                             "observed_at": funding.observed_at,
                             "rate": funding.rate,
                             "rate_type": funding.rate_type,
+                            "mark_price": funding.mark_price,
                             "notional": funding.notional,
                             "amount": funding.amount,
                         }
@@ -716,6 +722,33 @@ class PaperExecutionRepository:
             },
         )
         return True
+
+    async def load_funding_event(
+        self,
+        experiment_id: UUID,
+        market_event_id: str,
+    ) -> FundingRecord | None:
+        row = await self._session.scalar(
+            select(FundingEntryModel).where(
+                FundingEntryModel.experiment_id == experiment_id,
+                FundingEntryModel.market_event_id == market_event_id,
+            )
+        )
+        if row is None:
+            return None
+        return FundingRecord(
+            id=row.id,
+            experiment_id=row.experiment_id,
+            position_id=row.position_id,
+            market_event_id=row.market_event_id,
+            funding_at=row.funding_at,
+            observed_at=row.observed_at,
+            rate=row.rate,
+            rate_type=row.rate_type,
+            mark_price=row.mark_price,
+            notional=row.notional,
+            amount=row.amount,
+        )
 
     @staticmethod
     def _order_values(record: PaperExecutionRecord, execution_hash: str) -> dict[str, object]:
@@ -788,6 +821,7 @@ class PaperExecutionRepository:
             and row.observed_at == funding.observed_at
             and row.rate == funding.rate
             and row.rate_type == funding.rate_type
+            and row.mark_price == funding.mark_price
             and row.notional == funding.notional
             and row.amount == funding.amount
         )

@@ -6,14 +6,19 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from maais.db.models.accounts import ExitPlanModel
+from maais.db.models.accounts import ExitPlanModel, FundingEntryModel
 from maais.db.models.execution import FillModel, OrderIntentModel
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import Direction
 from maais.execution.paper.exits import ExitPlanStatus
 from maais.experiments.runtime_policy import LivePaperPolicy
-from maais.market_data.events import PriceLevel
-from maais.orchestration.continuous import ContinuousPaperObserver
+from maais.market_data.events import (
+    FundingSettlementPayload,
+    MarketEventKind,
+    ObservedMarketEvent,
+    PriceLevel,
+)
+from maais.orchestration.continuous import ContinuousPaperObserver, ContinuousRuntimeConflict
 from maais.orchestration.observations import MarketObservationBuffer
 from maais.orchestration.protection import PositionProtectionService
 from tests.integration.test_orchestration_repository import (
@@ -199,3 +204,58 @@ async def test_stop_without_later_book_halts_instead_of_inventing_fill(
     assert control.kill_switch_active
     assert control.reason is not None and control.reason.startswith("position_protection:")
     assert exit_fill_event is None
+
+
+async def test_observed_funding_settlement_is_applied_exactly_once_after_restart(
+    uow_factory: UnitOfWork,
+) -> None:
+    command, entry, _, observer = await _runtime_with_open_position(uow_factory)
+    assert entry.execution is not None
+    assert entry.execution.account is not None
+    funding_at = command.completed_at + timedelta(hours=8)
+    observed_at = funding_at + timedelta(milliseconds=50)
+    event = ObservedMarketEvent(
+        venue="binance_usdm",
+        stream="rest:/fapi/v1/fundingRate",
+        symbol="BTCUSDT",
+        event_id="binance_usdm:funding:BTCUSDT:1:Regular",
+        kind=MarketEventKind.FUNDING_SETTLEMENT,
+        venue_event_at=funding_at,
+        observed_at=observed_at,
+        sequence=None,
+        sequence_not_applicable_reason="binance_funding_history_has_no_sequence",
+        payload=FundingSettlementPayload(
+            funding_at=funding_at,
+            funding_rate=Decimal("0.001"),
+            mark_price=Decimal("101"),
+            rate_type="Regular",
+        ),
+    )
+
+    await observer.observe(event, context_events=())
+    await observer.observe(event, context_events=())
+    with pytest.raises(ContinuousRuntimeConflict, match="different persisted content"):
+        await observer.observe(
+            replace(
+                event,
+                payload=replace(event.payload, mark_price=Decimal("102")),
+            ),
+            context_events=(),
+        )
+
+    async with uow_factory.begin() as uow:
+        account = await uow.paper_execution.load_account(command.manifest.experiment_id)
+        funding_rows = (
+            await uow.session.scalars(
+                select(FundingEntryModel).where(
+                    FundingEntryModel.experiment_id == command.manifest.experiment_id
+                )
+            )
+        ).all()
+
+    assert len(funding_rows) == 1
+    assert funding_rows[0].market_event_id == event.event_id
+    assert funding_rows[0].mark_price == Decimal("101")
+    assert account.updated_at == observed_at
+    assert account.funding == funding_rows[0].amount
+    assert account.version == entry.execution.account.version + 2

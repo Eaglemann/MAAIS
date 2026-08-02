@@ -116,6 +116,7 @@ class FundingRecord:
     observed_at: datetime
     rate: Decimal
     rate_type: str
+    mark_price: Decimal
     notional: Decimal
     amount: Decimal
 
@@ -128,6 +129,7 @@ class FundingRecord:
             raise ValueError("funding cannot be observed before its venue timestamp")
         if self.rate_type not in {"Regular", "Special"}:
             raise ValueError("funding rate_type must be Regular or Special")
+        require_positive_decimal(self.mark_price, "funding mark price")
         require_positive_decimal(self.notional, "funding notional")
         for value, field in ((self.rate, "rate"), (self.amount, "amount")):
             if not isinstance(value, Decimal) or not value.is_finite():

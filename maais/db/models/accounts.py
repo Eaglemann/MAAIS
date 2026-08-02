@@ -186,6 +186,7 @@ class FundingEntryModel(Base):
             "rate_type IN ('Regular', 'Special')",
             name="ck_funding_rate_type",
         ),
+        CheckConstraint("mark_price > 0", name="ck_funding_mark_price_positive"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -199,6 +200,7 @@ class FundingEntryModel(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     rate: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     rate_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    mark_price: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     notional: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     market_event_id: Mapped[str] = mapped_column(String(128), nullable=False)

@@ -457,9 +457,16 @@ async def test_observed_funding_persists_with_reconciled_account_snapshot(
         observed_at=funding_at,
         rate=rate,
         rate_type="Regular",
+        mark_price=position.mark_price,
         notional=notional,
         amount=-notional * rate,
     )
+    with pytest.raises(ValueError, match="mark price"):
+        async with uow_factory.begin() as uow:
+            await uow.paper_execution.record_funding(
+                replace(funding, mark_price=funding.mark_price + Decimal("1")),
+                funded,
+            )
     async with uow_factory.begin() as uow:
         assert await uow.paper_execution.record_funding(funding, funded)
     async with uow_factory.begin() as uow:
@@ -501,6 +508,7 @@ async def test_entry_funding_stop_gap_exit_and_restart_reconstruct_exactly(
         observed_at=funding_at,
         rate=funding_rate,
         rate_type="Regular",
+        mark_price=position.mark_price,
         notional=position.gross_notional,
         amount=-position.gross_notional * funding_rate,
     )

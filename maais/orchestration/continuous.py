@@ -10,12 +10,14 @@ from maais.execution.paper.filters import ExchangeFilterSnapshot
 from maais.experiments.manifest import ExperimentManifest
 from maais.experiments.runtime_policy import LivePaperPolicy
 from maais.market_data.events import (
+    FundingSettlementPayload,
     MarketEventKind,
     MarkFundingPayload,
     ObservedMarketEvent,
 )
 from maais.orchestration.observations import EligibleBookTimeout, MarketObservationBuffer
 from maais.orchestration.protection import (
+    FundingSettlementCommand,
     PositionProtectionService,
     ProtectionContext,
 )
@@ -69,6 +71,50 @@ class ContinuousPaperObserver:
         del context_events
         if event.kind is MarketEventKind.MARK_FUNDING:
             await self._observe_mark(event)
+        elif event.kind is MarketEventKind.FUNDING_SETTLEMENT:
+            await self._observe_funding(event)
+
+    async def _observe_funding(self, event: ObservedMarketEvent) -> None:
+        payload = event.payload
+        if not isinstance(payload, FundingSettlementPayload):
+            raise TypeError("continuous funding payload is invalid")
+        if event.symbol not in self._manifest.symbols:
+            raise ContinuousRuntimeConflict("funding symbol is outside the experiment")
+        async with self._uow.begin() as transaction:
+            existing = await transaction.paper_execution.load_funding_event(
+                self._manifest.experiment_id,
+                event.event_id,
+            )
+            if existing is not None:
+                if (
+                    existing.funding_at != payload.funding_at
+                    or existing.observed_at != event.observed_at
+                    or existing.rate != payload.funding_rate
+                    or existing.rate_type != payload.rate_type
+                    or existing.mark_price != payload.mark_price
+                ):
+                    raise ContinuousRuntimeConflict(
+                        "funding event identity has different persisted content"
+                    )
+                return
+            account = await transaction.paper_execution.load_account(self._manifest.experiment_id)
+            position = account.positions.get(event.symbol)
+            if position is None or position.is_flat:
+                return
+            outcome = self._protection.apply_funding(
+                FundingSettlementCommand(
+                    experiment_id=self._manifest.experiment_id,
+                    symbol=event.symbol,
+                    market_event_id=event.event_id,
+                    funding_at=payload.funding_at,
+                    observed_at=event.observed_at,
+                    mark_price=payload.mark_price,
+                    rate=payload.funding_rate,
+                    rate_type=payload.rate_type,
+                    account=account,
+                )
+            )
+            await transaction.orchestration.record_funding_outcome(outcome)
 
     async def _observe_mark(self, event: ObservedMarketEvent) -> None:
         payload = event.payload

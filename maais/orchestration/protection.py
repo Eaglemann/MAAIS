@@ -324,6 +324,7 @@ class PositionProtectionService:
             observed_at=command.observed_at,
             rate=command.rate,
             rate_type=command.rate_type,
+            mark_price=command.mark_price,
             notional=position.gross_notional,
             amount=amount,
         )
