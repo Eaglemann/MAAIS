@@ -202,10 +202,25 @@ class CounterfactualState:
             closed_at=observed_at,
         )
 
-    def observe_mark(self, mark_price: Decimal, observed_at: datetime) -> CounterfactualState:
+    def observe_mark(
+        self,
+        mark_price: Decimal,
+        observed_at: datetime,
+        *,
+        market_event_id: str,
+    ) -> CounterfactualState:
         self._require_open()
+        if not market_event_id:
+            raise ValueError("counterfactual mark market_event_id is required")
         require_positive_decimal(mark_price, "mark_price")
         require_utc(observed_at, "observed_at")
+        if self._source_event_exists(
+            "counterfactual.mark_observed",
+            market_event_id,
+            observed_at,
+            {"mark_price": mark_price},
+        ):
+            return self
         assert self.entry_fill is not None
         assert self.exit_plan is not None
         gross = self._gross_pnl(mark_price)
@@ -231,6 +246,7 @@ class CounterfactualState:
             event_type="counterfactual.mark_observed",
             event_at=observed_at,
             payload={
+                "market_event_id": market_event_id,
                 "mark_price": mark_price,
                 "gross_pnl": gross,
                 "maximum_favorable_excursion": favorable,
@@ -255,8 +271,13 @@ class CounterfactualState:
         decision_direction: Direction,
         decision_approved: bool,
         closed_at: datetime,
+        market_event_id: str,
     ) -> CounterfactualState:
-        updated = self.observe_mark(mark_price, closed_at)
+        updated = self.observe_mark(
+            mark_price,
+            closed_at,
+            market_event_id=market_event_id,
+        )
         if updated.status is not CounterfactualStatus.OPEN:
             return updated
         assert updated.exit_plan is not None
@@ -272,13 +293,27 @@ class CounterfactualState:
         return updated
 
     def apply_funding(
-        self, rate: Decimal, mark_price: Decimal, observed_at: datetime
+        self,
+        rate: Decimal,
+        mark_price: Decimal,
+        observed_at: datetime,
+        *,
+        market_event_id: str,
     ) -> CounterfactualState:
         self._require_open()
+        if not market_event_id:
+            raise ValueError("counterfactual funding market_event_id is required")
         if not isinstance(rate, Decimal) or not rate.is_finite():
             raise ValueError("funding rate must be a finite Decimal")
         require_positive_decimal(mark_price, "mark_price")
         require_utc(observed_at, "observed_at")
+        if self._source_event_exists(
+            "counterfactual.funding_applied",
+            market_event_id,
+            observed_at,
+            {"rate": rate, "mark_price": mark_price},
+        ):
+            return self
         amount = self.quantity * mark_price * rate
         if self.direction is Direction.LONG:
             amount = -amount
@@ -286,7 +321,12 @@ class CounterfactualState:
             status=self.status,
             event_type="counterfactual.funding_applied",
             event_at=observed_at,
-            payload={"rate": rate, "mark_price": mark_price, "amount": amount},
+            payload={
+                "market_event_id": market_event_id,
+                "rate": rate,
+                "mark_price": mark_price,
+                "amount": amount,
+            },
             funding=self.funding + amount,
         )
 
@@ -328,6 +368,31 @@ class CounterfactualState:
     def _require_open(self) -> None:
         if self.status is not CounterfactualStatus.OPEN:
             raise RuntimeError("counterfactual is not open")
+
+    def _source_event_exists(
+        self,
+        event_type: str,
+        market_event_id: str,
+        observed_at: datetime,
+        expected: Mapping[str, object],
+    ) -> bool:
+        expected_payload = _payload({"market_event_id": market_event_id, **expected})
+        matches = tuple(
+            event
+            for event in self.events
+            if event.event_type == event_type
+            and event.payload.get("market_event_id") == market_event_id
+        )
+        if len(matches) > 1:
+            raise RuntimeError("counterfactual source event was persisted more than once")
+        if not matches:
+            return False
+        existing = matches[0]
+        if existing.event_at != observed_at or any(
+            existing.payload.get(key) != value for key, value in expected_payload.items()
+        ):
+            raise ValueError("counterfactual market event identity has different content")
+        return True
 
     def _advance(
         self,

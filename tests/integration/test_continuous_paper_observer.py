@@ -11,6 +11,7 @@ from maais.db.models.execution import FillModel, OrderIntentModel
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import Direction
 from maais.execution.paper.exits import ExitPlanStatus
+from maais.execution.paper.fills import MarketFillEngine
 from maais.experiments.runtime_policy import LivePaperPolicy
 from maais.market_data.events import (
     FundingSettlementPayload,
@@ -21,6 +22,8 @@ from maais.market_data.events import (
 from maais.orchestration.continuous import ContinuousPaperObserver, ContinuousRuntimeConflict
 from maais.orchestration.observations import MarketObservationBuffer
 from maais.orchestration.protection import PositionProtectionService
+from maais.orchestration.results import OrchestrationDisposition
+from maais.research.counterfactuals import CounterfactualStatus
 from tests.integration.test_orchestration_repository import (
     _command_in_database,
     _start_experiment,
@@ -54,13 +57,21 @@ def _policy(command) -> LivePaperPolicy:
     )
 
 
-def _event_book(event_id: str, observed_at, bid: str, ask: str, sequence: int):
+def _event_book(
+    event_id: str,
+    observed_at,
+    bid: str,
+    ask: str,
+    sequence: int,
+    *,
+    quantity: str = "200",
+):
     event = _book(event_id, 0, bid, ask, sequence)
     payload = replace(
         event.payload,
         published_at=observed_at - timedelta(milliseconds=1),
-        bids=(PriceLevel(Decimal(bid), Decimal("200")),),
-        asks=(PriceLevel(Decimal(ask), Decimal("200")),),
+        bids=(PriceLevel(Decimal(bid), Decimal(quantity)),),
+        asks=(PriceLevel(Decimal(ask), Decimal(quantity)),),
     )
     return replace(
         event,
@@ -107,11 +118,46 @@ async def _runtime_with_open_position(
         policy=policy,
         observations=observations,
         protection=PositionProtectionService(_broker()),
+        market_fills=MarketFillEngine(timedelta(seconds=1)),
         exchange_filters={
             "BTCUSDT": command.entry_context.exchange_filters,
         },
     )
     return command, entry, observations, observer
+
+
+async def _runtime_with_pending_counterfactual(uow_factory: UnitOfWork):
+    command = await _command_in_database(
+        uow_factory,
+        quarantine=False,
+        with_entry_context=True,
+        kill_switch=True,
+    )
+    assert command.entry_context is not None
+    outcome = await _execution_service(_FeatureComputer(_features()), Direction.LONG).process(
+        command
+    )
+    assert outcome.disposition is OrchestrationDisposition.REJECTED
+    assert outcome.counterfactual is not None
+    policy = _policy(command)
+    async with uow_factory.begin() as uow:
+        await uow.orchestration.record_outcome(
+            outcome,
+            integrity=command.integrity,
+            required_checks=policy.integrity_policy().required_checks,
+            evaluated_at=command.evaluated_at,
+        )
+    observations = MarketObservationBuffer(command.manifest.symbols)
+    observer = ContinuousPaperObserver(
+        uow=uow_factory,
+        manifest=command.manifest,
+        policy=policy,
+        observations=observations,
+        protection=PositionProtectionService(_broker()),
+        market_fills=MarketFillEngine(timedelta(seconds=1)),
+        exchange_filters={"BTCUSDT": command.entry_context.exchange_filters},
+    )
+    return command, outcome, observations, observer
 
 
 async def test_stop_waits_for_later_book_and_persists_restart_safe_exit(
@@ -259,3 +305,204 @@ async def test_observed_funding_settlement_is_applied_exactly_once_after_restart
     assert account.updated_at == observed_at
     assert account.funding == funding_rows[0].amount
     assert account.version == entry.execution.account.version + 2
+
+
+async def test_first_eligible_book_opens_counterfactual_without_touching_official_account(
+    uow_factory: UnitOfWork,
+) -> None:
+    command = await _command_in_database(
+        uow_factory,
+        quarantine=False,
+        with_entry_context=True,
+        kill_switch=True,
+    )
+    assert command.entry_context is not None
+    outcome = await _execution_service(_FeatureComputer(_features()), Direction.LONG).process(
+        command
+    )
+    assert outcome.disposition is OrchestrationDisposition.REJECTED
+    assert outcome.counterfactual is not None
+    policy = _policy(command)
+    async with uow_factory.begin() as uow:
+        await uow.orchestration.record_outcome(
+            outcome,
+            integrity=command.integrity,
+            required_checks=policy.integrity_policy().required_checks,
+            evaluated_at=command.evaluated_at,
+        )
+    observations = MarketObservationBuffer(command.manifest.symbols)
+    observer = ContinuousPaperObserver(
+        uow=uow_factory,
+        manifest=command.manifest,
+        policy=policy,
+        observations=observations,
+        protection=PositionProtectionService(_broker()),
+        market_fills=MarketFillEngine(timedelta(seconds=1)),
+        exchange_filters={
+            "BTCUSDT": command.entry_context.exchange_filters,
+        },
+    )
+    eligible_after = outcome.counterfactual.eligible_after
+    mark = _mark("counterfactual-mark", Decimal("100"), eligible_after)
+    book = _event_book(
+        "counterfactual-entry-book",
+        eligible_after + timedelta(milliseconds=1),
+        "100",
+        "101",
+        3_000,
+    )
+    await observations.observe(mark)
+    await observations.observe(book)
+
+    await observer.observe(book, context_events=(mark, book))
+    await observer.observe(book, context_events=(mark, book))
+
+    async with uow_factory.begin() as uow:
+        unresolved = await uow.counterfactuals.get_unresolved(command.manifest.experiment_id)
+        account = await uow.paper_execution.load_account(command.manifest.experiment_id)
+
+    assert len(unresolved) == 1
+    counterfactual = unresolved[0]
+    assert counterfactual.status is CounterfactualStatus.OPEN
+    assert counterfactual.entry_fill is not None
+    assert counterfactual.entry_fill.market_event_id == book.event_id
+    assert counterfactual.entry_fill.price == Decimal("101")
+    assert (
+        counterfactual.decision_executable_price == outcome.counterfactual.decision_executable_price
+    )
+    assert account.version == 0
+    assert account.positions == {}
+
+
+async def test_counterfactual_marks_and_funding_advance_once_without_official_position(
+    uow_factory: UnitOfWork,
+) -> None:
+    command = await _command_in_database(
+        uow_factory,
+        quarantine=False,
+        with_entry_context=True,
+        kill_switch=True,
+    )
+    assert command.entry_context is not None
+    outcome = await _execution_service(_FeatureComputer(_features()), Direction.LONG).process(
+        command
+    )
+    assert outcome.counterfactual is not None
+    policy = _policy(command)
+    async with uow_factory.begin() as uow:
+        await uow.orchestration.record_outcome(
+            outcome,
+            integrity=command.integrity,
+            required_checks=policy.integrity_policy().required_checks,
+            evaluated_at=command.evaluated_at,
+        )
+    observations = MarketObservationBuffer(command.manifest.symbols)
+    observer = ContinuousPaperObserver(
+        uow=uow_factory,
+        manifest=command.manifest,
+        policy=policy,
+        observations=observations,
+        protection=PositionProtectionService(_broker()),
+        market_fills=MarketFillEngine(timedelta(seconds=1)),
+        exchange_filters={"BTCUSDT": command.entry_context.exchange_filters},
+    )
+    eligible_after = outcome.counterfactual.eligible_after
+    entry_mark = _mark("counterfactual-entry-mark", Decimal("100"), eligible_after)
+    entry_book = _event_book(
+        "counterfactual-lifecycle-entry",
+        eligible_after + timedelta(milliseconds=1),
+        "100",
+        "101",
+        4_000,
+    )
+    await observations.observe(entry_mark)
+    await observations.observe(entry_book)
+    await observer.observe(entry_book, context_events=(entry_mark, entry_book))
+
+    mark_at = entry_book.observed_at + timedelta(minutes=15)
+    mark = _mark("counterfactual-horizon-mark", Decimal("101"), mark_at)
+    await observations.observe(mark)
+    await observer.observe(mark, context_events=(mark,))
+    await observer.observe(mark, context_events=(mark,))
+    funding_at = entry_book.observed_at + timedelta(hours=8)
+    funding_event = ObservedMarketEvent(
+        venue="binance_usdm",
+        stream="rest:/fapi/v1/fundingRate",
+        symbol="BTCUSDT",
+        event_id="binance_usdm:funding:BTCUSDT:counterfactual:Regular",
+        kind=MarketEventKind.FUNDING_SETTLEMENT,
+        venue_event_at=funding_at,
+        observed_at=funding_at + timedelta(milliseconds=50),
+        sequence=None,
+        sequence_not_applicable_reason="binance_funding_history_has_no_sequence",
+        payload=FundingSettlementPayload(
+            funding_at=funding_at,
+            funding_rate=Decimal("0.001"),
+            mark_price=Decimal("101"),
+            rate_type="Regular",
+        ),
+    )
+    await observer.observe(funding_event, context_events=(funding_event,))
+    await observer.observe(funding_event, context_events=(funding_event,))
+
+    async with uow_factory.begin() as uow:
+        unresolved = await uow.counterfactuals.get_unresolved(command.manifest.experiment_id)
+        account = await uow.paper_execution.load_account(command.manifest.experiment_id)
+        funding_count = len(
+            (
+                await uow.session.scalars(
+                    select(FundingEntryModel).where(
+                        FundingEntryModel.experiment_id == command.manifest.experiment_id
+                    )
+                )
+            ).all()
+        )
+
+    assert len(unresolved) == 1
+    counterfactual = unresolved[0]
+    assert counterfactual.status is CounterfactualStatus.OPEN
+    assert counterfactual.outcome("15m") is not None
+    assert counterfactual.funding == -(counterfactual.quantity * Decimal("0.101"))
+    assert (
+        sum(event.event_type == "counterfactual.mark_observed" for event in counterfactual.events)
+        == 1
+    )
+    assert (
+        sum(event.event_type == "counterfactual.funding_applied" for event in counterfactual.events)
+        == 1
+    )
+    assert account.version == 0
+    assert funding_count == 0
+
+
+async def test_first_eligible_counterfactual_book_records_explicit_no_fill(
+    uow_factory: UnitOfWork,
+) -> None:
+    command, outcome, observations, observer = await _runtime_with_pending_counterfactual(
+        uow_factory
+    )
+    assert outcome.counterfactual is not None
+    eligible_after = outcome.counterfactual.eligible_after
+    mark = _mark("counterfactual-no-fill-mark", Decimal("100"), eligible_after)
+    shallow = _event_book(
+        "counterfactual-shallow-book",
+        eligible_after + timedelta(milliseconds=1),
+        "100",
+        "101",
+        5_000,
+        quantity="0.00000001",
+    )
+    await observations.observe(mark)
+    await observations.observe(shallow)
+
+    await observer.observe(shallow, context_events=(mark, shallow))
+    await observer.observe(shallow, context_events=(mark, shallow))
+
+    async with uow_factory.begin() as uow:
+        counterfactual = await uow.counterfactuals.get(outcome.counterfactual.counterfactual_id)
+        account = await uow.paper_execution.load_account(command.manifest.experiment_id)
+
+    assert counterfactual.status is CounterfactualStatus.NO_FILL
+    assert counterfactual.no_fill_reason == "insufficient_visible_depth"
+    assert counterfactual.entry_fill is None
+    assert account.version == 0

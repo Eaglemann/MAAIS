@@ -65,6 +65,7 @@ def test_counterfactual_tracks_horizons_excursions_costs_and_standard_exit() -> 
     state = state.observe_mark(
         Decimal("102"),
         fill.fill_at + timedelta(minutes=15),
+        market_event_id="mark-15m",
     )
 
     assert state.status is CounterfactualStatus.OPEN
@@ -75,6 +76,7 @@ def test_counterfactual_tracks_horizons_excursions_costs_and_standard_exit() -> 
     state = state.observe_mark(
         Decimal("98"),
         fill.fill_at + timedelta(minutes=16),
+        market_event_id="mark-stop",
     )
 
     assert state.status is CounterfactualStatus.RESOLVED
@@ -90,14 +92,17 @@ def test_counterfactual_horizon_uses_first_observation_at_or_after_cutoff() -> N
     before = state.observe_mark(
         Decimal("101.6"),
         fill.fill_at + timedelta(minutes=14, seconds=59),
+        market_event_id="mark-before-15m",
     )
     due = before.observe_mark(
         Decimal("101.7"),
         fill.fill_at + timedelta(minutes=15),
+        market_event_id="mark-at-15m",
     )
     later = due.observe_mark(
         Decimal("101.8"),
         fill.fill_at + timedelta(minutes=20),
+        market_event_id="mark-after-15m",
     )
 
     assert before.outcome("15m") is None
@@ -118,4 +123,9 @@ def test_counterfactual_rejects_float_funding_rate() -> None:
     state = _state().enter(_fill(), plan_id=UUID(int=5))
 
     with pytest.raises(ValueError, match="Decimal"):
-        state.apply_funding(0.001, Decimal("101"), NOW + timedelta(hours=8))  # type: ignore[arg-type]
+        state.apply_funding(
+            0.001,  # type: ignore[arg-type]
+            Decimal("101"),
+            NOW + timedelta(hours=8),
+            market_event_id="funding-invalid-rate",
+        )

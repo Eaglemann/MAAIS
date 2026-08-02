@@ -197,21 +197,34 @@ async def test_open_counterfactual_updates_and_resolves_with_exact_restart_state
     async with uow_factory.begin() as uow:
         await uow.counterfactuals.record(state)
 
-    state = state.observe_mark(Decimal("101.6"), fill.fill_at + timedelta(minutes=15))
+    state = state.observe_mark(
+        Decimal("101.6"),
+        fill.fill_at + timedelta(minutes=15),
+        market_event_id="counterfactual-mark-15m",
+    )
     async with uow_factory.begin() as uow:
         await uow.counterfactuals.record(state)
     state = state.apply_funding(
         Decimal("0.001"),
         Decimal("101.6"),
         fill.fill_at + timedelta(hours=8),
+        market_event_id="counterfactual-funding-8h",
     )
     async with uow_factory.begin() as uow:
         await uow.counterfactuals.record(state)
-    state = state.observe_mark(Decimal("101.7"), fill.fill_at + timedelta(hours=24))
+    state = state.observe_mark(
+        Decimal("101.7"),
+        fill.fill_at + timedelta(hours=24),
+        market_event_id="counterfactual-mark-24h",
+    )
     async with uow_factory.begin() as uow:
         await uow.counterfactuals.record(state)
     terminal_mark = Decimal("100") if state.direction is Direction.LONG else Decimal("103")
-    state = state.observe_mark(terminal_mark, fill.fill_at + timedelta(hours=24, seconds=1))
+    state = state.observe_mark(
+        terminal_mark,
+        fill.fill_at + timedelta(hours=24, seconds=1),
+        market_event_id="counterfactual-terminal-mark",
+    )
     async with uow_factory.begin() as uow:
         await uow.counterfactuals.record(state)
         restored = await uow.counterfactuals.get(state.counterfactual_id)

@@ -20,7 +20,7 @@ from maais.research.counterfactuals import CounterfactualState
 NOW = datetime(2026, 8, 2, 12, tzinfo=timezone.utc)
 KEY = b"maais frozen paper replay signing key 0001"
 EXPECTED_SHA256 = (
-    "5fe5917394b0f30249848a7fc870e6ec7c52307c8c48802c9c9b9f6a051536f1"  # pragma: allowlist secret
+    "4d2dec967a8fd98ba04616b834c1b247442af3b168409ba6d45bc24833e6b5cc"  # pragma: allowlist secret
 )
 
 
@@ -284,6 +284,7 @@ def _run_sequence() -> bytes:
     counterfactual = counterfactual.observe_mark(
         Decimal("99"),
         entry.fill.fill_at + timedelta(minutes=15),
+        market_event_id="counterfactual-mark-15m",
     )
     snapshot = final_account.snapshot()
     payload = {
