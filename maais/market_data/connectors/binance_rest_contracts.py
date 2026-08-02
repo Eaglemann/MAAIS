@@ -79,10 +79,14 @@ def parse_exchange_info(
     *,
     required_symbols: Sequence[str],
     server_time: datetime,
+    server_observed_at: datetime,
     observed_at: datetime,
 ) -> BinancePublicPreflight:
     require_utc(server_time, "server_time")
+    require_utc(server_observed_at, "server_observed_at")
     require_utc(observed_at, "observed_at")
+    if observed_at < server_observed_at:
+        raise BinanceContractError("exchange-info observation precedes server-time observation")
     symbols = tuple(required_symbols)
     if not symbols or len(set(symbols)) != len(symbols):
         raise BinanceContractError("required symbols must be nonempty and unique")
@@ -152,7 +156,7 @@ def parse_exchange_info(
         clocks.append(
             parse_server_time(
                 {"serverTime": server_ms},
-                observed_at=observed_at,
+                observed_at=server_observed_at,
                 symbol=symbol,
             )
         )
@@ -161,9 +165,14 @@ def parse_exchange_info(
                 venue=BINANCE_USDM_VENUE,
                 stream="rest:/fapi/v1/exchangeInfo",
                 symbol=symbol,
-                event_id=f"{BINANCE_USDM_VENUE}:symbol-state:{symbol}:{server_ms}:{status}",
+                event_id=(
+                    f"{BINANCE_USDM_VENUE}:symbol-state:{symbol}:"
+                    f"{_datetime_milliseconds(observed_at)}:{status}"
+                ),
                 kind=MarketEventKind.SYMBOL_STATE,
-                venue_event_at=server_time,
+                # Binance documents exchangeInfo.serverTime as ignorable. Symbol
+                # status therefore has a local observation time, not a venue event time.
+                venue_event_at=observed_at,
                 observed_at=observed_at,
                 sequence=None,
                 sequence_not_applicable_reason="binance_exchange_info_has_no_sequence",

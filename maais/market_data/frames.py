@@ -83,11 +83,7 @@ class SourceObservation:
     @classmethod
     def from_event(cls, event: ObservedMarketEvent) -> SourceObservation:
         timestamp_basis = TimestampBasis.VENUE_EVENT
-        if (
-            isinstance(event.payload, ReferencePricePayload)
-            and event.payload.source_published_at is None
-            and event.venue_event_at == event.observed_at
-        ):
+        if event.venue_event_at == event.observed_at:
             timestamp_basis = TimestampBasis.LOCAL_OBSERVATION
         return cls(
             venue=event.venue,

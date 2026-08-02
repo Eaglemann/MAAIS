@@ -19,6 +19,7 @@ from maais.market_data.events import (
     SymbolStatePayload,
     VenueClockPayload,
 )
+from maais.market_data.frames import SourceObservation, TimestampBasis
 
 OBSERVED_AT = datetime(2026, 8, 2, 12, 0, 0, 100_000, tzinfo=timezone.utc)
 SERVER_MS = 1785672000000
@@ -115,7 +116,8 @@ def test_server_clock_and_exchange_info_preflight_are_exact_and_dynamic() -> Non
         _exchange_info(),
         required_symbols=("BTCUSDT", "ETHUSDT"),
         server_time=clock.payload.server_time,
-        observed_at=OBSERVED_AT + timedelta(milliseconds=20),
+        server_observed_at=OBSERVED_AT,
+        observed_at=OBSERVED_AT + timedelta(milliseconds=1308),
     )
 
     assert preflight.request_weight_limit_per_minute == 2400
@@ -129,6 +131,16 @@ def test_server_clock_and_exchange_info_preflight_are_exact_and_dynamic() -> Non
     assert all(event.kind is MarketEventKind.SYMBOL_STATE for event in preflight.symbol_states)
     assert isinstance(preflight.symbol_states[0].payload, SymbolStatePayload)
     assert preflight.symbol_states[0].payload.status == "TRADING"
+    assert all(event.observed_at == OBSERVED_AT for event in preflight.venue_clocks)
+    assert all(
+        event.observed_at == OBSERVED_AT + timedelta(milliseconds=1308)
+        for event in preflight.symbol_states
+    )
+    assert all(event.venue_event_at == event.observed_at for event in preflight.symbol_states)
+    assert (
+        SourceObservation.from_event(preflight.symbol_states[0]).timestamp_basis
+        is TimestampBasis.LOCAL_OBSERVATION
+    )
 
 
 def test_exchange_info_rejects_missing_duplicate_or_nonperpetual_required_symbol() -> None:
@@ -137,6 +149,7 @@ def test_exchange_info_rejects_missing_duplicate_or_nonperpetual_required_symbol
             _exchange_info(),
             required_symbols=("BTCUSDT", "SOLUSDT"),
             server_time=datetime.fromtimestamp(SERVER_MS / 1000, tz=timezone.utc),
+            server_observed_at=OBSERVED_AT,
             observed_at=OBSERVED_AT,
         )
     duplicate = _exchange_info()
@@ -147,6 +160,7 @@ def test_exchange_info_rejects_missing_duplicate_or_nonperpetual_required_symbol
             duplicate,
             required_symbols=("BTCUSDT",),
             server_time=datetime.fromtimestamp(SERVER_MS / 1000, tz=timezone.utc),
+            server_observed_at=OBSERVED_AT,
             observed_at=OBSERVED_AT,
         )
     inverse = _exchange_info()
@@ -157,6 +171,7 @@ def test_exchange_info_rejects_missing_duplicate_or_nonperpetual_required_symbol
             inverse,
             required_symbols=("BTCUSDT",),
             server_time=datetime.fromtimestamp(SERVER_MS / 1000, tz=timezone.utc),
+            server_observed_at=OBSERVED_AT,
             observed_at=OBSERVED_AT,
         )
 

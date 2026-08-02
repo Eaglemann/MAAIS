@@ -163,6 +163,7 @@ class BinanceRestConnector:
             exchange_raw,
             required_symbols=required_symbols,
             server_time=clock.payload.server_time,
+            server_observed_at=server_observed,
             observed_at=exchange_observed,
         )
         self._weight.update_limit(result.request_weight_limit_per_minute)
