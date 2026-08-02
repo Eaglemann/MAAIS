@@ -72,6 +72,21 @@ async def test_daily_report_reconciles_complete_decision_lineage(
         "by_symbol": {"BTCUSDT": 1},
         "by_regime": {"trending": 1},
     }
+    assert report["decision_index"] == [
+        {
+            "content_hash": bundle.bundle_hash,
+            "cycle_at": "2026-08-02T12:00:00Z",
+            "direction": "long",
+            "disposition": "approved",
+            "id": str(bundle.cycle.id),
+            "market_frame_id": str(bundle.cycle.market_frame_id),
+            "reason_code": "accepted",
+            "regime": "trending",
+            "status": "completed",
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+        }
+    ]
     assert report["agents"]["evaluations"] == 8  # type: ignore[index]
     assert report["gates"]["evaluations"] == 2  # type: ignore[index]
     assert report["execution"]["proposals"] == 1  # type: ignore[index]

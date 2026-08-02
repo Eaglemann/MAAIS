@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
 import tempfile
 from collections import Counter
@@ -13,6 +15,7 @@ from typing import cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+import duckdb
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -63,6 +66,11 @@ class ReportBundlePaths:
     directory: Path
     json_path: Path
     markdown_path: Path
+    decisions_csv_path: Path
+    decisions_parquet_path: Path
+    execution_csv_path: Path
+    execution_parquet_path: Path
+    manifest_path: Path
 
 
 def berlin_daily_window(report_date: date) -> DailyWindow:
@@ -178,7 +186,9 @@ async def build_daily_report(
             select(
                 DecisionCycleModel.id,
                 DecisionCycleModel.market_frame_id,
+                DecisionCycleModel.cycle_at,
                 DecisionCycleModel.symbol,
+                DecisionCycleModel.timeframe,
                 DecisionCycleModel.status,
                 DecisionCycleModel.direction,
                 DecisionCycleModel.disposition,
@@ -263,9 +273,12 @@ async def build_daily_report(
         await session.execute(
             select(
                 TradeProposalModel.id,
+                TradeProposalModel.decision_cycle_id,
+                TradeProposalModel.symbol,
                 TradeProposalModel.status,
                 TradeProposalModel.direction,
                 TradeProposalModel.reason_code,
+                TradeProposalModel.proposed_at,
                 TradeProposalModel.approved_notional,
             )
             .where(
@@ -280,11 +293,14 @@ async def build_daily_report(
         await session.execute(
             select(
                 OrderIntentModel.id,
+                OrderIntentModel.proposal_id,
+                OrderIntentModel.symbol,
                 OrderIntentModel.status,
                 OrderIntentModel.side,
                 OrderIntentModel.position_effect,
                 OrderIntentModel.quantity,
                 OrderIntentModel.filled_quantity,
+                OrderIntentModel.created_at,
                 OrderIntentModel.content_hash,
             )
             .where(
@@ -299,7 +315,9 @@ async def build_daily_report(
         await session.execute(
             select(
                 OrderEventModel.id,
+                OrderEventModel.order_intent_id,
                 OrderEventModel.event_type,
+                OrderEventModel.event_at,
                 OrderEventModel.payload_json,
             )
             .join(OrderIntentModel, OrderIntentModel.id == OrderEventModel.order_intent_id)
@@ -315,6 +333,8 @@ async def build_daily_report(
         await session.execute(
             select(
                 FillModel.id,
+                FillModel.order_intent_id,
+                FillModel.fill_at,
                 FillModel.quantity,
                 FillModel.price,
                 FillModel.fee,
@@ -336,6 +356,7 @@ async def build_daily_report(
         await session.execute(
             select(
                 FundingEntryModel.id,
+                FundingEntryModel.funding_at,
                 FundingEntryModel.amount,
                 FundingEntryModel.rate,
                 FundingEntryModel.notional,
@@ -783,6 +804,22 @@ async def build_daily_report(
             "by_symbol": _counts([row.symbol for row in decision_rows]),
             "by_regime": _counts([row.regime for row in decision_rows]),
         },
+        "decision_index": [
+            {
+                "id": row.id,
+                "cycle_at": row.cycle_at,
+                "symbol": row.symbol,
+                "timeframe": row.timeframe,
+                "regime": row.regime,
+                "status": row.status,
+                "direction": row.direction,
+                "disposition": row.disposition,
+                "reason_code": row.reason_code,
+                "market_frame_id": row.market_frame_id,
+                "content_hash": row.content_hash,
+            }
+            for row in decision_rows
+        ],
         "agents": {
             "evaluations": len(agent_rows),
             "by_name": _counts([row.agent_name for row in agent_rows]),
@@ -823,6 +860,72 @@ async def build_daily_report(
             "funding_entries": len(funding_rows),
             "funding_amount": _sum([row.amount for row in funding_rows]),
         },
+        "execution_index": [
+            *(
+                {
+                    "record_type": "proposal",
+                    "id": row.id,
+                    "event_at": row.proposed_at,
+                    "symbol": row.symbol,
+                    "status": row.status,
+                    "direction": row.direction,
+                    "reason_code": row.reason_code,
+                    "decision_cycle_id": row.decision_cycle_id,
+                    "approved_notional": row.approved_notional,
+                }
+                for row in proposal_rows
+            ),
+            *(
+                {
+                    "record_type": "order",
+                    "id": row.id,
+                    "event_at": row.created_at,
+                    "symbol": row.symbol,
+                    "status": row.status,
+                    "side": row.side,
+                    "position_effect": row.position_effect,
+                    "proposal_id": row.proposal_id,
+                    "quantity": row.quantity,
+                    "filled_quantity": row.filled_quantity,
+                }
+                for row in order_rows
+            ),
+            *(
+                {
+                    "record_type": "order_event",
+                    "id": row.id,
+                    "event_at": row.event_at,
+                    "status": row.event_type,
+                    "order_intent_id": row.order_intent_id,
+                }
+                for row in order_event_rows
+            ),
+            *(
+                {
+                    "record_type": "fill",
+                    "id": row.id,
+                    "event_at": row.fill_at,
+                    "order_intent_id": row.order_intent_id,
+                    "quantity": row.quantity,
+                    "price": row.price,
+                    "fee": row.fee,
+                    "spread_cost": row.spread_cost,
+                    "depth_slippage": row.depth_slippage,
+                    "latency_slippage": row.latency_slippage,
+                    "total_slippage": row.total_slippage,
+                }
+                for row in fill_rows
+            ),
+            *(
+                {
+                    "record_type": "funding",
+                    "id": row.id,
+                    "event_at": row.funding_at,
+                    "funding_amount": row.amount,
+                }
+                for row in funding_rows
+            ),
+        ],
         "counterfactuals": {
             "created": len(counterfactual_rows),
             "by_status": _counts([row.status for row in counterfactual_rows]),
@@ -1015,6 +1118,103 @@ Total decisions: **{decisions["total"]}**
 """
 
 
+_DECISION_EXPORT_SCHEMA = (
+    ("id", "VARCHAR"),
+    ("cycle_at", "TIMESTAMP"),
+    ("symbol", "VARCHAR"),
+    ("timeframe", "VARCHAR"),
+    ("regime", "VARCHAR"),
+    ("status", "VARCHAR"),
+    ("direction", "VARCHAR"),
+    ("disposition", "VARCHAR"),
+    ("reason_code", "VARCHAR"),
+    ("market_frame_id", "VARCHAR"),
+    ("content_hash", "VARCHAR"),
+)
+_EXECUTION_EXPORT_SCHEMA = (
+    ("record_type", "VARCHAR"),
+    ("id", "VARCHAR"),
+    ("event_at", "TIMESTAMP"),
+    ("symbol", "VARCHAR"),
+    ("status", "VARCHAR"),
+    ("direction", "VARCHAR"),
+    ("side", "VARCHAR"),
+    ("position_effect", "VARCHAR"),
+    ("reason_code", "VARCHAR"),
+    ("decision_cycle_id", "VARCHAR"),
+    ("proposal_id", "VARCHAR"),
+    ("order_intent_id", "VARCHAR"),
+    ("quantity", "DECIMAL(38,18)"),
+    ("filled_quantity", "DECIMAL(38,18)"),
+    ("approved_notional", "DECIMAL(38,18)"),
+    ("price", "DECIMAL(38,18)"),
+    ("fee", "DECIMAL(38,18)"),
+    ("spread_cost", "DECIMAL(38,18)"),
+    ("depth_slippage", "DECIMAL(38,18)"),
+    ("latency_slippage", "DECIMAL(38,18)"),
+    ("total_slippage", "DECIMAL(38,18)"),
+    ("funding_amount", "DECIMAL(38,18)"),
+)
+
+
+def _export_rows(
+    report: dict[str, object],
+    key: str,
+    schema: tuple[tuple[str, str], ...],
+) -> list[dict[str, object]]:
+    raw_rows = report.get(key, [])
+    if not isinstance(raw_rows, list):
+        raise TypeError(f"{key} must be a list")
+    columns = tuple(column for column, _data_type in schema)
+    rows: list[dict[str, object]] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            raise TypeError(f"{key} entries must be objects")
+        rows.append({column: raw_row.get(column) for column in columns})
+    return rows
+
+
+def _write_csv(
+    path: Path,
+    rows: list[dict[str, object]],
+    schema: tuple[tuple[str, str], ...],
+) -> None:
+    columns = [column for column, _data_type in schema]
+    with path.open("x", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _write_parquet(
+    path: Path,
+    rows: list[dict[str, object]],
+    schema: tuple[tuple[str, str], ...],
+) -> None:
+    columns = [column for column, _data_type in schema]
+    definitions = ", ".join(f'"{column}" {data_type}' for column, data_type in schema)
+    placeholders = ", ".join("?" for _column in columns)
+    escaped_path = path.as_posix().replace("'", "''")
+    with duckdb.connect() as connection:
+        connection.execute(f"CREATE TABLE export_rows ({definitions})")
+        if rows:
+            connection.executemany(
+                f"INSERT INTO export_rows VALUES ({placeholders})",
+                [[row[column] for column in columns] for row in rows],
+            )
+        connection.execute(
+            f"COPY export_rows TO '{escaped_path}' (FORMAT PARQUET, COMPRESSION ZSTD)"
+        )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def write_daily_report_bundle(
     report: dict[str, object],
     output_directory: Path,
@@ -1034,12 +1234,49 @@ def write_daily_report_bundle(
         raise FileExistsError(f"report bundle already exists: {target}")
     with tempfile.TemporaryDirectory(prefix=".maais-report-", dir=output_directory) as temporary:
         temporary_path = Path(temporary)
-        (temporary_path / "report.json").write_text(
+        json_path = temporary_path / "report.json"
+        markdown_path = temporary_path / "report.md"
+        decisions_csv_path = temporary_path / "decisions.csv"
+        decisions_parquet_path = temporary_path / "decisions.parquet"
+        execution_csv_path = temporary_path / "execution.csv"
+        execution_parquet_path = temporary_path / "execution.parquet"
+        manifest_path = temporary_path / "bundle-manifest.json"
+        json_path.write_text(
             json.dumps(report, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        (temporary_path / "report.md").write_text(
+        markdown_path.write_text(
             render_daily_report_markdown(report),
+            encoding="utf-8",
+        )
+        decision_rows = _export_rows(report, "decision_index", _DECISION_EXPORT_SCHEMA)
+        execution_rows = _export_rows(report, "execution_index", _EXECUTION_EXPORT_SCHEMA)
+        _write_csv(decisions_csv_path, decision_rows, _DECISION_EXPORT_SCHEMA)
+        _write_parquet(decisions_parquet_path, decision_rows, _DECISION_EXPORT_SCHEMA)
+        _write_csv(execution_csv_path, execution_rows, _EXECUTION_EXPORT_SCHEMA)
+        _write_parquet(execution_parquet_path, execution_rows, _EXECUTION_EXPORT_SCHEMA)
+        artifact_paths = (
+            json_path,
+            markdown_path,
+            decisions_csv_path,
+            decisions_parquet_path,
+            execution_csv_path,
+            execution_parquet_path,
+        )
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "report_id": report_id,
+                    "report_schema_version": report.get("report_schema_version"),
+                    "artifacts": {
+                        path.name: {"sha256": _sha256(path), "bytes": path.stat().st_size}
+                        for path in artifact_paths
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
             encoding="utf-8",
         )
         temporary_path.replace(target)
@@ -1047,4 +1284,9 @@ def write_daily_report_bundle(
         directory=target,
         json_path=target / "report.json",
         markdown_path=target / "report.md",
+        decisions_csv_path=target / "decisions.csv",
+        decisions_parquet_path=target / "decisions.parquet",
+        execution_csv_path=target / "execution.csv",
+        execution_parquet_path=target / "execution.parquet",
+        manifest_path=target / "bundle-manifest.json",
     )

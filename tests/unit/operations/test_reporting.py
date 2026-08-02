@@ -2,6 +2,7 @@ from datetime import date, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
+import duckdb
 import pytest
 
 from maais.operations.reporting import (
@@ -50,6 +51,21 @@ def _report() -> dict[str, object]:
             "by_reason": {"accepted": 4, "insufficient_history": 10},
             "by_symbol": {"BTCUSDT": 50, "ETHUSDT": 50},
         },
+        "decision_index": [
+            {
+                "id": "22222222-2222-4222-8222-222222222222",
+                "cycle_at": "2026-08-02T12:00:00Z",
+                "symbol": "BTCUSDT",
+                "timeframe": "1m",
+                "regime": "trending",
+                "status": "completed",
+                "direction": "long",
+                "disposition": "approved",
+                "reason_code": "accepted",
+                "market_frame_id": "33333333-3333-4333-8333-333333333333",
+                "content_hash": "f" * 64,
+            }
+        ],
         "execution": {
             "proposals": 4,
             "orders_created": 4,
@@ -61,6 +77,7 @@ def _report() -> dict[str, object]:
             "latency_slippage": "0.05",
             "total_slippage": "0.35",
         },
+        "execution_index": [],
         "operations": {
             "incidents_detected": 0,
             "operator_review_open": 0,
@@ -109,7 +126,25 @@ def test_report_bundle_is_immutable_and_contains_json_and_markdown(tmp_path: Pat
 
     assert paths.json_path.is_file()
     assert paths.markdown_path.is_file()
+    assert paths.decisions_csv_path.is_file()
+    assert paths.decisions_parquet_path.is_file()
+    assert paths.execution_csv_path.is_file()
+    assert paths.execution_parquet_path.is_file()
+    assert paths.manifest_path.is_file()
     assert paths.directory.name.startswith("2026-08-02-11111111-")
+    with duckdb.connect() as connection:
+        decision_summary = connection.execute(
+            "SELECT count(*), min(cycle_at) FROM read_parquet(?)",
+            [str(paths.decisions_parquet_path)],
+        ).fetchone()
+        execution_count = connection.execute(
+            "SELECT count(*) FROM read_parquet(?)",
+            [str(paths.execution_parquet_path)],
+        ).fetchone()
+    assert decision_summary is not None
+    assert decision_summary[0] == 1
+    assert str(decision_summary[1]) == "2026-08-02 12:00:00"
+    assert execution_count == (0,)
     with pytest.raises(FileExistsError, match="report bundle already exists"):
         write_daily_report_bundle(_report(), tmp_path)
 

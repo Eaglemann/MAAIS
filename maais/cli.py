@@ -114,6 +114,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "directory": str(paths.directory),
                     "json": str(paths.json_path),
                     "markdown": str(paths.markdown_path),
+                    "decisions_csv": str(paths.decisions_csv_path),
+                    "decisions_parquet": str(paths.decisions_parquet_path),
+                    "execution_csv": str(paths.execution_csv_path),
+                    "execution_parquet": str(paths.execution_parquet_path),
+                    "bundle_manifest": str(paths.manifest_path),
                 },
                 sort_keys=True,
             )
