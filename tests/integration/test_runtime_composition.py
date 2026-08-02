@@ -77,9 +77,7 @@ async def test_composition_builds_restart_safe_runnable_paper_application(
     snapshot = await restore_live_paper_runtime(uow_factory, manifest)
     pinned = _live_filter()
     current = replace(pinned, captured_at=pinned.captured_at + timedelta(minutes=1))
-    futures = _FuturesRest(
-        _Preflight(exchange_filters=(current,))
-    )
+    futures = _FuturesRest(_Preflight(exchange_filters=(current,)))
 
     application = await assemble_live_paper_application(
         uow=uow_factory,
@@ -93,9 +91,7 @@ async def test_composition_builds_restart_safe_runnable_paper_application(
 
     assert futures.calls == 1
     assert application.exchange_filters == {"BTCUSDT": pinned}
-    assert application.current_filter_rules_hashes == {
-        "BTCUSDT": current.rules_hash
-    }
+    assert application.current_filter_rules_hashes == {"BTCUSDT": current.rules_hash}
     assert application.engine.cursors == {}
     await application.supervisor.start()
     await application.supervisor.stop()
@@ -114,9 +110,7 @@ async def test_composition_refuses_changed_current_exchange_rules(
     snapshot = await restore_live_paper_runtime(uow_factory, manifest)
     pinned = _live_filter()
     changed = replace(pinned, minimum_notional=pinned.minimum_notional * 2)
-    futures = _FuturesRest(
-        _Preflight(exchange_filters=(changed,))
-    )
+    futures = _FuturesRest(_Preflight(exchange_filters=(changed,)))
 
     with pytest.raises(RuntimeAssemblyError, match="exchange rules changed"):
         await assemble_live_paper_application(

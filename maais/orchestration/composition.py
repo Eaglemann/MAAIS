@@ -236,9 +236,7 @@ def _current_filters(
 ) -> dict[str, ExchangeFilterSnapshot]:
     current = {item.symbol: item for item in filters}
     if len(current) != len(filters) or set(current) != set(snapshot.manifest.symbols):
-        raise RuntimeAssemblyError(
-            "current exchange filters do not cover exact manifest symbols"
-        )
+        raise RuntimeAssemblyError("current exchange filters do not cover exact manifest symbols")
     changed = sorted(
         symbol
         for symbol, pinned in snapshot.policy.exchange_filters.items()
@@ -246,7 +244,6 @@ def _current_filters(
     )
     if changed:
         raise RuntimeAssemblyError(
-            "current exchange rules changed from the pinned manifest: "
-            + ", ".join(changed)
+            "current exchange rules changed from the pinned manifest: " + ", ".join(changed)
         )
     return current

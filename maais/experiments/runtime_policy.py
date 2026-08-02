@@ -169,8 +169,7 @@ class LivePaperPolicy:
             raise RuntimePolicyError("live paper strategy stage must be simulation")
         strategy_implementation_hash = _text(strategy, "implementation_hash")
         if len(strategy_implementation_hash) != 64 or any(
-            character not in "0123456789abcdef"
-            for character in strategy_implementation_hash
+            character not in "0123456789abcdef" for character in strategy_implementation_hash
         ):
             raise RuntimePolicyError("strategy implementation_hash must be SHA-256")
         strategy_parameters = _mapping(strategy, "parameters")

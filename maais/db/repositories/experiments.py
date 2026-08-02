@@ -235,9 +235,7 @@ class ExperimentRepository:
         if model is None:
             raise LookupError(f"experiment not found: {manifest.experiment_id}")
         if model.manifest_hash != manifest.manifest_hash:
-            raise ImmutableManifestError(
-                "stored manifest identity does not match worker manifest"
-            )
+            raise ImmutableManifestError("stored manifest identity does not match worker manifest")
         status = ExperimentStatus(model.status)
         if status is ExperimentStatus.RUNNING:
             return False

@@ -182,9 +182,7 @@ def prepare_live_paper_manifest(
             "filter_snapshot_hashes": {
                 symbol: by_symbol[symbol].content_hash for symbol in TRADING_PAIRS
             },
-            "filter_snapshots": {
-                symbol: by_symbol[symbol].to_dict() for symbol in TRADING_PAIRS
-            },
+            "filter_snapshots": {symbol: by_symbol[symbol].to_dict() for symbol in TRADING_PAIRS},
             "primary_mapping_hash": primary_mapping_hash,
             "secondary_mapping_hash": secondary_mapping_hash,
         }

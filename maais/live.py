@@ -66,9 +66,7 @@ async def prepare_live_manifest_file(
         primary_mapping_hash=content_hash(
             [asdict(mapping) for mapping in primary_preflight.mappings]
         ),
-        secondary_mapping_hash=content_hash(
-            [asdict(mapping) for mapping in secondary_mappings]
-        ),
+        secondary_mapping_hash=content_hash([asdict(mapping) for mapping in secondary_mappings]),
     )
     _write_manifest(output, manifest, overwrite=overwrite)
     return manifest
