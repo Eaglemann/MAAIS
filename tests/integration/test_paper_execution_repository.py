@@ -236,6 +236,25 @@ async def test_identical_execution_retry_is_idempotent_and_changed_command_confl
             await uow.paper_execution.record(changed)
 
 
+async def test_reused_order_id_for_another_client_identity_conflicts(
+    uow_factory: UnitOfWork,
+) -> None:
+    record = await _record(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(record)
+
+    reused_id = replace(
+        record,
+        order=replace(record.order, client_order_id="paper-btc-another-command"),
+    )
+    with pytest.raises(
+        OrderIdentityConflict,
+        match="order id is already assigned to another client order identity",
+    ):
+        async with uow_factory.begin() as uow:
+            await uow.paper_execution.record(reused_id)
+
+
 async def test_execution_transaction_rolls_back_all_projections(
     uow_factory: UnitOfWork,
     db_engine: AsyncEngine,

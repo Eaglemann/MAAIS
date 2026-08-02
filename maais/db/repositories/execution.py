@@ -189,12 +189,7 @@ class PaperExecutionRepository:
         inserted_id = await self._session.scalar(
             insert(OrderIntentModel)
             .values(**self._order_values(record, execution_hash))
-            .on_conflict_do_nothing(
-                index_elements=[
-                    OrderIntentModel.experiment_id,
-                    OrderIntentModel.client_order_id,
-                ]
-            )
+            .on_conflict_do_nothing()
             .returning(OrderIntentModel.id)
         )
         created = inserted_id is not None
@@ -211,6 +206,11 @@ class PaperExecutionRepository:
                 .with_for_update()
             )
             if existing is None:
+                reused_id = await self._session.get(OrderIntentModel, order.order_id)
+                if reused_id is not None:
+                    raise OrderIdentityConflict(
+                        "order id is already assigned to another client order identity"
+                    )
                 raise RuntimeError("order identity disappeared after conflict")
             if existing.command_hash != order.command_hash or existing.id != order.order_id:
                 raise OrderIdentityConflict("client order identity has different command content")
