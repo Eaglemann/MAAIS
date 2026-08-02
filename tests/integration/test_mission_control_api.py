@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import UUID
 
 import httpx
@@ -75,3 +76,26 @@ async def test_api_rejects_partial_decision_cursor(uow_factory: UnitOfWork) -> N
         )
 
     assert response.status_code == 422
+
+
+async def test_api_serves_built_dashboard_without_weakening_api_transactions(
+    uow_factory: UnitOfWork,
+    tmp_path: Path,
+) -> None:
+    dashboard = tmp_path / "dashboard"
+    dashboard.mkdir()
+    (dashboard / "index.html").write_text(
+        "<!doctype html><title>Mission Control fixture</title>",
+        encoding="utf-8",
+    )
+    application = create_app(uow_factory._session_factory, dashboard_dir=dashboard)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        page = await client.get("/")
+        health = await client.get("/api/v1/health")
+
+    assert page.status_code == 200
+    assert "Mission Control fixture" in page.text
+    assert health.json()["database_transaction"] == "read only"

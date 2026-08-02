@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -24,7 +26,11 @@ from maais.db.connection import get_engine, get_session_factory
 SessionFactory = async_sessionmaker[AsyncSession]
 
 
-def create_app(session_factory: SessionFactory | None = None) -> FastAPI:
+def create_app(
+    session_factory: SessionFactory | None = None,
+    *,
+    dashboard_dir: Path | None = None,
+) -> FastAPI:
     owns_global_engine = session_factory is None
 
     @asynccontextmanager
@@ -136,6 +142,26 @@ def create_app(session_factory: SessionFactory | None = None) -> FastAPI:
         session: AsyncSession = Depends(read_session),
     ) -> DecisionDetail:
         return await MissionControlQueryService(session).get_decision(decision_id)
+
+    resolved_dashboard = dashboard_dir or Path(__file__).resolve().parents[2] / "dashboard" / "dist"
+    if resolved_dashboard.is_dir():
+        application.mount(
+            "/",
+            StaticFiles(directory=resolved_dashboard, html=True),
+            name="mission-control-dashboard",
+        )
+    else:
+
+        @application.get("/", include_in_schema=False)
+        async def dashboard_not_built() -> JSONResponse:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": (
+                        "Mission Control dashboard is not built; run npm run build in dashboard"
+                    )
+                },
+            )
 
     return application
 
