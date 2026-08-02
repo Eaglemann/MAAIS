@@ -91,7 +91,7 @@ def _live_manifest(**overrides):
             "primary_spot_contract": "binance_spot_public_v1",
             "secondary_spot_contract": "bybit_spot_public_v1",
             "golden_replay_sha256": (
-                "4d2dec967a8fd98ba04616b834c1b247442af3b168409ba6d45bc24833e6b5cc"
+                "4d2dec967a8fd98ba04616b834c1b247442af3b168409ba6d45bc24833e6b5cc"  # pragma: allowlist secret
             ),
         },
         "fill_policy": {
