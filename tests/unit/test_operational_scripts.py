@@ -8,7 +8,7 @@ def test_paper_services_start_with_structured_production_logging() -> None:
 
     assert (
         "exec env RUN_MODE=paper_live ENVIRONMENT=production "
-        "uv run maais mission-control" in start_script
+        "MISSION_CONTROL_TOKEN_FILE=%q uv run maais mission-control" in start_script
     )
     assert (
         "exec env RUN_MODE=paper_live ENVIRONMENT=production "

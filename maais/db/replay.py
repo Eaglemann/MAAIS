@@ -24,6 +24,7 @@ from maais.db.models.operations import (
     IncidentModel,
     MarketCursorModel,
     MarketRecoveryRunModel,
+    OperatorCommandModel,
     WorkerCheckpointModel,
 )
 from maais.domain.enums import ExperimentStatus
@@ -571,6 +572,57 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
                     "market_quality_projection_mismatch",
                     stream,
                     f"rows={len(rows)}, unique_checks={len(names)}, events={event_count}",
+                )
+            )
+
+    operator_commands = (await session.scalars(select(OperatorCommandModel))).all()
+    for command in operator_commands:
+        expected_hash = content_hash(
+            {
+                "command_id": command.id,
+                "experiment_id": command.experiment_id,
+                "command_type": command.command_type,
+                "status": command.status,
+                "idempotency_key": command.idempotency_key,
+                "actor": command.actor,
+                "reason": command.reason,
+                "payload": command.payload_json,
+                "operator_confirmed": command.operator_confirmed,
+                "request_hash": command.request_hash,
+                "requested_at": command.requested_at,
+                "version": command.version,
+                "accepted_at": command.accepted_at,
+                "accepted_by": command.accepted_by,
+                "completed_at": command.completed_at,
+                "result": command.result_json,
+            }
+        )
+        event_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(DomainEventModel)
+                .where(
+                    DomainEventModel.aggregate_type == "operator_command",
+                    DomainEventModel.aggregate_id == command.id,
+                )
+            )
+            or 0
+        )
+        if expected_hash != command.content_hash or event_count != command.version:
+            stream = next(
+                (
+                    item
+                    for item in streams
+                    if item.aggregate_type == "operator_command" and item.aggregate_id == command.id
+                ),
+                None,
+            )
+            errors.append(
+                _error(
+                    "operator_command_projection_mismatch",
+                    stream,
+                    f"events={event_count}, version={command.version}, "
+                    f"hash_matches={expected_hash == command.content_hash}",
                 )
             )
     return LedgerConsistencyReport(tuple(errors))

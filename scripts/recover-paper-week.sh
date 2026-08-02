@@ -32,6 +32,7 @@ fi
 experiment_id="$(jq -r '.experiment_id' "${current_state}")"
 manifest_path="$(jq -r '.manifest' "${current_state}")"
 port="$(jq -r '.mission_control_port' "${current_state}")"
+control_token_file="$(jq -er '.control_token_file' "${current_state}")"
 worker_pid="$(jq -r '.worker_pid' "${current_state}")"
 dashboard_pid="$(jq -r '.dashboard_pid' "${current_state}")"
 awake_pid="$(jq -r '.awake_pid // empty' "${current_state}")"
@@ -55,6 +56,7 @@ fi
 
 mkdir -p "${evidence_dir}"
 cd "${repository_root}"
+paper_ensure_control_token "${control_token_file}"
 paper_assert_recorded_postgres_route \
   "${docker_context}" \
   "${postgres_system_identifier}" >/dev/null
@@ -70,8 +72,8 @@ if [[ "${service}" == "dashboard" ]]; then
   paper_stop_tmux_session "${dashboard_session}"
   dashboard_log="${state_dir}/logs/mission-control-${experiment_id%%-*}.log"
   printf -v dashboard_command \
-    'cd %q && exec env RUN_MODE=paper_live ENVIRONMENT=production uv run maais mission-control --port %q >> %q 2>&1' \
-    "${repository_root}" "${port}" "${dashboard_log}"
+    'cd %q && exec env RUN_MODE=paper_live ENVIRONMENT=production MISSION_CONTROL_TOKEN_FILE=%q uv run maais mission-control --port %q >> %q 2>&1' \
+    "${repository_root}" "${control_token_file}" "${port}" "${dashboard_log}"
   paper_start_tmux_session "${dashboard_session}" "${dashboard_command}"
   new_dashboard_pid="${PAPER_TMUX_PANE_PID}"
   dashboard_ready=false

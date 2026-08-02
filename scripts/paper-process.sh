@@ -6,6 +6,72 @@
 PAPER_TMUX_PANE_PID=""
 PAPER_OPERATION_LOCK_DIR=""
 
+paper_file_mode() {
+  local path="$1"
+  local mode
+
+  if mode="$(stat -f '%Lp' "${path}" 2>/dev/null)"; then
+    printf '%s\n' "${mode}"
+    return 0
+  fi
+  stat -c '%a' "${path}"
+}
+
+paper_ensure_control_token() {
+  local token_path="$1"
+  local token_directory
+  local temporary
+  local mode
+  local token
+  local byte_count
+
+  if [[ -z "${token_path}" ]]; then
+    echo "Mission Control token path is required" >&2
+    return 64
+  fi
+  token_directory="$(dirname "${token_path}")"
+  if [[ ! -d "${token_directory}" ]]; then
+    echo "Mission Control token directory does not exist: ${token_directory}" >&2
+    return 1
+  fi
+  if [[ ! -e "${token_path}" && ! -L "${token_path}" ]]; then
+    if ! command -v openssl >/dev/null 2>&1; then
+      echo "openssl is required to generate the Mission Control token" >&2
+      return 69
+    fi
+    temporary="${token_path}.tmp.$$"
+    if ! (umask 077; openssl rand -hex 32 > "${temporary}"); then
+      rm -f "${temporary}"
+      echo "could not generate the Mission Control token" >&2
+      return 1
+    fi
+    chmod 600 "${temporary}"
+    if ! ln "${temporary}" "${token_path}" 2>/dev/null; then
+      if [[ ! -e "${token_path}" && ! -L "${token_path}" ]]; then
+        rm -f "${temporary}"
+        echo "could not atomically install the Mission Control token" >&2
+        return 1
+      fi
+    fi
+    rm -f "${temporary}"
+  fi
+  if [[ ! -f "${token_path}" || -L "${token_path}" ]]; then
+    echo "Mission Control token must be a regular non-symlink file" >&2
+    return 1
+  fi
+  mode="$(paper_file_mode "${token_path}")" || return 1
+  if [[ "${mode}" != "600" ]]; then
+    echo "Mission Control token permissions must be 600, found ${mode}" >&2
+    return 1
+  fi
+  IFS= read -r token < "${token_path}" || true
+  byte_count="$(wc -c < "${token_path}" | tr -d '[:space:]')"
+  if [[ ! "${token}" =~ ^[0-9a-f]{64}$ || "${byte_count}" != "65" ]]; then
+    echo "Mission Control token must contain one 64-character lowercase hexadecimal value" >&2
+    return 1
+  fi
+}
+
 paper_acquire_operation_lock() {
   local lock_directory="$1"
   local operation="$2"

@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--manifest", type=Path, required=True)
     mission_control = commands.add_parser(
         "mission-control",
-        help="serve the read-only local paper-trading dashboard API",
+        help="serve the local paper-trading dashboard and queued control API",
     )
     mission_control.add_argument("--port", type=_localhost_port, default=8000)
     commands.add_parser(

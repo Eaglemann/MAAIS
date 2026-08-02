@@ -70,7 +70,7 @@ async def test_composition_builds_restart_safe_runnable_paper_application(
 ) -> None:
     manifest = _live_manifest(
         experiment_id=UUID(int=301),
-        schema_revision="0015",
+        schema_revision="0016",
     )
     async with uow_factory.begin() as uow:
         await uow.experiments.create(manifest)
@@ -103,7 +103,7 @@ async def test_composition_refuses_changed_current_exchange_rules(
 ) -> None:
     manifest = _live_manifest(
         experiment_id=UUID(int=303),
-        schema_revision="0015",
+        schema_revision="0016",
     )
     async with uow_factory.begin() as uow:
         await uow.experiments.create(manifest)

@@ -55,6 +55,87 @@ class TradingControlModel(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class OperatorCommandModel(Base):
+    __tablename__ = "operator_commands"
+    __table_args__ = (
+        UniqueConstraint(
+            "experiment_id",
+            "idempotency_key",
+            name="uq_operator_command_idempotency",
+        ),
+        CheckConstraint(
+            "command_type IN ('start', 'pause', 'resume', 'stop', 'emergency_halt', "
+            "'flatten', 'acknowledge_incident', 'resolve_incident', 'reset_kill_switch')",
+            name="ck_operator_command_type",
+        ),
+        CheckConstraint(
+            "status IN ('requested', 'accepted', 'completed', 'rejected')",
+            name="ck_operator_command_status",
+        ),
+        CheckConstraint(
+            "char_length(idempotency_key) BETWEEN 8 AND 128 AND actor <> '' AND reason <> ''",
+            name="ck_operator_command_identity_fields",
+        ),
+        CheckConstraint(
+            "char_length(request_hash) = 64 AND char_length(content_hash) = 64",
+            name="ck_operator_command_hashes",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(payload_json) = 'object' AND "
+            "(result_json IS NULL OR jsonb_typeof(result_json) = 'object')",
+            name="ck_operator_command_json_objects",
+        ),
+        CheckConstraint(
+            "command_type NOT IN ('start', 'pause', 'resume', 'stop', 'emergency_halt', "
+            "'flatten', 'resolve_incident', 'reset_kill_switch') OR operator_confirmed",
+            name="ck_operator_command_safety_confirmation",
+        ),
+        CheckConstraint(
+            "(status = 'requested' AND version = 1 AND accepted_at IS NULL AND "
+            "accepted_by IS NULL AND completed_at IS NULL AND result_json IS NULL) OR "
+            "(status = 'accepted' AND version = 2 AND accepted_at IS NOT NULL AND "
+            "accepted_by IS NOT NULL AND completed_at IS NULL AND result_json IS NULL) OR "
+            "(status IN ('completed', 'rejected') AND version = 3 AND accepted_at IS NOT NULL "
+            "AND accepted_by IS NOT NULL AND completed_at IS NOT NULL AND result_json IS NOT NULL)",
+            name="ck_operator_command_lifecycle",
+        ),
+        CheckConstraint(
+            "(accepted_at IS NULL OR accepted_at >= requested_at) AND "
+            "(completed_at IS NULL OR completed_at >= accepted_at)",
+            name="ck_operator_command_time_order",
+        ),
+        Index(
+            "ix_operator_commands_experiment_status_time",
+            "experiment_id",
+            "status",
+            "requested_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    experiment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("experiments.id", ondelete="RESTRICT"), nullable=False
+    )
+    command_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    payload_json: Mapped[dict[str, MutableJsonValue]] = mapped_column(JSONB, nullable=False)
+    operator_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    accepted_by: Mapped[str | None] = mapped_column(String(128))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result_json: Mapped[dict[str, MutableJsonValue] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class MarketCursorModel(Base):
     __tablename__ = "market_cursors"
     __table_args__ = (

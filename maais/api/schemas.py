@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from maais.operations.operator_commands import CommandStatus, CommandType
+
 
 class ReadModel(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -206,3 +208,37 @@ class DecisionDetail(ReadModel):
     incident: dict[str, object] | None
     timeline: tuple[AuditEvent, ...]
     lineage_hashes: dict[str, str] = Field(default_factory=dict)
+
+
+class OperatorCommandRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    command_type: CommandType
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    reason: str = Field(min_length=1, max_length=1000)
+    payload: dict[str, object] = Field(default_factory=dict)
+    confirmation: str | None = Field(default=None, max_length=128)
+
+
+class OperatorCommandView(ReadModel):
+    command_id: UUID
+    experiment_id: UUID
+    command_type: CommandType
+    status: CommandStatus
+    idempotency_key: str
+    actor: str
+    reason: str
+    payload: Mapping[str, object]
+    operator_confirmed: bool
+    request_hash: str
+    requested_at: datetime
+    version: int
+    accepted_at: datetime | None
+    accepted_by: str | None
+    completed_at: datetime | None
+    result: Mapping[str, object] | None
+
+
+class OperatorCommandPage(ReadModel):
+    items: tuple[OperatorCommandView, ...]
+    limit: int

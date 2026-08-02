@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from maais.config.modes import RunMode
@@ -19,6 +21,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    mission_control_token_file: Path | None = Path("artifacts/run-state/mission-control.token")
 
     @property
     def is_production(self) -> bool:

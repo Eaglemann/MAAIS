@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import stat
 import subprocess
 from pathlib import Path
 
@@ -100,6 +101,40 @@ printf 'pid=%s\\n' "$PAPER_TMUX_PANE_PID"
         "start:new-session -d -s maais-worker-test exec worker --paper-only",
         "pid=60560",
     ]
+
+
+def test_control_token_is_created_privately_and_reused_without_rotation(
+    tmp_path: Path,
+) -> None:
+    token_file = tmp_path / "mission-control.token"
+    result = _run_bash(
+        f"""
+openssl() {{ printf '%064d\n' 0; }}
+paper_ensure_control_token {shlex.quote(str(token_file))}
+printf 'first=%s\n' "$(cat {shlex.quote(str(token_file))})"
+openssl() {{ printf 'must-not-rotate\n'; return 9; }}
+paper_ensure_control_token {shlex.quote(str(token_file))}
+printf 'second=%s\n' "$(cat {shlex.quote(str(token_file))})"
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        f"first={'0' * 64}",
+        f"second={'0' * 64}",
+    ]
+    assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+
+
+def test_control_token_validation_rejects_group_readable_file(tmp_path: Path) -> None:
+    token_file = tmp_path / "mission-control.token"
+    token_file.write_text(f"{'a1' * 32}\n", encoding="ascii")
+    token_file.chmod(0o640)
+
+    result = _run_bash(f"paper_ensure_control_token {shlex.quote(str(token_file))}")
+
+    assert result.returncode == 1
+    assert "permissions must be 600" in result.stderr
 
 
 def test_postgres_route_rejects_a_different_compose_cluster() -> None:

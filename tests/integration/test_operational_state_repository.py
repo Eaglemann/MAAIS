@@ -114,6 +114,7 @@ async def test_operational_schema_matches_models(db_connection: AsyncConnection)
         "worker_checkpoints",
         "worker_leases",
         "trading_controls",
+        "operator_commands",
     )
 
     def compare(sync_connection: object) -> None:

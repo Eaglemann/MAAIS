@@ -14,6 +14,7 @@ from maais.db.repositories.execution import PaperExecutionRepository
 from maais.db.repositories.experiments import ExperimentRepository
 from maais.db.repositories.incidents import IncidentRepository
 from maais.db.repositories.market_data import MarketDataRepository
+from maais.db.repositories.operator_commands import OperatorCommandRepository
 from maais.db.repositories.orchestration import OrchestrationRepository
 from maais.db.repositories.workers import WorkerLeaseRepository
 
@@ -31,6 +32,7 @@ class UnitOfWorkContext:
     orchestration: OrchestrationRepository
     workers: WorkerLeaseRepository
     controls: TradingControlRepository
+    commands: OperatorCommandRepository
 
 
 class UnitOfWork:
@@ -56,4 +58,5 @@ class UnitOfWork:
                     orchestration=OrchestrationRepository(session, events),
                     workers=WorkerLeaseRepository(session, events),
                     controls=TradingControlRepository(session, events),
+                    commands=OperatorCommandRepository(session, events),
                 )

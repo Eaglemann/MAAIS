@@ -15,8 +15,10 @@ mission_control_port="${3:-8000}"
 state_dir="${repository_root}/artifacts/run-state"
 log_dir="${state_dir}/logs"
 current_state="${state_dir}/current.json"
+control_token_file="${state_dir}/mission-control.token"
 
 mkdir -p "${log_dir}" "${repository_root}/artifacts/reports" "${repository_root}/backups"
+paper_ensure_control_token "${control_token_file}"
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux is required for durable paper-run supervision" >&2
@@ -73,8 +75,8 @@ cleanup_startup() {
 trap cleanup_startup ERR INT TERM
 
 printf -v dashboard_command \
-  'cd %q && exec env RUN_MODE=paper_live ENVIRONMENT=production uv run maais mission-control --port %q >> %q 2>&1' \
-  "${repository_root}" "${mission_control_port}" "${dashboard_log}"
+  'cd %q && exec env RUN_MODE=paper_live ENVIRONMENT=production MISSION_CONTROL_TOKEN_FILE=%q uv run maais mission-control --port %q >> %q 2>&1' \
+  "${repository_root}" "${control_token_file}" "${mission_control_port}" "${dashboard_log}"
 paper_start_tmux_session "${dashboard_session}" "${dashboard_command}"
 dashboard_pid="${PAPER_TMUX_PANE_PID}"
 
@@ -137,6 +139,7 @@ jq -n \
   --arg manifest "${manifest_path}" \
   --arg restore_verification "${restore_path}" \
   --arg preflight "${preflight_path}" \
+  --arg control_token_file "${control_token_file}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson worker_pid "${worker_pid}" \
   --argjson dashboard_pid "${dashboard_pid}" \
@@ -149,7 +152,7 @@ jq -n \
   --arg dashboard_session "${dashboard_session}" \
   --arg awake_session "${awake_session}" \
   --argjson port "${mission_control_port}" \
-  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
+  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
   > "${temporary_state}"
 mv "${temporary_state}" "${current_state}"
 
