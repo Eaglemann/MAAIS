@@ -6,7 +6,9 @@ import argparse
 import asyncio
 import json
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
+from uuid import UUID
 
 from maais.config.settings import get_settings
 from maais.core.logging import configure_logging
@@ -14,6 +16,10 @@ from maais.live import (
     load_manifest_file,
     prepare_live_manifest_file,
     run_live_paper_manifest,
+)
+from maais.operations.reporting import (
+    build_configured_daily_report,
+    write_daily_report_bundle,
 )
 from maais.operations.verification import verify_configured_ledger
 
@@ -23,6 +29,13 @@ def _localhost_port(value: str) -> int:
     if not 1 <= port <= 65_535:
         raise argparse.ArgumentTypeError("port must be between 1 and 65535")
     return port
+
+
+def _date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("date must be YYYY-MM-DD") from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +63,13 @@ def build_parser() -> argparse.ArgumentParser:
         "verify-ledger",
         help="read-only verification of event, projection, and account consistency",
     )
+    report = commands.add_parser(
+        "daily-report",
+        help="freeze an auditable Berlin-calendar-day paper report bundle",
+    )
+    report.add_argument("--experiment", type=UUID, required=True)
+    report.add_argument("--date", dest="report_date", type=_date, required=True)
+    report.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -82,6 +102,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = asyncio.run(verify_configured_ledger())
         print(json.dumps(result, sort_keys=True))
         return 0 if result["ok"] is True else 1
+    if arguments.command == "daily-report":
+        report = asyncio.run(
+            build_configured_daily_report(arguments.experiment, arguments.report_date)
+        )
+        paths = write_daily_report_bundle(report, arguments.output)
+        print(
+            json.dumps(
+                {
+                    "report_id": report["report_id"],
+                    "directory": str(paths.directory),
+                    "json": str(paths.json_path),
+                    "markdown": str(paths.markdown_path),
+                },
+                sort_keys=True,
+            )
+        )
+        reconciliation = report["reconciliation"]
+        if not isinstance(reconciliation, dict):
+            raise TypeError("daily report reconciliation must be an object")
+        return 0 if reconciliation["ledger_ok"] is True else 1
     manifest = load_manifest_file(arguments.manifest)
     asyncio.run(run_live_paper_manifest(manifest, settings=settings))
     return 0

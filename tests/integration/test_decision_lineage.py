@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import func, inspect, select
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
 
+from maais.config.modes import RunMode
 from maais.db.connection import Base
 from maais.db.models.decisions import (
     AgentEvaluationModel,
@@ -61,8 +62,12 @@ async def test_decision_schema_matches_model_columns_and_keys(
     await db_connection.run_sync(compare)
 
 
-async def _prepare_bundle(uow_factory: UnitOfWork):
-    manifest = _manifest(schema_revision="0006")
+async def _prepare_bundle(
+    uow_factory: UnitOfWork,
+    *,
+    mode: RunMode = RunMode.REPLAY,
+):
+    manifest = _manifest(schema_revision="0006", mode=mode)
     async with uow_factory.begin() as uow:
         await uow.experiments.create(manifest)
         strategy_id = await uow.experiments.register_strategy_version(

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from maais.config.modes import RunMode
 from maais.db.models.execution import OrderIntentModel
 from maais.db.models.ledger import EventStreamModel, OutboxEventModel
 from maais.db.replay import rebuild_experiment_projection, verify_ledger_consistency
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import ExperimentStatus
 from maais.experiments.service import ExperimentLifecycle
+from maais.operations.reporting import build_daily_report
 from maais.operations.verification import verify_ledger_with_factory
 from tests.integration.test_decision_lineage import _prepare_bundle
 from tests.integration.test_paper_execution_repository import _record
@@ -40,11 +42,43 @@ async def test_operator_verification_returns_serializable_valid_result(
     async with uow_factory.begin() as uow:
         await uow.decisions.record_bundle(bundle)
 
-    result = await verify_ledger_with_factory(
-        async_sessionmaker(db_engine, expire_on_commit=False)
-    )
+    result = await verify_ledger_with_factory(async_sessionmaker(db_engine, expire_on_commit=False))
 
     assert result == {"ok": True, "error_count": 0, "errors": []}
+
+
+async def test_daily_report_reconciles_complete_decision_lineage(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest, bundle = await _prepare_bundle(uow_factory, mode=RunMode.PAPER_LIVE)
+    async with uow_factory.begin() as uow:
+        await uow.decisions.record_bundle(bundle)
+    generated_at = datetime(2026, 8, 3, 0, 5, tzinfo=timezone.utc)
+
+    async with uow_factory.begin() as uow:
+        report = await build_daily_report(
+            uow.session,
+            manifest.experiment_id,
+            date(2026, 8, 2),
+            generated_at=generated_at,
+        )
+
+    assert report["decisions"] == {
+        "total": 1,
+        "by_status": {"completed": 1},
+        "by_disposition": {"approved": 1},
+        "by_direction": {"long": 1},
+        "by_reason": {"accepted": 1},
+        "by_symbol": {"BTCUSDT": 1},
+        "by_regime": {"trending": 1},
+    }
+    assert report["agents"]["evaluations"] == 8  # type: ignore[index]
+    assert report["gates"]["evaluations"] == 2  # type: ignore[index]
+    assert report["execution"]["proposals"] == 1  # type: ignore[index]
+    assert report["account"]["starting_equity"] == "10000"  # type: ignore[index]
+    assert report["account"]["ending_equity"] == "10000"  # type: ignore[index]
+    assert report["reconciliation"]["ledger_ok"] is True  # type: ignore[index]
+    assert len(report["reconciliation"]["report_hash"]) == 64  # type: ignore[index]
 
 
 async def test_consistency_report_accepts_reconciled_paper_account(

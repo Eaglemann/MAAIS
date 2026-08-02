@@ -25,12 +25,25 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     run = parser.parse_args(["paper-live", "--manifest", "candidate.json"])
     mission_control = parser.parse_args(["mission-control"])
     verify_ledger = parser.parse_args(["verify-ledger"])
+    report = parser.parse_args(
+        [
+            "daily-report",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--date",
+            "2026-08-02",
+            "--output",
+            "artifacts/reports",
+        ]
+    )
 
     assert prepare.output == Path("candidate.json")
     assert not prepare.force
     assert run.manifest == Path("candidate.json")
     assert mission_control.port == 8000
     assert verify_ledger.command == "verify-ledger"
+    assert report.report_date.isoformat() == "2026-08-02"
+    assert report.output == Path("artifacts/reports")
 
     with pytest.raises(SystemExit):
         parser.parse_args(["mission-control", "--port", "0"])
