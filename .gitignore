@@ -217,6 +217,7 @@ __marimo__/
 
 # MAAIS local runtime and design-session state
 .superpowers/
+.playwright-cli/
 artifacts/
 backups/
 data/
