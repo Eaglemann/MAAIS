@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -26,13 +26,14 @@ from maais.db.repositories.market_data import OperationalStateConflict
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import Direction, ExperimentStatus, StrategyStage
 from maais.experiments.service import ExperimentLifecycle
-from maais.market_data.frames import CausalMinuteFrameBuilder, FrameKey
+from maais.market_data.frames import CausalMinuteFrame, CausalMinuteFrameBuilder, FrameKey
+from maais.market_data.history import CausalFrameHistory
 from maais.market_data.integrity.state_machine import (
     IntegrityPolicy,
     MarketIntegrityStateMachine,
 )
-from maais.market_data.recovery import MarketCursor
-from maais.orchestration.commands import OrchestrationCommand
+from maais.market_data.recovery import GapRange, MarketCursor, RecoveryState
+from maais.orchestration.commands import EntryDecisionContext, OrchestrationCommand
 from maais.orchestration.protection import (
     FundingSettlementCommand,
     PositionProtectionService,
@@ -40,9 +41,11 @@ from maais.orchestration.protection import (
     ProtectionDisposition,
 )
 from maais.orchestration.results import OrchestrationDisposition
+from maais.orchestration.runtime import AtomicCycleDispatcher
 from maais.orchestration.service import OfficialOrchestrationService
 from tests.unit.experiments.test_manifest import _manifest
 from tests.unit.market_data.test_frame_builder import _inputs
+from tests.unit.market_data.test_history import _history_snapshots
 from tests.unit.market_data.test_integrity_state_machine import _context
 from tests.unit.orchestration.test_protection import _broker, _depth, _mark
 from tests.unit.orchestration.test_service import (
@@ -53,6 +56,25 @@ from tests.unit.orchestration.test_service import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+class _EntryContextFactory:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def build(
+        self,
+        frame: CausalMinuteFrame,
+        *,
+        evaluated_at: datetime,
+        completed_at: datetime,
+    ) -> EntryDecisionContext:
+        self.calls += 1
+        context = _entry_context()
+        return replace(
+            context,
+            monitoring=replace(context.monitoring, evaluated_at=evaluated_at),
+        )
 
 
 async def _command_in_database(
@@ -204,6 +226,108 @@ async def test_persisted_frame_restores_causal_feature_history(
         for name, source in command.frame.source_manifest.items()
         if source.sequence is not None
     }
+
+
+async def test_atomic_dispatcher_builds_decides_persists_and_commits_history(
+    uow_factory: UnitOfWork,
+) -> None:
+    command = await _command_in_database(uow_factory, quarantine=False)
+    history = CausalFrameHistory(command.manifest.experiment_id, command.manifest.symbols)
+    history.restore(_history_snapshots())
+    contexts = _EntryContextFactory()
+    dispatcher = AtomicCycleDispatcher(
+        uow=uow_factory,
+        manifest=command.manifest,
+        strategy_version_id=command.frame.key.strategy_version_id,
+        agent_version_ids=dict(command.agent_version_ids),
+        history=history,
+        entry_contexts=contexts,
+        integrity_policy=IntegrityPolicy.official(),
+    )
+    events = _inputs()
+
+    await dispatcher.dispatch(
+        events[0],
+        context_events=events,
+        target_cursor=_cursor(command),
+        recovery_progress=None,
+    )
+
+    async with uow_factory.begin() as uow:
+        cycle_id = await uow.session.scalar(select(DecisionCycleModel.id))
+        assert cycle_id is not None
+        restored = await uow.decisions.get_bundle(cycle_id)
+        cursor = await uow.market_data.get_cursor(
+            command.manifest.experiment_id,
+            events[0].venue,
+            events[0].stream,
+            events[0].symbol,
+            command.frame.key.timeframe,
+        )
+
+    assert contexts.calls == 1
+    assert restored.bundle.market_frame.content_hash == command.frame.content_hash
+    assert cursor.event_id == events[0].event_id
+    assert history.snapshots("BTCUSDT")[-1].frame_id == command.frame.frame_id
+
+
+async def test_atomic_dispatcher_rolls_back_outcome_cursor_and_history_on_recovery_conflict(
+    uow_factory: UnitOfWork,
+) -> None:
+    command = await _command_in_database(uow_factory, quarantine=False)
+    history = CausalFrameHistory(command.manifest.experiment_id, command.manifest.symbols)
+    history.restore(_history_snapshots())
+    contexts = _EntryContextFactory()
+    events = _inputs()
+    target = _cursor(command)
+    gap = GapRange(
+        experiment_id=command.manifest.experiment_id,
+        venue=target.venue,
+        stream=target.stream,
+        symbol=target.symbol,
+        timeframe=target.timeframe,
+        start_sequence=target.sequence,
+        end_sequence_exclusive=target.sequence + 1,
+        start_open_at=command.frame.bar.bar_open_at,
+        end_open_at_exclusive=command.frame.bar.bar_close_at,
+        interval=timedelta(minutes=1),
+    )
+    progress = (
+        RecoveryState.create(
+            recovery_id=UUID(int=700),
+            experiment_id=command.manifest.experiment_id,
+            gap=gap,
+            started_at=target.observed_at,
+        )
+        .begin(target.observed_at)
+        .record_dispatch(target, target.observed_at)
+    )
+    altered_event = replace(progress.events[-1], payload={"conflicting": True})
+    altered = replace(progress, events=(*progress.events[:-1], altered_event))
+    async with uow_factory.begin() as uow:
+        await uow.market_data.record_recovery(altered)
+    dispatcher = AtomicCycleDispatcher(
+        uow=uow_factory,
+        manifest=command.manifest,
+        strategy_version_id=command.frame.key.strategy_version_id,
+        agent_version_ids=dict(command.agent_version_ids),
+        history=history,
+        entry_contexts=contexts,
+        integrity_policy=IntegrityPolicy.official(),
+    )
+
+    with pytest.raises(OperationalStateConflict, match="different content"):
+        await dispatcher.dispatch(
+            events[0],
+            context_events=events,
+            target_cursor=target,
+            recovery_progress=progress,
+        )
+
+    async with uow_factory.begin() as uow:
+        assert await uow.session.scalar(select(func.count()).select_from(DecisionCycleModel)) == 0
+        assert await uow.session.scalar(select(func.count()).select_from(MarketCursorModel)) == 0
+    assert len(history.snapshots("BTCUSDT")) == 60
 
 
 async def test_rejected_direction_persists_counterfactual_with_decision(

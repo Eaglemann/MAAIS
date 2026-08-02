@@ -19,7 +19,7 @@ def _history_snapshots(count: int = 60) -> tuple[CommittedFrameSnapshot, ...]:
     snapshots = []
     for index in range(count):
         close_at = NOW - timedelta(minutes=count - index)
-        price = Decimal("95") + Decimal(index) / Decimal("100")
+        close = Decimal("100") / (Decimal("1.01") ** (count - index - 1))
         snapshots.append(
             CommittedFrameSnapshot(
                 experiment_id=UUID(int=1),
@@ -30,10 +30,10 @@ def _history_snapshots(count: int = 60) -> tuple[CommittedFrameSnapshot, ...]:
                     timeframe="1m",
                     bar_open_at=close_at - timedelta(minutes=1),
                     bar_close_at=close_at,
-                    open=price,
-                    high=price + Decimal("1"),
-                    low=price - Decimal("1"),
-                    close=price + Decimal("0.1"),
+                    open=close / Decimal("1.001"),
+                    high=close * Decimal("1.001"),
+                    low=close / Decimal("1.002"),
+                    close=close,
                     volume=Decimal("10"),
                     quote_volume=Decimal("1000"),
                     trade_count=10,
@@ -41,7 +41,7 @@ def _history_snapshots(count: int = 60) -> tuple[CommittedFrameSnapshot, ...]:
                     taker_buy_quote_volume=Decimal("500"),
                     closed=True,
                 ),
-                source_sequences={"closed_bar": index + 39, "order_book": index + 30},
+                source_sequences={"closed_bar": index + 40, "order_book": index + 30},
                 content_hash=f"{index + 1:064x}",
             )
         )
@@ -83,7 +83,7 @@ def test_feature_staging_is_causal_and_does_not_mutate_committed_history() -> No
     assert features.book_imbalance == pytest.approx(0.5)
     assert integrity.historical_bar_count == 60
     assert integrity.previous_bar_close_at == frame.bar.bar_open_at
-    assert integrity.prior_sequences == {"closed_bar": 98, "order_book": 89}
+    assert integrity.prior_sequences == {"closed_bar": 99, "order_book": 89}
     assert len(integrity.recent_close_returns) == 59
 
 

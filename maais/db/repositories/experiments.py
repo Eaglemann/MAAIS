@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from maais.config.constants import ALL_AGENTS
 from maais.db.models.experiments import AgentVersionModel, ExperimentModel, StrategyVersionModel
 from maais.db.repositories.events import EventRepository
 from maais.domain.enums import ExperimentStatus, StrategyStage
@@ -213,6 +214,34 @@ class ExperimentRepository:
         if model is None:
             raise LookupError(f"experiment not found: {experiment_id}")
         return ExperimentManifest.from_dict(cast(dict[str, object], model.manifest_json))
+
+    async def get_agent_version_ids(
+        self,
+        manifest: ExperimentManifest,
+    ) -> dict[str, UUID]:
+        rows = (
+            await self._session.execute(
+                select(
+                    AgentVersionModel.agent_name,
+                    AgentVersionModel.version,
+                    AgentVersionModel.id,
+                ).where(
+                    AgentVersionModel.agent_name.in_(ALL_AGENTS),
+                )
+            )
+        ).all()
+        by_identity = {(name, version): version_id for name, version, version_id in rows}
+        result: dict[str, UUID] = {}
+        for entry in manifest.agent_versions:
+            version_id = by_identity.get((entry.agent_name, entry.version))
+            if version_id is None:
+                raise LookupError(
+                    f"agent version is not registered: {entry.agent_name}/{entry.version}"
+                )
+            result[entry.agent_name] = version_id
+        if tuple(result) != ALL_AGENTS:
+            raise RuntimeError("registered agent identities differ from manifest ordering")
+        return result
 
     async def fail_active(
         self,

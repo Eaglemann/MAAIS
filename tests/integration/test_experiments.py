@@ -9,6 +9,7 @@ from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
 
+from maais.config.constants import ALL_AGENTS
 from maais.db.models.experiments import AgentVersionModel, ExperimentModel
 from maais.db.models.ledger import DomainEventModel, OutboxEventModel
 from maais.db.repositories.events import OptimisticConcurrencyError
@@ -117,6 +118,18 @@ async def test_create_manifest_projection_and_event_are_atomic(
     async with uow_factory.begin() as uow:
         restored = await uow.experiments.get_manifest(manifest.experiment_id)
     assert restored == manifest
+
+
+async def test_manifest_restores_exact_registered_agent_version_ids(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest = _manifest(schema_revision="0012")
+    async with uow_factory.begin() as uow:
+        await uow.experiments.create(manifest)
+        version_ids = await uow.experiments.get_agent_version_ids(manifest)
+
+    assert tuple(version_ids) == ALL_AGENTS
+    assert all(version_id.int != 0 for version_id in version_ids.values())
 
 
 async def test_lifecycle_transition_does_not_mutate_manifest(
