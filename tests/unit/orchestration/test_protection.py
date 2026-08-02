@@ -56,13 +56,14 @@ def _mark(event_id: str, price: Decimal, observed_at: datetime) -> ObservedMarke
         kind=MarketEventKind.MARK_FUNDING,
         venue_event_at=observed_at - timedelta(milliseconds=2),
         observed_at=observed_at,
-        sequence=int(observed_at.timestamp() * 1000),
-        sequence_not_applicable_reason=None,
+        sequence=None,
+        sequence_not_applicable_reason="binance_mark_stream_has_no_sequence",
         payload=MarkFundingPayload(
             mark_price=price,
             index_price=price,
             funding_rate=Decimal("0.0001"),
             next_funding_at=observed_at + timedelta(hours=8),
+            estimated_settle_price=None,
         ),
     )
 

@@ -39,11 +39,16 @@ class FrameAdmission(StrEnum):
     QUARANTINED = "quarantined"
 
 
+class SequenceRule(StrEnum):
+    CONTIGUOUS = "contiguous"
+    MONOTONIC = "monotonic"
+
+
 @dataclass(frozen=True, slots=True)
 class IntegrityPolicy:
     required_checks: frozenset[IntegrityCheck]
     required_sources: frozenset[str]
-    sequenced_sources: frozenset[str]
+    sequence_rules: Mapping[str, SequenceRule]
     source_max_age: Mapping[str, timedelta]
     max_venue_timestamp_skew: timedelta
     max_venue_clock_drift: timedelta
@@ -76,6 +81,9 @@ class IntegrityPolicy:
             if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
                 raise ValueError(f"{field} must be a positive finite Decimal")
         object.__setattr__(self, "source_max_age", MappingProxyType(dict(self.source_max_age)))
+        if not self.sequence_rules or not set(self.sequence_rules).issubset(self.required_sources):
+            raise ValueError("sequence rules must name required sources")
+        object.__setattr__(self, "sequence_rules", MappingProxyType(dict(self.sequence_rules)))
 
     @classmethod
     def official(cls) -> IntegrityPolicy:
@@ -92,7 +100,10 @@ class IntegrityPolicy:
                     "symbol_state",
                 }
             ),
-            sequenced_sources=frozenset({"closed_bar", "order_book", "mark_funding"}),
+            sequence_rules={
+                "closed_bar": SequenceRule.CONTIGUOUS,
+                "order_book": SequenceRule.MONOTONIC,
+            },
             source_max_age={
                 "closed_bar": timedelta(seconds=1),
                 "order_book": timedelta(seconds=2),
@@ -291,14 +302,27 @@ class MarketIntegrityStateMachine:
     def _sequence(self, context: IntegrityContext) -> IntegrityResult:
         missing: list[str] = []
         bad: list[dict[str, object]] = []
-        for name in sorted(self._policy.sequenced_sources):
+        for name, rule in sorted(self._policy.sequence_rules.items()):
             source = context.frame.source_manifest.get(name)
             if source is None or source.sequence is None:
                 missing.append(name)
                 continue
             previous = context.prior_sequences.get(name)
-            if previous is not None and source.sequence != previous + 1:
-                bad.append({"source": name, "previous": previous, "current": source.sequence})
+            if previous is None:
+                continue
+            contiguous_violation = (
+                rule is SequenceRule.CONTIGUOUS and source.sequence != previous + 1
+            )
+            monotonic_violation = rule is SequenceRule.MONOTONIC and source.sequence <= previous
+            if contiguous_violation or monotonic_violation:
+                bad.append(
+                    {
+                        "source": name,
+                        "rule": rule,
+                        "previous": previous,
+                        "current": source.sequence,
+                    }
+                )
         if missing:
             return _result(
                 IntegrityCheck.SEQUENCE,

@@ -91,6 +91,10 @@ def test_event_rejects_kind_payload_mismatch_and_naive_time() -> None:
     book = OrderBookPayload(
         bids=(PriceLevel(Decimal("100"), Decimal("1")),),
         asks=(PriceLevel(Decimal("101"), Decimal("1")),),
+        published_at=NOW,
+        sequence_start=10,
+        previous_sequence=9,
+        snapshot_sequence=1,
     )
     with pytest.raises(ValueError, match="payload"):
         _identity(MarketEventKind.CLOSED_BAR, book)
@@ -106,6 +110,10 @@ def test_order_book_rejects_crossed_unsorted_and_float_levels() -> None:
         OrderBookPayload(
             bids=(PriceLevel(Decimal("101"), Decimal("1")),),
             asks=(PriceLevel(Decimal("100"), Decimal("1")),),
+            published_at=NOW,
+            sequence_start=10,
+            previous_sequence=9,
+            snapshot_sequence=1,
         )
     with pytest.raises(ValueError, match="descending"):
         OrderBookPayload(
@@ -114,6 +122,10 @@ def test_order_book_rejects_crossed_unsorted_and_float_levels() -> None:
                 PriceLevel(Decimal("100"), Decimal("1")),
             ),
             asks=(PriceLevel(Decimal("101"), Decimal("1")),),
+            published_at=NOW,
+            sequence_start=10,
+            previous_sequence=9,
+            snapshot_sequence=1,
         )
     with pytest.raises(ValueError, match="Decimal"):
         PriceLevel(100.0, Decimal("1"))  # type: ignore[arg-type]

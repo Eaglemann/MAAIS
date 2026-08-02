@@ -33,6 +33,7 @@ class MarketEventKind(StrEnum):
     ORDER_BOOK = "order_book"
     TRADE = "trade"
     MARK_FUNDING = "mark_funding"
+    FUNDING_SETTLEMENT = "funding_settlement"
     REFERENCE_PRICE = "reference_price"
     VENUE_CLOCK = "venue_clock"
     SYMBOL_STATE = "symbol_state"
@@ -121,8 +122,21 @@ class ClosedBarPayload:
 class OrderBookPayload:
     bids: tuple[PriceLevel, ...]
     asks: tuple[PriceLevel, ...]
+    published_at: datetime
+    sequence_start: int
+    previous_sequence: int | None
+    snapshot_sequence: int | None
 
     def __post_init__(self) -> None:
+        _require_utc(self.published_at, "order book published_at")
+        if self.sequence_start < 0:
+            raise ValueError("order book sequence_start must be nonnegative")
+        for value, field in (
+            (self.previous_sequence, "previous_sequence"),
+            (self.snapshot_sequence, "snapshot_sequence"),
+        ):
+            if value is not None and value < 0:
+                raise ValueError(f"order book {field} must be nonnegative")
         if not self.bids or not self.asks:
             raise ValueError("order book requires bid and ask depth")
         if any(left.price <= right.price for left, right in zip(self.bids, self.bids[1:])):
@@ -144,6 +158,10 @@ class OrderBookPayload:
         return {
             "bids": [item.to_dict() for item in self.bids],
             "asks": [item.to_dict() for item in self.asks],
+            "published_at": self.published_at,
+            "sequence_start": self.sequence_start,
+            "previous_sequence": self.previous_sequence,
+            "snapshot_sequence": self.snapshot_sequence,
         }
 
 
@@ -171,12 +189,19 @@ class MarkFundingPayload:
     index_price: Decimal
     funding_rate: Decimal
     next_funding_at: datetime
+    estimated_settle_price: Decimal | None
 
     def __post_init__(self) -> None:
         _require_decimal(self.mark_price, "mark_price", positive=True)
         _require_decimal(self.index_price, "index_price", positive=True)
         _require_decimal(self.funding_rate, "funding_rate")
         _require_utc(self.next_funding_at, "next_funding_at")
+        if self.estimated_settle_price is not None:
+            _require_decimal(
+                self.estimated_settle_price,
+                "estimated_settle_price",
+                nonnegative=True,
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -184,6 +209,30 @@ class MarkFundingPayload:
             "index_price": self.index_price,
             "funding_rate": self.funding_rate,
             "next_funding_at": self.next_funding_at,
+            "estimated_settle_price": self.estimated_settle_price,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FundingSettlementPayload:
+    funding_at: datetime
+    funding_rate: Decimal
+    mark_price: Decimal
+    rate_type: str
+
+    def __post_init__(self) -> None:
+        _require_utc(self.funding_at, "funding_at")
+        _require_decimal(self.funding_rate, "funding_rate")
+        _require_decimal(self.mark_price, "funding mark_price", positive=True)
+        if self.rate_type not in {"Regular", "Special"}:
+            raise ValueError("funding rate_type must be Regular or Special")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "funding_at": self.funding_at,
+            "funding_rate": self.funding_rate,
+            "mark_price": self.mark_price,
+            "rate_type": self.rate_type,
         }
 
 
@@ -234,6 +283,7 @@ MarketPayload = (
     | OrderBookPayload
     | TradePayload
     | MarkFundingPayload
+    | FundingSettlementPayload
     | ReferencePricePayload
     | VenueClockPayload
     | SymbolStatePayload
@@ -244,6 +294,7 @@ _PAYLOAD_TYPES: dict[MarketEventKind, type[object]] = {
     MarketEventKind.ORDER_BOOK: OrderBookPayload,
     MarketEventKind.TRADE: TradePayload,
     MarketEventKind.MARK_FUNDING: MarkFundingPayload,
+    MarketEventKind.FUNDING_SETTLEMENT: FundingSettlementPayload,
     MarketEventKind.REFERENCE_PRICE: ReferencePricePayload,
     MarketEventKind.VENUE_CLOCK: VenueClockPayload,
     MarketEventKind.SYMBOL_STATE: SymbolStatePayload,

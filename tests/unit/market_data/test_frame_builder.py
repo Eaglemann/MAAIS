@@ -28,7 +28,7 @@ def _event(
     payload: object,
     *,
     observed_offset_ms: int,
-    sequence: int,
+    sequence: int | None,
     venue: str = "binance_futures",
     stream: str | None = None,
 ) -> ObservedMarketEvent:
@@ -42,7 +42,9 @@ def _event(
         venue_event_at=observed_at - timedelta(milliseconds=1),
         observed_at=observed_at,
         sequence=sequence,
-        sequence_not_applicable_reason=None,
+        sequence_not_applicable_reason=(
+            "source_contract_has_no_sequence" if sequence is None else None
+        ),
         payload=payload,
     )
 
@@ -79,6 +81,10 @@ def _book(event_id: str, offset: int, bid: str, ask: str, sequence: int) -> Obse
         OrderBookPayload(
             bids=(PriceLevel(Decimal(bid), Decimal("2")),),
             asks=(PriceLevel(Decimal(ask), Decimal("2")),),
+            published_at=NOW,
+            sequence_start=sequence,
+            previous_sequence=sequence - 1,
+            snapshot_sequence=sequence - 10,
         ),
         observed_offset_ms=offset,
         sequence=sequence,
@@ -98,9 +104,10 @@ def _inputs() -> tuple[ObservedMarketEvent, ...]:
                 index_price=Decimal("100.4"),
                 funding_rate=Decimal("0.0001"),
                 next_funding_at=NOW + timedelta(hours=4),
+                estimated_settle_price=None,
             ),
             observed_offset_ms=95,
-            sequence=95,
+            sequence=None,
             stream="mark_price",
         ),
         _event(

@@ -26,7 +26,7 @@ def _context(frame, **changes) -> IntegrityContext:
     prior_sequences = {
         name: source.sequence - 1
         for name, source in frame.source_manifest.items()
-        if source.sequence is not None and name in {"closed_bar", "order_book", "mark_funding"}
+        if source.sequence is not None and name in {"closed_bar", "order_book"}
     }
     base = IntegrityContext(
         frame=frame,
@@ -130,7 +130,6 @@ def test_clock_drift_sequence_regression_and_stale_book_each_fail_closed() -> No
     prior = {
         "closed_bar": frame.source_manifest["closed_bar"].sequence,
         "order_book": frame.source_manifest["order_book"].sequence,
-        "mark_funding": frame.source_manifest["mark_funding"].sequence,
     }
     assessment = MarketIntegrityStateMachine(IntegrityPolicy.official()).evaluate(
         _context(frame, prior_sequences=prior)
@@ -140,6 +139,18 @@ def test_clock_drift_sequence_regression_and_stale_book_each_fail_closed() -> No
     assert _result(assessment, IntegrityCheck.SEQUENCE).status is QualityStatus.FAILED
     assert _result(assessment, IntegrityCheck.STALE_BOOK).status is QualityStatus.FAILED
     assert assessment.admission is FrameAdmission.QUARANTINED
+
+
+def test_order_book_update_ranges_are_monotonic_not_artificially_contiguous() -> None:
+    frame = _frame()
+    current = frame.source_manifest["order_book"].sequence
+    assert current is not None
+
+    assessment = MarketIntegrityStateMachine(IntegrityPolicy.official()).evaluate(
+        _context(frame, prior_sequences={"closed_bar": 99, "order_book": current - 10})
+    )
+
+    assert _result(assessment, IntegrityCheck.SEQUENCE).status is QualityStatus.PASSED
 
 
 def test_history_and_outlier_warmup_are_blocking_not_applicable() -> None:
