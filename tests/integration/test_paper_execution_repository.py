@@ -201,6 +201,24 @@ async def test_execution_account_and_events_commit_atomically_and_restore(
     assert restored.reconcile().ok
 
 
+async def test_open_position_restores_original_entry_proposal_lineage(
+    uow_factory: UnitOfWork,
+) -> None:
+    record = await _record(uow_factory)
+    assert record.account is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(record)
+    position = record.account.position(record.order.symbol)
+
+    async with uow_factory.begin() as uow:
+        proposal_id = await uow.paper_execution.load_position_entry_proposal_id(
+            record.account.experiment_id,
+            position.position_id,
+        )
+
+    assert proposal_id == record.order.proposal_id
+
+
 async def test_identical_execution_retry_is_idempotent_and_changed_command_conflicts(
     uow_factory: UnitOfWork,
 ) -> None:

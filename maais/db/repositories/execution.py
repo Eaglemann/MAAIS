@@ -415,6 +415,33 @@ class PaperExecutionRepository:
             )
         return tuple(result)
 
+    async def load_position_entry_proposal_id(
+        self,
+        experiment_id: UUID,
+        position_id: UUID,
+    ) -> UUID:
+        """Restore the proposal that originally opened an active paper position."""
+
+        proposal_id = await self._session.scalar(
+            select(OrderIntentModel.proposal_id)
+            .select_from(PositionLotModel)
+            .join(FillModel, FillModel.id == PositionLotModel.opening_fill_id)
+            .join(OrderIntentModel, OrderIntentModel.id == FillModel.order_intent_id)
+            .join(PositionModel, PositionModel.id == PositionLotModel.position_id)
+            .where(
+                PositionModel.id == position_id,
+                PositionModel.experiment_id == experiment_id,
+                PositionModel.status == "open",
+                OrderIntentModel.experiment_id == experiment_id,
+                OrderIntentModel.position_effect == PositionEffect.OPEN.value,
+            )
+            .order_by(PositionLotModel.opened_at, PositionLotModel.id)
+            .limit(1)
+        )
+        if proposal_id is None:
+            raise LookupError("open position has no persisted entry proposal lineage")
+        return proposal_id
+
     async def load_open_exit_plans(self, experiment_id: UUID) -> tuple[ExitPlan, ...]:
         rows = (
             await self._session.scalars(
