@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from maais.db.models.operations import WorkerCheckpointModel, WorkerLeaseModel
+from maais.db.repositories.controls import TradingControlRepository
 from maais.db.repositories.counterfactuals import (
     CounterfactualRecordResult,
     CounterfactualRepository,
@@ -122,6 +123,7 @@ class OrchestrationRepository:
         self._paper_execution = PaperExecutionRepository(session, events)
         self._incidents = IncidentRepository(session, events)
         self._experiments = ExperimentRepository(session, events)
+        self._controls = TradingControlRepository(session, events)
 
     async def record_outcome(
         self,
@@ -217,12 +219,18 @@ class OrchestrationRepository:
         if outcome.requires_persistent_halt:
             if outcome.incident is None:
                 raise ValueError("persistent protection halt requires an incident")
+            halt_reason = (
+                f"position_protection:{outcome.incident.reason_code}:{outcome.incident.incident_id}"
+            )
+            await self._controls.halt(
+                manifest.experiment_id,
+                reason=halt_reason,
+                halted_at=outcome.incident.detected_at,
+                actor="position_protection",
+            )
             experiment_halted = await self._experiments.fail_active(
                 manifest,
-                reason=(
-                    f"position_protection:{outcome.incident.reason_code}:"
-                    f"{outcome.incident.incident_id}"
-                ),
+                reason=halt_reason,
                 failed_at=outcome.incident.detected_at,
             )
         return ProtectionPersistResult(

@@ -425,6 +425,12 @@ async def test_unfillable_protective_exit_persists_trigger_incident_and_experime
         with_entry_context=True,
     )
     await _start_experiment(uow_factory, command)
+    async with uow_factory.begin() as uow:
+        await uow.controls.initialize(
+            command.manifest.experiment_id,
+            initialized_at=command.evaluated_at,
+            actor="paper_worker",
+        )
     entry = await _execution_service(_FeatureComputer(_features()), Direction.LONG).process(command)
     assert entry.execution is not None
     assert entry.execution.account is not None
@@ -475,6 +481,7 @@ async def test_unfillable_protective_exit_persists_trigger_incident_and_experime
             ExperimentModel,
             command.manifest.experiment_id,
         )
+        control = await uow.controls.current(command.manifest.experiment_id)
         consistency = await verify_ledger_consistency(uow.session)
 
     assert first.account_state_created
@@ -488,6 +495,11 @@ async def test_unfillable_protective_exit_persists_trigger_incident_and_experime
     assert plans[0].pending_intent().reason.value == "stop"
     assert incidents == (protection.incident,)
     assert experiment is not None and experiment.status == "failed"
+    assert control.kill_switch_active
+    assert control.reason == (
+        f"position_protection:{protection.incident.reason_code}:{protection.incident.incident_id}"
+    )
+    assert control.changed_by == "position_protection"
     assert consistency.ok
 
 
