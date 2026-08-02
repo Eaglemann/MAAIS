@@ -82,6 +82,30 @@ def _live_manifest(**overrides):
             "primary_spot": "binance_spot",
             "secondary_venue": "bybit_spot",
         },
+        "data_versions": {
+            "input_kind": "public_live_observations",
+            "decision_timeframe": "1m",
+            "market_frame_schema": "v1",
+            "event_ledger_schema": "v1",
+            "futures_contract": "binance_usdm_public_v1",
+            "primary_spot_contract": "binance_spot_public_v1",
+            "secondary_spot_contract": "bybit_spot_public_v1",
+            "golden_replay_sha256": (
+                "4d2dec967a8fd98ba04616b834c1b247442af3b168409ba6d45bc24833e6b5cc"
+            ),
+        },
+        "fill_policy": {
+            "broker": "local_paper",
+            "entry_order_type": "market",
+            "exit_order_type": "market",
+            "book_selection": "first_observed_strictly_after_eligibility",
+            "depth_model": "visible_depth_walk_full_or_reject",
+            "partial_fill_policy": "market_full_or_reject",
+            "liquidity_role": "taker",
+            "stale_book_policy": "reject",
+            "insufficient_depth_policy": "reject",
+            "slippage_model": "spread_plus_depth_plus_latency",
+        },
     }
     values.update(overrides)
     return _manifest(**values)
@@ -179,6 +203,8 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
             },
             "secondary_venue",
         ),
+        ({"data_versions": {"market_frame_schema": "v0"}}, "data versions"),
+        ({"fill_policy": {"broker": "exchange"}}, "fill policy"),
     ),
 )
 def test_live_policy_fails_closed_on_missing_or_unsafe_values(changes, message) -> None:

@@ -10,6 +10,7 @@ from types import MappingProxyType
 
 from maais.config.fees import BINANCE_FEE_SCHEDULE_URL
 from maais.config.modes import RunMode
+from maais.config.paper_candidate import OFFICIAL_DATA_VERSIONS, OFFICIAL_FILL_POLICY
 from maais.domain.enums import PaperOrderType
 from maais.execution.paper.filters import ExchangeFilterSnapshot
 from maais.experiments.manifest import ExperimentManifest
@@ -141,11 +142,21 @@ class LivePaperPolicy:
     strategy_parameters: Mapping[str, object]
     exchange_filter_hashes: Mapping[str, str]
     exchange_filters: Mapping[str, ExchangeFilterSnapshot]
+    data_versions: Mapping[str, object]
+    fill_policy: Mapping[str, object]
 
     @classmethod
     def from_manifest(cls, manifest: ExperimentManifest) -> LivePaperPolicy:
         if manifest.mode is not RunMode.PAPER_LIVE:
             raise RuntimePolicyError("live paper runtime requires mode=paper_live")
+        if manifest.manifest_schema_version != 2:
+            raise RuntimePolicyError("live paper runtime requires manifest schema version 2")
+        data_versions = dict(manifest.data_versions)
+        if data_versions != dict(OFFICIAL_DATA_VERSIONS):
+            raise RuntimePolicyError("official data versions differ from the frozen candidate")
+        fill_policy = dict(manifest.fill_policy)
+        if fill_policy != dict(OFFICIAL_FILL_POLICY):
+            raise RuntimePolicyError("official fill policy differs from the local paper broker")
 
         risk = _mapping(manifest.configuration, "risk")
         leverage = _integer(risk, "leverage")
@@ -290,6 +301,8 @@ class LivePaperPolicy:
             strategy_parameters=MappingProxyType(dict(strategy_parameters)),
             exchange_filter_hashes=MappingProxyType(filter_hashes),
             exchange_filters=MappingProxyType(filters),
+            data_versions=MappingProxyType(data_versions),
+            fill_policy=MappingProxyType(fill_policy),
         )
 
     def integrity_policy(self) -> IntegrityPolicy:

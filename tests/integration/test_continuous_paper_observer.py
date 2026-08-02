@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
+from maais.config.paper_candidate import OFFICIAL_DATA_VERSIONS, OFFICIAL_FILL_POLICY
 from maais.db.models.accounts import ExitPlanModel, FundingEntryModel
 from maais.db.models.execution import FillModel, OrderIntentModel
 from maais.db.unit_of_work import UnitOfWork
@@ -65,6 +66,8 @@ def _policy(command) -> LivePaperPolicy:
         strategy_parameters={"timeframe": "1m"},
         exchange_filter_hashes={"BTCUSDT": command.entry_context.exchange_filters.content_hash},
         exchange_filters={"BTCUSDT": command.entry_context.exchange_filters},
+        data_versions=OFFICIAL_DATA_VERSIONS,
+        fill_policy=OFFICIAL_FILL_POLICY,
     )
 
 

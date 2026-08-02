@@ -61,6 +61,9 @@ def _manifest(**overrides: object) -> ExperimentManifest:
         "funding_policy": {"source": "observed"},
         "clock_policy": {"latency_ms": 250},
         "market_data_sources": {"primary": "binance", "reference": "coinbase"},
+        "data_versions": {"market_frame_schema": "v1"},
+        "fill_policy": {"broker": "local_paper"},
+        "manifest_schema_version": 2,
     }
     values.update(overrides)
     return ExperimentManifest(**values)  # type: ignore[arg-type]
@@ -113,3 +116,25 @@ def test_manifest_round_trip_preserves_identity() -> None:
 
     assert restored == manifest
     assert restored.manifest_hash == manifest.manifest_hash
+
+
+def test_current_manifest_requires_explicit_data_and_fill_policy() -> None:
+    with pytest.raises(ValueError, match="data_versions"):
+        _manifest(data_versions={})
+    with pytest.raises(ValueError, match="fill_policy"):
+        _manifest(fill_policy={})
+
+
+def test_legacy_manifest_round_trip_preserves_its_original_identity() -> None:
+    legacy = _manifest(
+        manifest_schema_version=1,
+        data_versions={},
+        fill_policy={},
+    )
+    serialized = legacy.to_dict()
+
+    assert "data_versions" not in serialized
+    assert "fill_policy" not in serialized
+    restored = ExperimentManifest.from_dict(serialized)
+    assert restored == legacy
+    assert restored.manifest_hash == legacy.manifest_hash

@@ -89,7 +89,9 @@ class ExperimentManifest:
     funding_policy: Mapping[str, JsonValue]
     clock_policy: Mapping[str, JsonValue]
     market_data_sources: Mapping[str, JsonValue]
-    manifest_schema_version: int = 1
+    data_versions: Mapping[str, JsonValue]
+    fill_policy: Mapping[str, JsonValue]
+    manifest_schema_version: int = 2
 
     def __post_init__(self) -> None:
         if self.experiment_id.int == 0:
@@ -108,7 +110,7 @@ class ExperimentManifest:
         _require_hash("lock_hash", self.lock_hash)
         if not self.schema_revision.strip():
             raise ValueError("schema_revision cannot be empty")
-        if self.manifest_schema_version != 1:
+        if self.manifest_schema_version not in (1, 2):
             raise ValueError("unsupported manifest_schema_version")
         if not self.symbols or len(set(self.symbols)) != len(self.symbols):
             raise ValueError("symbols must be non-empty and unique")
@@ -135,12 +137,20 @@ class ExperimentManifest:
             "funding_policy",
             "clock_policy",
             "market_data_sources",
+            "data_versions",
+            "fill_policy",
         ):
             current = cast(Mapping[str, object], getattr(self, field_name))
             frozen = _freeze_mapping(field_name, current)
-            if field_name != "configuration" and not frozen:
+            optional_for_legacy = self.manifest_schema_version == 1 and field_name in {
+                "data_versions",
+                "fill_policy",
+            }
+            if field_name != "configuration" and not frozen and not optional_for_legacy:
                 raise ValueError(f"{field_name} cannot be empty")
             object.__setattr__(self, field_name, frozen)
+        if self.manifest_schema_version == 1 and (self.data_versions or self.fill_policy):
+            raise ValueError("legacy manifest schema cannot contain v2 data or fill policy")
 
     @property
     def config_hash(self) -> str:
@@ -151,30 +161,32 @@ class ExperimentManifest:
         return content_hash(self.to_dict())
 
     def to_dict(self) -> dict[str, object]:
-        result = to_json_data(
-            {
-                "manifest_schema_version": self.manifest_schema_version,
-                "experiment_id": self.experiment_id,
-                "name": self.name,
-                "mode": self.mode,
-                "initial_capital": self.initial_capital,
-                "currency": self.currency,
-                "created_at": self.created_at,
-                "git_sha": self.git_sha,
-                "worktree_hash": self.worktree_hash,
-                "lock_hash": self.lock_hash,
-                "schema_revision": self.schema_revision,
-                "configuration": self.configuration,
-                "symbols": self.symbols,
-                "exchange_metadata": self.exchange_metadata,
-                "component_versions": self.component_versions,
-                "agent_versions": [entry.to_dict() for entry in self.agent_versions],
-                "fee_policy": self.fee_policy,
-                "funding_policy": self.funding_policy,
-                "clock_policy": self.clock_policy,
-                "market_data_sources": self.market_data_sources,
-            }
-        )
+        values: dict[str, object] = {
+            "manifest_schema_version": self.manifest_schema_version,
+            "experiment_id": self.experiment_id,
+            "name": self.name,
+            "mode": self.mode,
+            "initial_capital": self.initial_capital,
+            "currency": self.currency,
+            "created_at": self.created_at,
+            "git_sha": self.git_sha,
+            "worktree_hash": self.worktree_hash,
+            "lock_hash": self.lock_hash,
+            "schema_revision": self.schema_revision,
+            "configuration": self.configuration,
+            "symbols": self.symbols,
+            "exchange_metadata": self.exchange_metadata,
+            "component_versions": self.component_versions,
+            "agent_versions": [entry.to_dict() for entry in self.agent_versions],
+            "fee_policy": self.fee_policy,
+            "funding_policy": self.funding_policy,
+            "clock_policy": self.clock_policy,
+            "market_data_sources": self.market_data_sources,
+        }
+        if self.manifest_schema_version >= 2:
+            values["data_versions"] = self.data_versions
+            values["fill_policy"] = self.fill_policy
+        result = to_json_data(values)
         if not isinstance(result, dict):
             raise TypeError("normalized manifest must be an object")
         return cast(dict[str, object], result)
@@ -209,6 +221,7 @@ class ExperimentManifest:
                 raise TypeError(f"{name} must be an object")
             return cast(Mapping[str, JsonValue], item)
 
+        manifest_schema_version = int(str(value["manifest_schema_version"]))
         raw_created_at = str(value["created_at"]).replace("Z", "+00:00")
         symbols = value.get("symbols")
         if not isinstance(symbols, list):
@@ -235,7 +248,9 @@ class ExperimentManifest:
             funding_policy=mapping("funding_policy"),
             clock_policy=mapping("clock_policy"),
             market_data_sources=mapping("market_data_sources"),
-            manifest_schema_version=int(str(value["manifest_schema_version"])),
+            data_versions=(mapping("data_versions") if "data_versions" in value else {}),
+            fill_policy=(mapping("fill_policy") if "fill_policy" in value else {}),
+            manifest_schema_version=manifest_schema_version,
         )
 
 

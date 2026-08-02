@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
+from maais.config.paper_candidate import GOLDEN_PAPER_REPLAY_SHA256
 from maais.domain.enums import Direction, GateType, PaperOrderSide, PaperOrderType, PositionEffect
 from maais.domain.json import canonical_json_bytes
 from maais.execution.paper.account import AccountState
@@ -19,9 +20,6 @@ from maais.research.counterfactuals import CounterfactualState
 
 NOW = datetime(2026, 8, 2, 12, tzinfo=timezone.utc)
 KEY = b"maais frozen paper replay signing key 0001"
-EXPECTED_SHA256 = (
-    "4d2dec967a8fd98ba04616b834c1b247442af3b168409ba6d45bc24833e6b5cc"  # pragma: allowlist secret
-)
 
 
 def _book(
@@ -353,4 +351,4 @@ def test_golden_paper_sequence_is_byte_identical_and_matches_pinned_digest() -> 
     second = _run_sequence()
 
     assert first == second
-    assert hashlib.sha256(first).hexdigest() == EXPECTED_SHA256
+    assert hashlib.sha256(first).hexdigest() == GOLDEN_PAPER_REPLAY_SHA256

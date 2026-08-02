@@ -54,6 +54,11 @@ def test_prepare_live_manifest_pins_complete_runtime_identity() -> None:
     assert policy.strategy_parameters["timeframe"] == "1m"
     assert policy.maker_fee_rate == Decimal("0.0002")
     assert policy.taker_fee_rate == Decimal("0.0005")
+    assert manifest.manifest_schema_version == 2
+    assert policy.fill_policy["broker"] == "local_paper"
+    assert policy.fill_policy["depth_model"] == "visible_depth_walk_full_or_reject"
+    assert policy.data_versions["market_frame_schema"] == "v1"
+    assert len(str(policy.data_versions["golden_replay_sha256"])) == 64
     assert manifest.exchange_metadata["primary_mapping_hash"] == "4" * 64
     assert manifest.exchange_metadata["secondary_mapping_hash"] == "5" * 64
     assert require_candidate_identity(manifest) == manifest
