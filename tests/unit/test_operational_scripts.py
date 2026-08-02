@@ -24,3 +24,13 @@ def test_recovery_script_is_fail_closed_and_audited() -> None:
     assert "lease_epoch" in recovery_script
     assert "recovery-evidence" in recovery_script
     assert "ENVIRONMENT=production" in recovery_script
+
+
+def test_daily_operations_atomically_record_the_immutable_report_bundle() -> None:
+    daily_script = (REPOSITORY_ROOT / "scripts" / "daily-paper-ops.sh").read_text()
+
+    assert 'current_state="${repository_root}/artifacts/run-state/current.json"' in daily_script
+    assert "report_directory=\"$(jq -er '.directory'" in daily_script
+    assert "report_id=\"$(jq -er '.report_id'" in daily_script
+    assert ".daily_reports" in daily_script
+    assert 'mv "${temporary_state}" "${current_state}"' in daily_script

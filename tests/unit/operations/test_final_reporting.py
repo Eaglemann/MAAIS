@@ -8,6 +8,7 @@ import pytest
 
 from maais.operations.final_reporting import (
     build_final_report_from_bundles,
+    verify_daily_report_bundle,
     write_final_report_bundle,
 )
 from maais.operations.reporting import write_daily_report_bundle
@@ -163,6 +164,24 @@ def _write_week(directory: Path, start_date: date) -> None:
             _daily_report(start_date + timedelta(days=index), index),
             directory,
         )
+
+
+def test_daily_report_bundle_exposes_verified_soak_evidence(tmp_path: Path) -> None:
+    report_date = date(2026, 8, 3)
+    paths = write_daily_report_bundle(_daily_report(report_date, 0), tmp_path)
+
+    evidence = verify_daily_report_bundle(
+        paths.directory,
+        expected_date=report_date,
+        experiment_id=EXPERIMENT_ID,
+        generated_at=datetime(2026, 8, 3, 22, 6, tzinfo=timezone.utc),
+    )
+
+    assert evidence["passed"] is True
+    assert evidence["report_date"] == "2026-08-03"
+    assert evidence["experiment_id"] == str(EXPERIMENT_ID)
+    assert evidence["decision_cycles"] == 10
+    assert evidence["ledger_ok"] is True
 
 
 def test_final_report_verifies_and_aggregates_exactly_seven_contiguous_days(

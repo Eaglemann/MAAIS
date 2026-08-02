@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -35,6 +36,12 @@ def _inputs() -> dict[str, object]:
         symbol: tuple(first_cycle + timedelta(minutes=index) for index in range(1440))
         for symbol in manifest.symbols
     }
+    report_cycles = sum(
+        1
+        for values in decision_times.values()
+        for cycle_at in values
+        if cycle_at.astimezone(ZoneInfo("Europe/Berlin")).date().isoformat() == "2026-08-02"
+    )
     return {
         "manifest": manifest,
         "repository": repository,
@@ -76,6 +83,16 @@ def _inputs() -> dict[str, object]:
             "warning_lines": 1,
             "errors": [],
         },
+        "daily_report_evidence": {
+            "passed": True,
+            "report_date": "2026-08-02",
+            "experiment_id": str(manifest.experiment_id),
+            "report_id": "a" * 64,
+            "complete_day": True,
+            "ledger_ok": True,
+            "ledger_error_count": 0,
+            "decision_cycles": report_cycles,
+        },
         "generated_at": NOW,
         "minimum_duration": timedelta(hours=24),
         "maximum_lag": timedelta(minutes=3),
@@ -101,6 +118,22 @@ def test_soak_safety_uses_frozen_runtime_evidence_not_invoking_shell_mode() -> N
 
     assert checks["paper_only_safety"]["passed"] is True
     assert report["passed"] is True
+
+
+def test_soak_readiness_requires_verified_daily_report_reconciliation() -> None:
+    inputs = _inputs()
+    inputs["daily_report_evidence"] = {
+        "passed": False,
+        "report_date": "2026-08-02",
+        "error": "no recorded complete daily report",
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = {check["name"]: check for check in report["checks"]}  # type: ignore[union-attr]
+
+    assert report["passed"] is False
+    assert checks["daily_report_reconciliation"]["passed"] is False
+    assert "no recorded complete daily report" in checks["daily_report_reconciliation"]["detail"]
 
 
 def test_soak_health_restores_normalized_runtime_timestamps() -> None:

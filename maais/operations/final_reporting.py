@@ -240,6 +240,39 @@ def _verify_daily_report(
         )
 
 
+def verify_daily_report_bundle(
+    directory: Path,
+    *,
+    expected_date: date,
+    experiment_id: UUID,
+    generated_at: datetime,
+) -> dict[str, object]:
+    """Verify one immutable complete-day bundle and expose soak-gate evidence."""
+    report, bundle_evidence = _verify_bundle(directory)
+    _verify_daily_report(
+        report,
+        expected_date=expected_date,
+        experiment_id=experiment_id,
+        generated_at=generated_at,
+    )
+    reconciliation = _object(report.get("reconciliation"), "daily report reconciliation")
+    decisions = _object(report.get("decisions"), "daily report decisions")
+    return {
+        **bundle_evidence,
+        "passed": True,
+        "directory": str(directory.resolve()),
+        "report_date": expected_date.isoformat(),
+        "experiment_id": str(experiment_id),
+        "report_id": report.get("report_id"),
+        "complete_day": report.get("complete_day"),
+        "ledger_ok": reconciliation.get("ledger_ok"),
+        "ledger_error_count": reconciliation.get("ledger_error_count"),
+        "authoritative_hash": reconciliation.get("authoritative_hash"),
+        "report_hash": reconciliation.get("report_hash"),
+        "decision_cycles": _integer(decisions.get("total"), "decisions.total"),
+    }
+
+
 def _same_identity(first: Mapping[str, object], candidate: Mapping[str, object]) -> bool:
     return all(first.get(name) == candidate.get(name) for name in _EXPERIMENT_IDENTITY)
 

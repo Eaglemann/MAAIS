@@ -53,6 +53,33 @@ def test_candidate_preflight_passes_only_when_every_gate_matches() -> None:
     assert report["safety"] == {"paper_trading_only": True, "live_money": False}
 
 
+def test_candidate_preflight_rejects_manifest_that_runtime_would_reject() -> None:
+    manifest = _live_manifest(schema_revision="0015", worktree_hash=None)
+    manifest = replace(
+        manifest,
+        fee_policy={"maker": "0.0002", "taker": "0.0005"},
+    )
+
+    report = evaluate_candidate_preflight(
+        manifest=manifest,
+        repository=_repository(manifest),
+        settings=Settings(run_mode=RunMode.PAPER_LIVE),
+        database_name="maais",
+        database_schema_revision="0015",
+        stored_manifest_hash=None,
+        ledger={"ok": True, "error_count": 0, "errors": []},
+        restore_verification=_restore_verification(),
+        dashboard_built=True,
+        free_disk_bytes=10 * 1024**3,
+        minimum_free_bytes=5 * 1024**3,
+    )
+
+    runtime_check = next(check for check in report["checks"] if check["name"] == "runtime_policy")
+    assert report["passed"] is False
+    assert runtime_check["passed"] is False
+    assert "venue" in runtime_check["detail"]
+
+
 def test_candidate_preflight_explains_all_failed_gates() -> None:
     manifest = _live_manifest(schema_revision="0015", worktree_hash=None)
     repository = replace(_repository(manifest), worktree_hash="f" * 64)

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -27,12 +28,18 @@ from maais.domain.json import content_hash, to_json_data
 from maais.experiments.manifest import ExperimentManifest
 from maais.experiments.prepare import RepositoryIdentity, capture_repository_identity
 from maais.live import load_manifest_file
+from maais.operations.final_reporting import (
+    FinalReportValidationError,
+    verify_daily_report_bundle,
+)
 from maais.operations.health import evaluate_experiment_health
+from maais.operations.reporting import berlin_daily_window
 from maais.operations.verification import ledger_consistency_payload
 
 UTC = timezone.utc
 SOAK_DURATION = timedelta(hours=24)
 SOAK_READINESS_SCHEMA_VERSION = 1
+BERLIN = ZoneInfo("Europe/Berlin")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +202,7 @@ def evaluate_soak_readiness(
     required_quality_failures: int,
     unsafe_quality_admissions: int,
     log_audit: Mapping[str, object],
+    daily_report_evidence: Mapping[str, object],
     generated_at: datetime,
     minimum_duration: timedelta = SOAK_DURATION,
     maximum_lag: timedelta = timedelta(seconds=180),
@@ -275,6 +283,35 @@ def evaluate_soak_readiness(
         and log_audit.get("invalid_lines") == 0
         and log_audit.get("error_lines") == 0
     )
+    expected_report_date = started_at.astimezone(BERLIN).date()
+    expected_report_window = berlin_daily_window(expected_report_date)
+    authoritative_report_cycles = sum(
+        1
+        for values in decision_times.values()
+        for cycle_at in values
+        if expected_report_window.start_utc <= cycle_at < expected_report_window.end_utc
+    )
+    reported_decision_cycles = daily_report_evidence.get("decision_cycles")
+    daily_report_passed = (
+        daily_report_evidence.get("passed") is True
+        and daily_report_evidence.get("report_date") == expected_report_date.isoformat()
+        and daily_report_evidence.get("experiment_id") == str(manifest.experiment_id)
+        and daily_report_evidence.get("complete_day") is True
+        and daily_report_evidence.get("ledger_ok") is True
+        and daily_report_evidence.get("ledger_error_count") == 0
+        and reported_decision_cycles == authoritative_report_cycles
+    )
+    daily_report_error = daily_report_evidence.get("error")
+    daily_report_detail = (
+        str(daily_report_error)
+        if daily_report_error
+        else (
+            f"date={expected_report_date.isoformat()} "
+            f"reported_cycles={reported_decision_cycles} "
+            f"authoritative_cycles={authoritative_report_cycles} "
+            f"ledger_ok={daily_report_evidence.get('ledger_ok')}"
+        )
+    )
     checks = [
         _check(
             "paper_only_safety",
@@ -331,6 +368,11 @@ def evaluate_soak_readiness(
             f"files={log_audit.get('files')} invalid={log_audit.get('invalid_lines')} "
             f"errors={log_audit.get('error_lines')}",
         ),
+        _check(
+            "daily_report_reconciliation",
+            daily_report_passed,
+            daily_report_detail,
+        ),
     ]
     passed = all(check["passed"] is True for check in checks)
     report: dict[str, object] = {
@@ -363,6 +405,7 @@ def evaluate_soak_readiness(
         "required_quality_failures": required_quality_failures,
         "unsafe_quality_admissions": unsafe_quality_admissions,
         "log_audit": dict(log_audit),
+        "daily_report_evidence": dict(daily_report_evidence),
         "preflight": dict(preflight),
         "run_state": dict(run_state),
     }
@@ -677,6 +720,49 @@ async def build_configured_soak_readiness(
             state_path.parent / "logs" / f"mission-control-{suffix}.log",
         )
     )
+    started_at = _parse_utc(run_state.get("started_at"), "run state started_at")
+    expected_report_date = started_at.astimezone(BERLIN).date()
+    daily_entries = run_state.get("daily_reports")
+    matching_entries = (
+        [
+            entry
+            for entry in daily_entries
+            if isinstance(entry, dict)
+            and entry.get("report_date") == expected_report_date.isoformat()
+        ]
+        if isinstance(daily_entries, list)
+        else []
+    )
+    if len(matching_entries) != 1:
+        daily_report_evidence: dict[str, object] = {
+            "passed": False,
+            "report_date": expected_report_date.isoformat(),
+            "experiment_id": str(experiment_id),
+            "error": (
+                "expected exactly one recorded complete daily report for "
+                f"{expected_report_date.isoformat()}, found {len(matching_entries)}"
+            ),
+        }
+    else:
+        entry = matching_entries[0]
+        try:
+            daily_report_evidence = verify_daily_report_bundle(
+                Path(str(entry.get("directory", ""))),
+                expected_date=expected_report_date,
+                experiment_id=experiment_id,
+                generated_at=generated_at,
+            )
+            if entry.get("report_id") != daily_report_evidence.get("report_id"):
+                raise FinalReportValidationError(
+                    "recorded daily report ID differs from the immutable bundle"
+                )
+        except (FinalReportValidationError, OSError, ValueError) as exc:
+            daily_report_evidence = {
+                "passed": False,
+                "report_date": expected_report_date.isoformat(),
+                "experiment_id": str(experiment_id),
+                "error": str(exc),
+            }
     return evaluate_soak_readiness(
         manifest=manifest,
         repository=repository,
@@ -690,6 +776,7 @@ async def build_configured_soak_readiness(
         required_quality_failures=required_quality_failures,
         unsafe_quality_admissions=unsafe_quality_admissions,
         log_audit=logs,
+        daily_report_evidence=daily_report_evidence,
         generated_at=generated_at,
         maximum_lag=maximum_lag,
     )

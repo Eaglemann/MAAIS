@@ -18,6 +18,7 @@ from maais.db.models.experiments import ExperimentModel
 from maais.db.replay import verify_ledger_consistency
 from maais.experiments.manifest import ExperimentManifest
 from maais.experiments.prepare import RepositoryIdentity, capture_repository_identity
+from maais.experiments.runtime_policy import LivePaperPolicy, RuntimePolicyError
 from maais.live import load_manifest_file
 from maais.operations.verification import ledger_consistency_payload
 
@@ -43,6 +44,12 @@ def evaluate_candidate_preflight(
     minimum_free_bytes: int,
 ) -> dict[str, object]:
     """Evaluate every local, identity, safety, and recovery prerequisite."""
+    runtime_policy_error: str | None = None
+    try:
+        runtime_policy = LivePaperPolicy.from_manifest(manifest)
+    except RuntimePolicyError as exc:
+        runtime_policy_error = str(exc)
+        runtime_policy = None
     manifest_agents = {
         entry.agent_name: entry.implementation_hash for entry in manifest.agent_versions
     }
@@ -62,6 +69,16 @@ def evaluate_candidate_preflight(
             "manifest_mode",
             manifest.mode is RunMode.PAPER_LIVE,
             f"manifest mode is {manifest.mode.value}",
+        ),
+        _check(
+            "runtime_policy",
+            runtime_policy_error is None,
+            (
+                "frozen live-paper runtime policy is valid; "
+                f"fee_venue={runtime_policy.fee_venue} fee_tier={runtime_policy.fee_tier}"
+                if runtime_policy is not None
+                else f"frozen live-paper runtime policy is invalid: {runtime_policy_error}"
+            ),
         ),
         _check(
             "manifest_candidate_identity",
