@@ -545,7 +545,24 @@ class MarketDataRepository:
         row = await self._session.scalar(statement)
         if row is None:
             raise LookupError("market cursor does not exist")
-        return _cursor_from_state(cast(Mapping[str, object], row.state_json))
+        return self._validated_cursor(row)
+
+    async def load_cursors(self, experiment_id: UUID) -> tuple[MarketCursor, ...]:
+        if experiment_id.int == 0:
+            raise ValueError("cursor experiment_id cannot be nil")
+        rows = (
+            await self._session.scalars(
+                select(MarketCursorModel)
+                .where(MarketCursorModel.experiment_id == experiment_id)
+                .order_by(
+                    MarketCursorModel.venue,
+                    MarketCursorModel.stream,
+                    MarketCursorModel.symbol,
+                    MarketCursorModel.timeframe,
+                )
+            )
+        ).all()
+        return tuple(self._validated_cursor(row) for row in rows)
 
     async def record_recovery(self, recovery: RecoveryState) -> OperationalPersistResult:
         state = _recovery_state(recovery)
@@ -668,6 +685,13 @@ class MarketDataRepository:
         return tuple(
             _recovery_from_state(cast(Mapping[str, object], row.state_json)) for row in rows
         )
+
+    @staticmethod
+    def _validated_cursor(row: MarketCursorModel) -> MarketCursor:
+        cursor = _cursor_from_state(cast(Mapping[str, object], row.state_json))
+        if content_hash(_cursor_state(cursor)) != row.content_hash:
+            raise OperationalStateConflict("market cursor content hash is invalid")
+        return cursor
 
     @staticmethod
     def _cursor_values(

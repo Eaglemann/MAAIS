@@ -191,6 +191,26 @@ async def test_cursor_recovery_and_incident_commit_restore_and_emit_events(
         assert outbox_count == domain_count
 
 
+async def test_all_experiment_cursors_restore_in_stable_identity_order(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest = await _manifest_in_database(uow_factory)
+    btc = _cursor(manifest.experiment_id)
+    eth = replace(
+        btc,
+        symbol="ETHUSDT",
+        event_id="eth-bar-100",
+    )
+    async with uow_factory.begin() as uow:
+        await uow.market_data.record_cursor(eth)
+        await uow.market_data.record_cursor(btc)
+
+    async with uow_factory.begin() as uow:
+        restored = await uow.market_data.load_cursors(manifest.experiment_id)
+
+    assert restored == (btc, eth)
+
+
 async def test_trading_control_halt_is_persistent_event_backed_and_idempotent(
     uow_factory: UnitOfWork,
     db_engine: AsyncEngine,
