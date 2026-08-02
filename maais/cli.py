@@ -22,6 +22,7 @@ from maais.operations.reporting import (
     build_configured_daily_report,
     write_daily_report_bundle,
 )
+from maais.operations.restores import restore_configured_database
 from maais.operations.verification import verify_configured_ledger
 
 
@@ -76,6 +77,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="verify and create an immutable local PostgreSQL backup bundle",
     )
     backup.add_argument("--output", type=Path, required=True)
+    restore = commands.add_parser(
+        "restore",
+        help="restore a verified backup into a new suffix-constrained database",
+    )
+    restore.add_argument("--backup", type=Path, required=True)
+    restore.add_argument("--target-database", required=True)
+    restore.add_argument("--confirm-target", required=True)
+    restore.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -146,6 +155,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0
+    if arguments.command == "restore":
+        paths, passed = asyncio.run(
+            restore_configured_database(
+                arguments.backup,
+                target_database=arguments.target_database,
+                confirmation=arguments.confirm_target,
+                output_directory=arguments.output,
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "passed": passed,
+                    "directory": str(paths.directory),
+                    "verification": str(paths.result_path),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0 if passed else 1
     manifest = load_manifest_file(arguments.manifest)
     asyncio.run(run_live_paper_manifest(manifest, settings=settings))
     return 0

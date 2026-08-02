@@ -37,6 +37,19 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
         ]
     )
     backup = parser.parse_args(["backup", "--output", "backups"])
+    restore = parser.parse_args(
+        [
+            "restore",
+            "--backup",
+            "backups/candidate",
+            "--target-database",
+            "maais_week_restore",
+            "--confirm-target",
+            "maais_week_restore",
+            "--output",
+            "artifacts/restore-drills",
+        ]
+    )
 
     assert prepare.output == Path("candidate.json")
     assert not prepare.force
@@ -46,6 +59,8 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert report.report_date.isoformat() == "2026-08-02"
     assert report.output == Path("artifacts/reports")
     assert backup.output == Path("backups")
+    assert restore.backup == Path("backups/candidate")
+    assert restore.target_database == "maais_week_restore"
 
     with pytest.raises(SystemExit):
         parser.parse_args(["mission-control", "--port", "0"])
