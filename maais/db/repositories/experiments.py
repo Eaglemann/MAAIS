@@ -215,6 +215,44 @@ class ExperimentRepository:
             raise LookupError(f"experiment not found: {experiment_id}")
         return ExperimentManifest.from_dict(cast(dict[str, object], model.manifest_json))
 
+    async def get_status(self, experiment_id: UUID) -> ExperimentStatus:
+        model = await self._session.get(ExperimentModel, experiment_id)
+        if model is None:
+            raise LookupError(f"experiment not found: {experiment_id}")
+        return ExperimentStatus(model.status)
+
+    async def ensure_running(
+        self,
+        manifest: ExperimentManifest,
+        *,
+        started_at: datetime,
+    ) -> bool:
+        model = await self._session.scalar(
+            select(ExperimentModel)
+            .where(ExperimentModel.id == manifest.experiment_id)
+            .with_for_update()
+        )
+        if model is None:
+            raise LookupError(f"experiment not found: {manifest.experiment_id}")
+        if model.manifest_hash != manifest.manifest_hash:
+            raise ImmutableManifestError(
+                "stored manifest identity does not match worker manifest"
+            )
+        status = ExperimentStatus(model.status)
+        if status is ExperimentStatus.RUNNING:
+            return False
+        if status is not ExperimentStatus.CREATED:
+            raise RuntimeError(f"paper worker cannot start experiment from {status.value}")
+        version = await self._events.stream_version(manifest.experiment_id, "experiment")
+        transition = ExperimentLifecycle(
+            manifest,
+            status,
+            version,
+            now=lambda: started_at,
+        ).start()
+        await self.transition(manifest, transition)
+        return True
+
     async def get_agent_version_ids(
         self,
         manifest: ExperimentManifest,

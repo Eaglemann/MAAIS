@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 
 from maais.db.unit_of_work import UnitOfWork, UnitOfWorkContext
+from maais.domain.enums import ExperimentStatus
 from maais.market_data.events import MarketEventKind, ObservedMarketEvent
 from maais.orchestration.checkpoints import WorkerLeaseStatus, WorkerStatus
 from maais.orchestration.supervisor import (
@@ -127,6 +128,7 @@ async def test_supervisor_owns_lease_checkpoints_orders_events_and_drains(
         lease = await uow.workers.get(manifest.experiment_id)
         checkpoint = await uow.orchestration.get_checkpoint(manifest.experiment_id)
         control = await uow.controls.current(manifest.experiment_id)
+        experiment_status = await uow.experiments.get_status(manifest.experiment_id)
 
     assert order == ["observe:supervised-event", "dispatch:supervised-event"]
     assert public.started and public.stopped
@@ -141,6 +143,7 @@ async def test_supervisor_owns_lease_checkpoints_orders_events_and_drains(
         "worker_checkpoint.stopped",
     )
     assert not control.kill_switch_active
+    assert experiment_status is ExperimentStatus.RUNNING
 
 
 async def test_supervisor_persists_halt_and_releases_lease_on_dispatch_failure(

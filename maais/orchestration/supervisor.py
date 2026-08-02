@@ -204,6 +204,10 @@ class PaperWorkerSupervisor:
             await transaction.orchestration.record_checkpoint(self._checkpoint)
         async with self._uow.begin() as transaction:
             await self._audit_recovered_state(transaction)
+            await transaction.experiments.ensure_running(
+                self._manifest,
+                started_at=self._observed_now(),
+            )
 
     async def _audit_recovered_state(self, transaction: UnitOfWorkContext) -> None:
         account = await transaction.paper_execution.load_account(self._manifest.experiment_id)
