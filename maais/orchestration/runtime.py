@@ -7,6 +7,7 @@ from typing import Protocol
 from uuid import UUID
 
 from maais.db.unit_of_work import UnitOfWork
+from maais.domain.enums import ProposalStatus
 from maais.experiments.manifest import ExperimentManifest
 from maais.market_data.events import ClosedBarPayload, MarketEventKind, ObservedMarketEvent
 from maais.market_data.frames import CausalMinuteFrame, CausalMinuteFrameBuilder, FrameKey
@@ -20,6 +21,7 @@ from maais.market_data.recovery import MarketCursor, RecoveryState
 from maais.orchestration.commands import EntryDecisionContext, OrchestrationCommand
 from maais.orchestration.results import OrchestrationOutcome
 from maais.orchestration.service import OfficialOrchestrationService
+from maais.research.counterfactuals import CounterfactualStatus
 
 
 class EntryContextFactory(Protocol):
@@ -129,6 +131,9 @@ class AtomicCycleDispatcher:
             )
         )
         async with self._uow.begin() as transaction:
+            existing_counterfactuals = await transaction.counterfactuals.get_unresolved(
+                self._manifest.experiment_id
+            )
             await transaction.orchestration.record_outcome(
                 outcome,
                 integrity=integrity,
@@ -136,6 +141,20 @@ class AtomicCycleDispatcher:
                 evaluated_at=evaluated_at,
                 cursor=target_cursor,
             )
+            proposal = outcome.bundle.proposal
+            decision_approved = proposal is not None and proposal.status is ProposalStatus.APPROVED
+            mark_price = frame.mark_price or frame.bar.close
+            for state in existing_counterfactuals:
+                if state.symbol != event.symbol or state.status is not CounterfactualStatus.OPEN:
+                    continue
+                updated = state.observe_closed_bar(
+                    mark_price=mark_price,
+                    decision_direction=outcome.bundle.cycle.direction,
+                    decision_approved=decision_approved,
+                    closed_at=payload.bar_close_at,
+                    market_event_id=event.event_id,
+                )
+                await transaction.counterfactuals.record(updated)
             if recovery_progress is not None:
                 await transaction.market_data.record_recovery(recovery_progress)
         self._history.commit(frame)

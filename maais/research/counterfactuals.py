@@ -273,6 +273,19 @@ class CounterfactualState:
         closed_at: datetime,
         market_event_id: str,
     ) -> CounterfactualState:
+        if not market_event_id:
+            raise ValueError("counterfactual closed bar market_event_id is required")
+        if self._source_event_exists(
+            "counterfactual.closed_bar_observed",
+            market_event_id,
+            closed_at,
+            {
+                "mark_price": mark_price,
+                "decision_direction": decision_direction,
+                "decision_approved": decision_approved,
+            },
+        ):
+            return self
         updated = self.observe_mark(
             mark_price,
             closed_at,
@@ -287,7 +300,20 @@ class CounterfactualState:
             closed_at=closed_at,
             executable_price=mark_price,
         )
-        updated = replace(updated, exit_plan=evaluation.plan)
+        updated = updated._advance(
+            status=updated.status,
+            event_type="counterfactual.closed_bar_observed",
+            event_at=closed_at,
+            payload={
+                "market_event_id": market_event_id,
+                "mark_price": mark_price,
+                "decision_direction": decision_direction,
+                "decision_approved": decision_approved,
+                "bars_elapsed": evaluation.plan.bars_elapsed,
+                "opposite_signal_streak": evaluation.plan.opposite_signal_streak,
+            },
+            exit_plan=evaluation.plan,
+        )
         if evaluation.intent is not None:
             return updated._close(mark_price, evaluation.intent.reason.value, closed_at)
         return updated

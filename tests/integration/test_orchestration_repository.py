@@ -24,7 +24,13 @@ from maais.db.models.operations import (
 from maais.db.replay import verify_ledger_consistency
 from maais.db.repositories.market_data import OperationalStateConflict
 from maais.db.unit_of_work import UnitOfWork
-from maais.domain.enums import Direction, ExperimentStatus, StrategyStage
+from maais.domain.enums import (
+    Direction,
+    ExperimentStatus,
+    PaperOrderSide,
+    StrategyStage,
+)
+from maais.execution.paper.fills import MarketFillEngine, MarketFillRequest
 from maais.experiments.service import ExperimentLifecycle
 from maais.market_data.frames import CausalMinuteFrame, CausalMinuteFrameBuilder, FrameKey
 from maais.market_data.history import CausalFrameHistory
@@ -43,6 +49,7 @@ from maais.orchestration.protection import (
 from maais.orchestration.results import OrchestrationDisposition
 from maais.orchestration.runtime import AtomicCycleDispatcher
 from maais.orchestration.service import OfficialOrchestrationService
+from maais.research.counterfactuals import CounterfactualStatus
 from tests.unit.experiments.test_manifest import _manifest
 from tests.unit.market_data.test_frame_builder import _inputs
 from tests.unit.market_data.test_history import _history_snapshots
@@ -59,8 +66,9 @@ pytestmark = pytest.mark.integration
 
 
 class _EntryContextFactory:
-    def __init__(self) -> None:
+    def __init__(self, *, kill_switch: bool = False) -> None:
         self.calls = 0
+        self.kill_switch = kill_switch
 
     async def build(
         self,
@@ -70,7 +78,7 @@ class _EntryContextFactory:
         completed_at: datetime,
     ) -> EntryDecisionContext:
         self.calls += 1
-        context = _entry_context()
+        context = _entry_context(kill_switch=self.kill_switch)
         return replace(
             context,
             monitoring=replace(context.monitoring, evaluated_at=evaluated_at),
@@ -336,6 +344,94 @@ async def test_atomic_dispatcher_rolls_back_outcome_cursor_and_history_on_recove
         assert await uow.session.scalar(select(func.count()).select_from(DecisionCycleModel)) == 0
         assert await uow.session.scalar(select(func.count()).select_from(MarketCursorModel)) == 0
     assert len(history.snapshots("BTCUSDT")) == 60
+
+
+async def test_atomic_dispatcher_advances_existing_counterfactual_on_next_closed_bar(
+    uow_factory: UnitOfWork,
+) -> None:
+    command = await _command_in_database(uow_factory, quarantine=False)
+    history = CausalFrameHistory(command.manifest.experiment_id, command.manifest.symbols)
+    history.restore(_history_snapshots())
+    contexts = _EntryContextFactory(kill_switch=True)
+    dispatcher = AtomicCycleDispatcher(
+        uow=uow_factory,
+        manifest=command.manifest,
+        strategy_version_id=command.frame.key.strategy_version_id,
+        agent_version_ids=dict(command.agent_version_ids),
+        history=history,
+        entry_contexts=contexts,
+        integrity_policy=IntegrityPolicy.official(),
+        service=_execution_service(_FeatureComputer(_features()), Direction.LONG),
+    )
+    events = _inputs()
+    await dispatcher.dispatch(
+        events[0],
+        context_events=events,
+        target_cursor=_cursor(command),
+        recovery_progress=None,
+    )
+    async with uow_factory.begin() as uow:
+        pending = await uow.counterfactuals.get_unresolved(command.manifest.experiment_id)
+    assert len(pending) == 1 and pending[0].status is CounterfactualStatus.PENDING
+    state = pending[0]
+    entry_book = _depth(
+        "counterfactual-dispatch-entry",
+        state.eligible_after + timedelta(milliseconds=1),
+        "100",
+        "101",
+    )
+    entry_book = replace(
+        entry_book,
+        bids=(replace(entry_book.bids[0], quantity=Decimal("200")),),
+        asks=(replace(entry_book.asks[0], quantity=Decimal("200")),),
+    )
+    fill = MarketFillEngine(timedelta(seconds=1)).fill(
+        MarketFillRequest(
+            symbol=state.symbol,
+            side=PaperOrderSide.BUY,
+            quantity=state.quantity,
+            eligible_after=state.eligible_after,
+            decision_executable_price=state.decision_executable_price,
+            taker_fee_rate=state.fee_rate,
+        ),
+        (entry_book,),
+    )
+    opened = state.enter(fill, plan_id=UUID(int=8_001))
+    async with uow_factory.begin() as uow:
+        await uow.counterfactuals.record(opened)
+
+    first_bar = events[0]
+    assert first_bar.sequence is not None
+    assert hasattr(first_bar.payload, "bar_close_at")
+    delta = timedelta(minutes=1)
+    future_bar = replace(
+        first_bar,
+        event_id="bar-next-minute",
+        venue_event_at=first_bar.venue_event_at + delta,
+        observed_at=first_bar.observed_at + delta,
+        sequence=first_bar.sequence + 1,
+        payload=replace(
+            first_bar.payload,
+            bar_open_at=first_bar.payload.bar_open_at + delta,  # type: ignore[union-attr]
+            bar_close_at=first_bar.payload.bar_close_at + delta,  # type: ignore[union-attr]
+        ),
+    )
+    future_cursor = _cursor(command).advance_closed_bar(future_bar)
+
+    await dispatcher.dispatch(
+        future_bar,
+        context_events=(*events, future_bar),
+        target_cursor=future_cursor,
+        recovery_progress=None,
+    )
+
+    async with uow_factory.begin() as uow:
+        restored = await uow.counterfactuals.get(opened.counterfactual_id)
+
+    assert restored.exit_plan is not None
+    assert restored.exit_plan.bars_elapsed == 1
+    assert restored.events[-1].event_type == "counterfactual.closed_bar_observed"
+    assert restored.events[-1].payload["market_event_id"] == future_bar.event_id
 
 
 async def test_rejected_direction_persists_counterfactual_with_decision(

@@ -129,3 +129,42 @@ def test_counterfactual_rejects_float_funding_rate() -> None:
             NOW + timedelta(hours=8),
             market_event_id="funding-invalid-rate",
         )
+
+
+def test_closed_bars_advance_exit_policy_once_and_resolve_opposing_signal() -> None:
+    state = _state().enter(_fill(), plan_id=UUID(int=5))
+    assert state.entry_fill is not None
+    first_at = state.entry_fill.fill_at + timedelta(minutes=1)
+
+    first = state.observe_closed_bar(
+        mark_price=Decimal("101"),
+        decision_direction=Direction.SHORT,
+        decision_approved=True,
+        closed_at=first_at,
+        market_event_id="closed-bar-1",
+    )
+    duplicate = first.observe_closed_bar(
+        mark_price=Decimal("101"),
+        decision_direction=Direction.SHORT,
+        decision_approved=True,
+        closed_at=first_at,
+        market_event_id="closed-bar-1",
+    )
+
+    assert duplicate == first
+    assert first.exit_plan is not None
+    assert first.exit_plan.bars_elapsed == 1
+    assert first.exit_plan.opposite_signal_streak == 1
+    assert first.version == state.version + 2
+    assert first.events[-1].event_type == "counterfactual.closed_bar_observed"
+
+    second = first.observe_closed_bar(
+        mark_price=Decimal("101"),
+        decision_direction=Direction.SHORT,
+        decision_approved=True,
+        closed_at=first_at + timedelta(minutes=1),
+        market_event_id="closed-bar-2",
+    )
+
+    assert second.status is CounterfactualStatus.RESOLVED
+    assert second.hypothetical_exit_reason == "opposing_signal"
