@@ -173,6 +173,36 @@ async def test_quarantine_outcome_cursor_incident_and_events_commit_atomically(
     assert consistency.ok
 
 
+async def test_persisted_frame_restores_causal_feature_history(
+    uow_factory: UnitOfWork,
+) -> None:
+    command = await _command_in_database(uow_factory, quarantine=True)
+    outcome = await OfficialOrchestrationService(_FeatureComputer(_features())).process(command)
+    async with uow_factory.begin() as uow:
+        await uow.orchestration.record_outcome(
+            outcome,
+            integrity=command.integrity,
+            required_checks=IntegrityPolicy.official().required_checks,
+            evaluated_at=command.evaluated_at,
+            cursor=_cursor(command),
+        )
+    async with uow_factory.begin() as uow:
+        restored = await uow.market_data.load_frame_history(
+            command.manifest.experiment_id,
+            command.frame.key.symbol,
+            command.frame.key.timeframe,
+        )
+
+    assert len(restored) == 1
+    assert restored[0].frame_id == command.frame.frame_id
+    assert restored[0].bar.close == command.frame.bar.close
+    assert restored[0].source_sequences == {
+        name: source.sequence
+        for name, source in command.frame.source_manifest.items()
+        if source.sequence is not None
+    }
+
+
 async def test_rejected_direction_persists_counterfactual_with_decision(
     uow_factory: UnitOfWork,
 ) -> None:

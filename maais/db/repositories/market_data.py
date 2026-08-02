@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -25,6 +26,8 @@ from maais.domain.json import (
     freeze_json,
     to_json_data,
 )
+from maais.market_data.events import ClosedBarPayload
+from maais.market_data.history import CommittedFrameSnapshot
 from maais.market_data.integrity.state_machine import IntegrityAssessment, IntegrityCheck
 from maais.market_data.recovery import (
     CursorStatus,
@@ -236,6 +239,68 @@ class MarketDataRepository:
     def __init__(self, session: AsyncSession, events: EventRepository) -> None:
         self._session = session
         self._events = events
+
+    async def load_frame_history(
+        self,
+        experiment_id: UUID,
+        symbol: str,
+        timeframe: str,
+        *,
+        limit: int = 240,
+    ) -> tuple[CommittedFrameSnapshot, ...]:
+        if experiment_id.int == 0:
+            raise ValueError("history experiment_id cannot be nil")
+        if not symbol or symbol != symbol.upper() or not timeframe:
+            raise ValueError("history query identity is invalid")
+        if limit < 60:
+            raise ValueError("history query must retain at least 60 bars")
+        rows = (
+            await self._session.scalars(
+                select(MarketFrameModel)
+                .where(
+                    MarketFrameModel.experiment_id == experiment_id,
+                    MarketFrameModel.symbol == symbol,
+                    MarketFrameModel.timeframe == timeframe,
+                )
+                .order_by(MarketFrameModel.bar_close_at.desc())
+                .limit(limit)
+            )
+        ).all()
+        snapshots: list[CommittedFrameSnapshot] = []
+        for row in reversed(rows):
+            sequences: dict[str, int] = {}
+            for name, raw in row.source_sequence_json.items():
+                if not isinstance(raw, Mapping):
+                    continue
+                sequence = raw.get("sequence")
+                if isinstance(sequence, int) and not isinstance(sequence, bool):
+                    sequences[name] = sequence
+            snapshots.append(
+                CommittedFrameSnapshot(
+                    experiment_id=row.experiment_id,
+                    frame_id=row.id,
+                    symbol=row.symbol,
+                    timeframe=row.timeframe,
+                    bar=ClosedBarPayload(
+                        timeframe=row.timeframe,
+                        bar_open_at=row.bar_open_at,
+                        bar_close_at=row.bar_close_at,
+                        open=Decimal(row.open),
+                        high=Decimal(row.high),
+                        low=Decimal(row.low),
+                        close=Decimal(row.close),
+                        volume=Decimal(row.volume),
+                        quote_volume=Decimal("0"),
+                        trade_count=0,
+                        taker_buy_volume=Decimal("0"),
+                        taker_buy_quote_volume=Decimal("0"),
+                        closed=True,
+                    ),
+                    source_sequences=sequences,
+                    content_hash=row.content_hash,
+                )
+            )
+        return tuple(snapshots)
 
     async def record_cursor(self, cursor: MarketCursor) -> OperationalPersistResult:
         aggregate_id = _cursor_id(cursor)
