@@ -43,7 +43,8 @@ report_date="$(TZ=Europe/Berlin date +%F)"
 uv run maais daily-report \
   --experiment "${experiment_id}" \
   --date "${report_date}" \
-  --output "${repository_root}/artifacts/reports"
+  --output "${repository_root}/artifacts/reports" \
+  --allow-partial
 uv run maais backup --output "${repository_root}/backups"
 
 stopped_state="${state_dir}/stopped-$(date -u +%Y%m%dT%H%M%SZ).json"

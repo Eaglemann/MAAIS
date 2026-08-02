@@ -91,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--experiment", type=UUID, required=True)
     report.add_argument("--date", dest="report_date", type=_date, required=True)
     report.add_argument("--output", type=Path, required=True)
+    report.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="allow a partial current-day bundle for explicit stop evidence only",
+    )
     backup = commands.add_parser(
         "backup",
         help="verify and create an immutable local PostgreSQL backup bundle",
@@ -173,6 +178,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = asyncio.run(
             build_configured_daily_report(arguments.experiment, arguments.report_date)
         )
+        if report.get("complete_day") is not True and not arguments.allow_partial:
+            raise ValueError(
+                "Berlin day is incomplete; wait until the calendar day has ended or use "
+                "--allow-partial only for explicit stop evidence"
+            )
         paths = write_daily_report_bundle(report, arguments.output)
         print(
             json.dumps(

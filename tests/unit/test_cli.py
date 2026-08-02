@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -169,6 +170,75 @@ def test_verify_ledger_returns_failure_when_consistency_errors_exist(
 
     assert main(["verify-ledger"]) == 1
     assert json.loads(capsys.readouterr().out)["error_count"] == 1
+
+
+def test_daily_report_refuses_to_freeze_an_incomplete_berlin_day(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_report(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"complete_day": False}
+
+    monkeypatch.setattr("maais.cli.build_configured_daily_report", fake_report)
+
+    with pytest.raises(ValueError, match="Berlin day is incomplete"):
+        main(
+            [
+                "daily-report",
+                "--experiment",
+                "11111111-1111-4111-8111-111111111111",
+                "--date",
+                "2026-08-02",
+                "--output",
+                str(tmp_path),
+            ]
+        )
+
+
+def test_daily_report_requires_explicit_partial_override_for_stop_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async def fake_report(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "complete_day": False,
+            "report_id": "a" * 64,
+            "reconciliation": {"ledger_ok": True},
+        }
+
+    target = tmp_path / "partial-report"
+    monkeypatch.setattr("maais.cli.build_configured_daily_report", fake_report)
+    monkeypatch.setattr(
+        "maais.cli.write_daily_report_bundle",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            directory=target,
+            json_path=target / "report.json",
+            markdown_path=target / "report.md",
+            decisions_csv_path=target / "decisions.csv",
+            decisions_parquet_path=target / "decisions.parquet",
+            execution_csv_path=target / "execution.csv",
+            execution_parquet_path=target / "execution.parquet",
+            manifest_path=target / "bundle-manifest.json",
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "daily-report",
+                "--experiment",
+                "11111111-1111-4111-8111-111111111111",
+                "--date",
+                "2026-08-02",
+                "--output",
+                str(tmp_path),
+                "--allow-partial",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["directory"] == str(target)
 
 
 def test_resolve_incident_prints_audited_machine_readable_result(
