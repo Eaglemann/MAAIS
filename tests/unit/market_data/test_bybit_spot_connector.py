@@ -133,6 +133,25 @@ def test_reference_book_retains_exact_engine_time_sequence_and_executable_prices
     )
 
 
+def test_repeated_rest_book_has_distinct_observation_identity() -> None:
+    first = parse_bybit_reference_book(
+        _book(),
+        primary_symbol="BTCUSDT",
+        bybit_symbol="BTCUSDT",
+        observed_at=OBSERVED_AT,
+    )
+    second = parse_bybit_reference_book(
+        _book(),
+        primary_symbol="BTCUSDT",
+        bybit_symbol="BTCUSDT",
+        observed_at=OBSERVED_AT.replace(microsecond=200_000),
+    )
+
+    assert first.event_id != second.event_id
+    assert first.identity != second.identity
+    assert first.content_hash != second.content_hash
+
+
 @pytest.mark.parametrize("field", ("s", "b", "a", "ts", "u", "seq", "cts"))
 def test_reference_book_has_no_missing_field_defaults(field: str) -> None:
     raw = _book()

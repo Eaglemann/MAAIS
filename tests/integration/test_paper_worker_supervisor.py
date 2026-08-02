@@ -211,6 +211,7 @@ async def test_supervisor_persists_halt_and_releases_lease_on_dispatch_failure(
         lease = await uow.workers.get(manifest.experiment_id)
         checkpoint = await uow.orchestration.get_checkpoint(manifest.experiment_id)
         control = await uow.controls.current(manifest.experiment_id)
+        experiment_status = await uow.experiments.get_status(manifest.experiment_id)
 
     assert order == ["observe:failed-event", "dispatch:failed-event"]
     assert public.stopped
@@ -218,6 +219,7 @@ async def test_supervisor_persists_halt_and_releases_lease_on_dispatch_failure(
     assert lease.status is WorkerLeaseStatus.RELEASED
     assert checkpoint.status is WorkerStatus.HALTED
     assert checkpoint.events[-1].event_type == "worker_checkpoint.halted"
+    assert experiment_status is ExperimentStatus.FAILED
     assert control.kill_switch_active
     assert control.reason is not None
     assert "ArithmeticError:deliberate dispatch failure" in control.reason
@@ -254,11 +256,13 @@ async def test_supervisor_persists_startup_audit_failure_before_public_data(
         lease = await uow.workers.get(manifest.experiment_id)
         checkpoint = await uow.orchestration.get_checkpoint(manifest.experiment_id)
         control = await uow.controls.current(manifest.experiment_id)
+        experiment_status = await uow.experiments.get_status(manifest.experiment_id)
 
     assert not public.started
     assert supervisor.state is PaperWorkerSupervisorState.HALTED
     assert lease.status is WorkerLeaseStatus.RELEASED
     assert checkpoint.status is WorkerStatus.HALTED
+    assert experiment_status is ExperimentStatus.CREATED
     assert control.kill_switch_active
     assert control.reason is not None
     assert "startup audit failed" in control.reason

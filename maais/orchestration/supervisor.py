@@ -10,6 +10,7 @@ from typing import Protocol
 from uuid import UUID
 
 from maais.db.unit_of_work import UnitOfWork, UnitOfWorkContext
+from maais.domain.enums import ExperimentStatus
 from maais.execution.paper.clock import require_utc
 from maais.execution.paper.exits import ExitPlanStatus
 from maais.experiments.manifest import ExperimentManifest
@@ -101,8 +102,8 @@ class PaperWorkerSupervisor:
         self._state = PaperWorkerSupervisorState.STOPPED
         self._checkpoint: WorkerCheckpoint | None = None
         self._lease: WorkerLease | None = None
-        self._dispatch_queue: asyncio.Queue[ObservedMarketEvent | _DispatchStop] = (
-            asyncio.Queue(maxsize=dispatch_queue_size)
+        self._dispatch_queue: asyncio.Queue[ObservedMarketEvent | _DispatchStop] = asyncio.Queue(
+            maxsize=dispatch_queue_size
         )
         self._dispatch_stop = _DispatchStop()
         self._ingest_task: asyncio.Task[None] | None = None
@@ -244,9 +245,7 @@ class PaperWorkerSupervisor:
         )
         if pending:
             raise PaperWorkerHalt("pending paper orders require explicit startup reconciliation")
-        plans = await transaction.paper_execution.load_open_exit_plans(
-            self._manifest.experiment_id
-        )
+        plans = await transaction.paper_execution.load_open_exit_plans(self._manifest.experiment_id)
         plans_by_position = {plan.position_id: plan for plan in plans}
         if len(plans_by_position) != len(plans):
             raise PaperWorkerHalt("protective exit plans are duplicated by position")
@@ -271,9 +270,7 @@ class PaperWorkerSupervisor:
                 try:
                     self._dispatch_queue.put_nowait(event)
                 except asyncio.QueueFull as exc:
-                    raise PaperWorkerHalt(
-                        "paper worker dispatch queue reached capacity"
-                    ) from exc
+                    raise PaperWorkerHalt("paper worker dispatch queue reached capacity") from exc
         finally:
             await self._dispatch_queue.put(self._dispatch_stop)
 
@@ -318,11 +315,7 @@ class PaperWorkerSupervisor:
             ),
             next(iter(done)),
         )
-        failure = (
-            asyncio.CancelledError()
-            if task.cancelled()
-            else task.exception()
-        )
+        failure = asyncio.CancelledError() if task.cancelled() else task.exception()
         if failure is None:
             failure = RuntimeError(f"paper worker task ended unexpectedly: {task.get_name()}")
         await self._halt(failure)
@@ -378,6 +371,13 @@ class PaperWorkerSupervisor:
             {**self._checkpoint_state(), "failure": detail},
         )
         async with self._uow.begin() as transaction:
+            status = await transaction.experiments.get_status(self._manifest.experiment_id)
+            if status in {ExperimentStatus.RUNNING, ExperimentStatus.PAUSED}:
+                await transaction.experiments.fail_active(
+                    self._manifest,
+                    reason=f"paper_worker:{detail}",
+                    failed_at=halted_at,
+                )
             await transaction.controls.halt(
                 self._manifest.experiment_id,
                 reason=f"paper_worker:{detail}",

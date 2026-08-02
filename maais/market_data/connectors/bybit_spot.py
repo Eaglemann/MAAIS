@@ -165,11 +165,14 @@ def parse_bybit_reference_book(
     published_at = _milliseconds(_integer(result, "ts"))
     engine_at = _milliseconds(_integer(result, "cts"))
     source_event_id = f"{update_id}:{sequence}"
+    observation_id = _datetime_microseconds(observed_at)
     return ObservedMarketEvent(
         venue=BYBIT_SPOT_VENUE,
         stream="rest:/v5/market/orderbook",
         symbol=primary_symbol,
-        event_id=f"{BYBIT_SPOT_VENUE}:orderbook:{bybit_symbol}:{source_event_id}",
+        event_id=(
+            f"{BYBIT_SPOT_VENUE}:orderbook:{bybit_symbol}:{source_event_id}:{observation_id}"
+        ),
         kind=MarketEventKind.REFERENCE_PRICE,
         venue_event_at=engine_at,
         observed_at=observed_at,
@@ -187,6 +190,12 @@ def parse_bybit_reference_book(
             source_published_at=published_at,
         ),
     )
+
+
+def _datetime_microseconds(value: datetime) -> int:
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    elapsed = value - epoch
+    return elapsed.days * 86_400_000_000 + elapsed.seconds * 1_000_000 + elapsed.microseconds
 
 
 class BybitSpotConnector:
