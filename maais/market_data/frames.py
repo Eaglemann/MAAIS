@@ -14,6 +14,7 @@ from maais.market_data.events import (
     MarkFundingPayload,
     ObservedMarketEvent,
     OrderBookPayload,
+    PriceLevel,
     ReferenceKind,
     ReferencePricePayload,
     SymbolStatePayload,
@@ -102,6 +103,8 @@ class CausalMinuteFrame:
     frame_id: UUID
     cutoff_at: datetime
     bar: ClosedBarPayload
+    book_bids: tuple[PriceLevel, ...]
+    book_asks: tuple[PriceLevel, ...]
     best_bid: Decimal | None
     best_ask: Decimal | None
     mark_price: Decimal | None
@@ -119,6 +122,13 @@ class CausalMinuteFrame:
             raise ValueError("frame_id differs from deterministic frame key")
         if len(self.content_hash) != 64:
             raise ValueError("frame content_hash must be SHA-256")
+        if bool(self.book_bids) != bool(self.book_asks):
+            raise ValueError("causal frame book sides must be present together")
+        if self.book_bids:
+            if self.best_bid != self.book_bids[0].price or self.best_ask != self.book_asks[0].price:
+                raise ValueError("causal frame best prices differ from captured book depth")
+        elif self.best_bid is not None or self.best_ask is not None:
+            raise ValueError("causal frame best prices require captured book depth")
         object.__setattr__(self, "source_manifest", MappingProxyType(dict(self.source_manifest)))
 
     def normalized(self) -> dict[str, object]:
@@ -127,6 +137,8 @@ class CausalMinuteFrame:
             "frame_id": self.frame_id,
             "cutoff_at": self.cutoff_at,
             "bar": self.bar.to_dict(),
+            "book_bids": [level.to_dict() for level in self.book_bids],
+            "book_asks": [level.to_dict() for level in self.book_asks],
             "best_bid": self.best_bid,
             "best_ask": self.best_ask,
             "mark_price": self.mark_price,
@@ -241,6 +253,8 @@ class CausalMinuteFrameBuilder:
             "frame_id": key.frame_id,
             "cutoff_at": cutoff,
             "bar": bar.to_dict(),
+            "book_bids": [level.to_dict() for level in book.bids] if book else [],
+            "book_asks": [level.to_dict() for level in book.asks] if book else [],
             "best_bid": book.best_bid if book else None,
             "best_ask": book.best_ask if book else None,
             "mark_price": mark.mark_price if mark else None,
@@ -257,6 +271,8 @@ class CausalMinuteFrameBuilder:
             frame_id=key.frame_id,
             cutoff_at=cutoff,
             bar=bar,
+            book_bids=book.bids if book else (),
+            book_asks=book.asks if book else (),
             best_bid=book.best_bid if book else None,
             best_ask=book.best_ask if book else None,
             mark_price=mark.mark_price if mark else None,

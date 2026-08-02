@@ -185,6 +185,8 @@ def test_shuffled_inputs_produce_identical_frame_and_source_manifest() -> None:
     assert left == right
     assert left.content_hash == right.content_hash
     assert left.best_bid == Decimal("100")
+    assert left.book_bids == (PriceLevel(Decimal("100"), Decimal("2")),)
+    assert left.book_asks == (PriceLevel(Decimal("101"), Decimal("2")),)
     assert left.mark_price == Decimal("100.5")
     assert set(left.source_manifest) == {
         "closed_bar",

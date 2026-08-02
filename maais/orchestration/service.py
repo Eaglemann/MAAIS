@@ -1184,6 +1184,8 @@ class OfficialOrchestrationService:
             funding_rate=frame.funding_rate,
             orderbook_snapshot=_json_object(
                 {
+                    "bids": [level.to_dict() for level in frame.book_bids],
+                    "asks": [level.to_dict() for level in frame.book_asks],
                     "best_bid": frame.best_bid,
                     "best_ask": frame.best_ask,
                     "source_event_id": (book_source.event_id if book_source is not None else None),
