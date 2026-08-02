@@ -50,6 +50,11 @@ def configure_logging(log_level: str = "INFO", is_production: bool = False) -> N
     root_logger.addHandler(handler)
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
+    # Successful public-market REST polls are routine and extremely frequent.
+    # Keep transport failures visible without flooding a multi-day local run.
+    for logger_name in ("httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     return structlog.get_logger(name)
