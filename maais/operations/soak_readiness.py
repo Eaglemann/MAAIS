@@ -142,7 +142,7 @@ def _decision_coverage(
             and irregular == 0
             and span >= minimum_span
             and head_lag is not None
-            and timedelta(0) <= head_lag <= maximum_lag
+            and -maximum_lag <= head_lag <= maximum_lag
             and tail_lag is not None
             and timedelta(0) <= tail_lag <= maximum_lag
         )

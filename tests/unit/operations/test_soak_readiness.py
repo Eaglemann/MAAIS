@@ -161,6 +161,26 @@ def test_soak_cardinality_failure_exposes_span_and_symbol_progress() -> None:
     assert "required_span_seconds=" in check["detail"]
 
 
+def test_soak_cardinality_allows_bounded_cycle_before_state_file_timestamp() -> None:
+    inputs = _inputs()
+    decision_times = inputs["decision_times"]
+    assert isinstance(decision_times, dict)
+    first_cycle = next(iter(decision_times.values()))[0]
+    inputs["run_state"] = {
+        **inputs["run_state"],  # type: ignore[dict-item]
+        "started_at": (first_cycle + timedelta(seconds=10)).isoformat(),
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    check = next(
+        item
+        for item in report["checks"]
+        if item["name"] == "decision_cardinality"  # type: ignore[union-attr]
+    )
+
+    assert check["passed"] is True
+
+
 def test_soak_readiness_explains_every_material_failure() -> None:
     inputs = _inputs()
     manifest = inputs["manifest"]
