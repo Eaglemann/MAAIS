@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
@@ -23,6 +22,7 @@ from maais.monitoring.admission import (
     MonitoringAdmissionContext,
     RollingVolatilityBaseline,
 )
+from maais.operations.controls import TradingControlSnapshot
 from maais.orchestration.commands import EntryDecisionContext
 from maais.orchestration.observations import MarketObservationBuffer, RuntimeHealthRegistry
 from maais.risk.official import CorrelationObservation, DrawdownSnapshot, OpenRiskPosition
@@ -32,24 +32,17 @@ class RuntimeStateConflict(RuntimeError):
     pass
 
 
-@dataclass(frozen=True, slots=True)
-class TradingControlSnapshot:
-    experiment_id: UUID
-    kill_switch_active: bool
-    reason: str | None
-    version: int
-    changed_at: datetime
-
-    def __post_init__(self) -> None:
-        if self.experiment_id.int == 0 or self.version < 0:
-            raise ValueError("trading control identity is invalid")
-        require_utc(self.changed_at, "trading control changed_at")
-        if self.kill_switch_active != (self.reason is not None):
-            raise ValueError("trading control state and reason must appear together")
-
-
 class TradingControlPort(Protocol):
     async def current(self, experiment_id: UUID) -> TradingControlSnapshot: ...
+
+
+class PersistentTradingControls:
+    def __init__(self, uow: UnitOfWork) -> None:
+        self._uow = uow
+
+    async def current(self, experiment_id: UUID) -> TradingControlSnapshot:
+        async with self._uow.begin() as transaction:
+            return await transaction.controls.current(experiment_id)
 
 
 class LiveEntryContextAssembler:
@@ -172,6 +165,7 @@ class LiveEntryContextAssembler:
             kill_switch_reason=control.reason,
             kill_switch_version=control.version,
             kill_switch_changed_at=control.changed_at,
+            kill_switch_changed_by=control.changed_by,
             health=self._health.snapshot(),
             volatility=self._volatility(frame),
             benchmark=self._benchmark(frame, evaluated_at=evaluated_at),

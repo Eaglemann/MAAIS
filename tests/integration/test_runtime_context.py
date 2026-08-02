@@ -1,4 +1,3 @@
-from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -13,7 +12,7 @@ from maais.market_data.history import CausalFrameHistory
 from maais.monitoring.admission import OfficialAdmissionPolicy
 from maais.orchestration.context import (
     LiveEntryContextAssembler,
-    TradingControlSnapshot,
+    PersistentTradingControls,
 )
 from maais.orchestration.observations import (
     MarketObservationBuffer,
@@ -24,20 +23,6 @@ from tests.unit.market_data.test_frame_builder import _book, _inputs
 from tests.unit.market_data.test_history import _frame_with_uneven_depth, _history_snapshots
 
 pytestmark = pytest.mark.integration
-
-
-class _ClearControls:
-    def __init__(self, experiment_id: UUID, changed_at: datetime) -> None:
-        self._snapshot = TradingControlSnapshot(
-            experiment_id=experiment_id,
-            kill_switch_active=False,
-            reason=None,
-            version=0,
-            changed_at=changed_at,
-        )
-
-    async def current(self, experiment_id: UUID) -> TradingControlSnapshot:
-        return self._snapshot
 
 
 async def test_live_entry_context_restores_account_and_uses_real_future_book(
@@ -67,6 +52,10 @@ async def test_live_entry_context_restores_account_and_uses_real_future_book(
     policy = LivePaperPolicy.from_manifest(manifest)
     async with uow_factory.begin() as uow:
         await uow.experiments.create(manifest)
+        await uow.controls.initialize(
+            manifest.experiment_id,
+            initialized_at=frame.cutoff_at,
+        )
     history = CausalFrameHistory(
         manifest.experiment_id,
         manifest.symbols,
@@ -88,7 +77,7 @@ async def test_live_entry_context_restores_account_and_uses_real_future_book(
         history=history,
         observations=observations,
         health=health,
-        controls=_ClearControls(manifest.experiment_id, frame.cutoff_at),
+        controls=PersistentTradingControls(uow_factory),
         exchange_filters={"BTCUSDT": exchange_filter},
     )
 
@@ -112,5 +101,24 @@ async def test_live_entry_context_restores_account_and_uses_real_future_book(
     )
     assert tuple(item.component for item in context.monitoring.health) == tuple(sorted(mandatory))
     assert not context.monitoring.kill_switch_active
+    assert context.monitoring.kill_switch_version == 1
+    assert context.monitoring.kill_switch_changed_by == "system"
     assert context.open_positions == ()
     assert context.correlations == ()
+
+    async with uow_factory.begin() as uow:
+        await uow.controls.halt(
+            manifest.experiment_id,
+            reason="operator_test_halt",
+            halted_at=frame.cutoff_at,
+            actor="local_operator",
+        )
+    halted_context = await assembler.build(
+        frame,
+        evaluated_at=frame.cutoff_at,
+        completed_at=frame.cutoff_at,
+    )
+    assert halted_context.monitoring.kill_switch_active
+    assert halted_context.monitoring.kill_switch_reason == "operator_test_halt"
+    assert halted_context.monitoring.kill_switch_version == 2
+    assert halted_context.monitoring.kill_switch_changed_by == "local_operator"

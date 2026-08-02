@@ -35,6 +35,7 @@ def _context(**changes) -> MonitoringAdmissionContext:
         "kill_switch_reason": None,
         "kill_switch_version": 0,
         "kill_switch_changed_at": NOW - timedelta(seconds=1),
+        "kill_switch_changed_by": "system",
         "health": _health(policy),
         "volatility": RollingVolatilityBaseline(
             symbol="BTCUSDT",

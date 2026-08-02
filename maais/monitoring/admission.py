@@ -128,6 +128,7 @@ class MonitoringAdmissionContext:
     kill_switch_reason: str | None
     kill_switch_version: int
     kill_switch_changed_at: datetime
+    kill_switch_changed_by: str
     health: tuple[HealthObservation, ...]
     volatility: RollingVolatilityBaseline | None
     benchmark: BenchmarkObservation | None
@@ -141,6 +142,8 @@ class MonitoringAdmissionContext:
             raise ValueError("kill switch state and reason must appear together")
         if self.kill_switch_version < 0:
             raise ValueError("kill switch version cannot be negative")
+        if not self.kill_switch_changed_by:
+            raise ValueError("kill switch actor is required")
         if self.kill_switch_changed_at > self.evaluated_at:
             raise ValueError("kill switch state cannot come from the future")
         names = tuple(item.component for item in self.health)
@@ -256,6 +259,7 @@ class OfficialMonitoringAdmission:
                     "kill_switch_reason": context.kill_switch_reason,
                     "kill_switch_version": context.kill_switch_version,
                     "kill_switch_changed_at": context.kill_switch_changed_at,
+                    "kill_switch_changed_by": context.kill_switch_changed_by,
                     "health": [
                         {
                             "component": item.component,
@@ -318,6 +322,7 @@ class OfficialMonitoringAdmission:
                 reason=context.kill_switch_reason,
                 version=context.kill_switch_version,
                 changed_at=context.kill_switch_changed_at,
+                changed_by=context.kill_switch_changed_by,
             )
         return _gate(
             AdmissionCheck.KILL_SWITCH,
@@ -325,6 +330,7 @@ class OfficialMonitoringAdmission:
             "kill_switch_clear",
             version=context.kill_switch_version,
             changed_at=context.kill_switch_changed_at,
+            changed_by=context.kill_switch_changed_by,
         )
 
     def _health(self, context: MonitoringAdmissionContext) -> AdmissionGateResult:

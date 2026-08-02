@@ -15,6 +15,7 @@ from maais.db.models.operations import (
     IncidentModel,
     MarketCursorModel,
     MarketRecoveryRunModel,
+    TradingControlModel,
     WorkerLeaseModel,
 )
 from maais.db.replay import verify_ledger_consistency
@@ -111,6 +112,7 @@ async def test_operational_schema_matches_models(db_connection: AsyncConnection)
         "incidents",
         "worker_checkpoints",
         "worker_leases",
+        "trading_controls",
     )
 
     def compare(sync_connection: object) -> None:
@@ -187,6 +189,57 @@ async def test_cursor_recovery_and_incident_commit_restore_and_emit_events(
         )
         assert domain_count == 5  # experiment, three aggregates, and recovery failure
         assert outbox_count == domain_count
+
+
+async def test_trading_control_halt_is_persistent_event_backed_and_idempotent(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    manifest = await _manifest_in_database(uow_factory)
+    async with uow_factory.begin() as uow:
+        initialized = await uow.controls.initialize(
+            manifest.experiment_id,
+            initialized_at=NOW,
+        )
+    async with uow_factory.begin() as uow:
+        repeated = await uow.controls.initialize(
+            manifest.experiment_id,
+            initialized_at=NOW + timedelta(seconds=1),
+        )
+        halted = await uow.controls.halt(
+            manifest.experiment_id,
+            reason="operator_emergency_halt",
+            halted_at=NOW + timedelta(seconds=2),
+            actor="local_operator",
+        )
+    async with uow_factory.begin() as uow:
+        idempotent = await uow.controls.halt(
+            manifest.experiment_id,
+            reason="operator_emergency_halt",
+            halted_at=NOW + timedelta(seconds=3),
+            actor="local_operator",
+        )
+        restored = await uow.controls.current(manifest.experiment_id)
+
+    assert not initialized.kill_switch_active
+    assert repeated == initialized
+    assert halted.kill_switch_active
+    assert halted.reason == "operator_emergency_halt"
+    assert halted.version == 2
+    assert halted.changed_by == "local_operator"
+    assert idempotent == halted
+    assert restored == halted
+    factory = async_sessionmaker(db_engine)
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(TradingControlModel)) == 1
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(DomainEventModel)
+                .where(DomainEventModel.aggregate_type == "trading_control")
+            )
+            == 2
+        )
 
 
 async def test_operational_transitions_are_contiguous_idempotent_and_conflict_checked(

@@ -30,6 +30,7 @@ from maais.db.models.operations import (
     IncidentModel,
     MarketCursorModel,
     MarketRecoveryRunModel,
+    TradingControlModel,
     WorkerCheckpointModel,
     WorkerLeaseModel,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "PositionModel",
     "StrategyVersionModel",
     "TradeProposalModel",
+    "TradingControlModel",
     "WorkerCheckpointModel",
     "WorkerLeaseModel",
 ]

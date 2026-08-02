@@ -22,6 +22,39 @@ from maais.db.connection import Base
 from maais.domain.json import MutableJsonValue
 
 
+class TradingControlModel(Base):
+    __tablename__ = "trading_controls"
+    __table_args__ = (
+        CheckConstraint("version > 0", name="ck_trading_control_version_positive"),
+        CheckConstraint("changed_by <> ''", name="ck_trading_control_actor"),
+        CheckConstraint(
+            "(kill_switch_active AND reason IS NOT NULL AND reason <> '') OR "
+            "(NOT kill_switch_active AND reason IS NULL)",
+            name="ck_trading_control_state",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(state_json) = 'object'",
+            name="ck_trading_control_state_object",
+        ),
+        CheckConstraint(
+            "char_length(content_hash) = 64",
+            name="ck_trading_control_content_hash",
+        ),
+        Index("ix_trading_controls_active_time", "kill_switch_active", "changed_at"),
+    )
+
+    experiment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("experiments.id", ondelete="RESTRICT"), primary_key=True
+    )
+    kill_switch_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(1000))
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    state_json: Mapped[dict[str, MutableJsonValue]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class MarketCursorModel(Base):
     __tablename__ = "market_cursors"
     __table_args__ = (

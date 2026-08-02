@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from maais.db.repositories.controls import TradingControlRepository
 from maais.db.repositories.counterfactuals import CounterfactualRepository
 from maais.db.repositories.decisions import DecisionRepository
 from maais.db.repositories.events import EventRepository
@@ -29,6 +30,7 @@ class UnitOfWorkContext:
     incidents: IncidentRepository
     orchestration: OrchestrationRepository
     workers: WorkerLeaseRepository
+    controls: TradingControlRepository
 
 
 class UnitOfWork:
@@ -53,4 +55,5 @@ class UnitOfWork:
                     incidents=IncidentRepository(session, events),
                     orchestration=OrchestrationRepository(session, events),
                     workers=WorkerLeaseRepository(session, events),
+                    controls=TradingControlRepository(session, events),
                 )

@@ -158,6 +158,7 @@ def _entry_context(*, kill_switch: bool = False) -> EntryDecisionContext:
         kill_switch_reason="operator_test" if kill_switch else None,
         kill_switch_version=1 if kill_switch else 0,
         kill_switch_changed_at=evaluated_at - timedelta(milliseconds=100),
+        kill_switch_changed_by="test_operator" if kill_switch else "system",
         health=health,
         volatility=RollingVolatilityBaseline(
             symbol="BTCUSDT",
