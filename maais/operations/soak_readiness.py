@@ -65,6 +65,31 @@ def _parse_utc(value: object, name: str) -> datetime:
     return parsed
 
 
+def _health_state_from_overview(overview: Mapping[str, object]) -> dict[str, object]:
+    state = {
+        **_object(overview.get("runtime"), "overview runtime"),
+        **_object(overview.get("freshness"), "overview freshness"),
+        **_object(overview.get("operations"), "overview operations"),
+    }
+    for key in (
+        "checkpoint_at",
+        "lease_heartbeat_at",
+        "lease_expires_at",
+        "lease_released_at",
+        "latest_bar_close_at",
+        "latest_cursor_update_at",
+    ):
+        value = state.get(key)
+        if value is None:
+            continue
+        if isinstance(value, datetime):
+            if value.utcoffset() != timedelta(0):
+                raise ValueError(f"overview {key} must be UTC")
+            continue
+        state[key] = _parse_utc(value, f"overview {key}")
+    return state
+
+
 def _manifest_agents(manifest: ExperimentManifest) -> dict[str, str]:
     return {version.agent_name: version.implementation_hash for version in manifest.agent_versions}
 
@@ -146,6 +171,8 @@ def _decision_coverage(
         "passed": coverage_passed,
         "expected_symbols": len(expected_symbols),
         "observed_symbols": len(observed_symbols),
+        "symbols_passed": sum(row["passed"] is True for row in rows),
+        "required_span_seconds": int(minimum_span.total_seconds()),
         "total_cycles": total_cycles,
         "duplicate_cycles": duplicate_cycles,
         "missing_cycles": missing_cycles,
@@ -207,7 +234,6 @@ def evaluate_soak_readiness(
     safety_passed = (
         manifest.mode is RunMode.PAPER_LIVE
         and experiment.get("mode") == "paper_live"
-        and settings.run_mode is RunMode.PAPER_LIVE
         and not settings.binance_demo_api_key
         and not settings.binance_demo_api_secret
     )
@@ -250,7 +276,12 @@ def evaluate_soak_readiness(
         and log_audit.get("error_lines") == 0
     )
     checks = [
-        _check("paper_only_safety", safety_passed, "paper mode with no exchange credentials"),
+        _check(
+            "paper_only_safety",
+            safety_passed,
+            "manifest and stored experiment are paper_live; current shell has no exchange "
+            "credentials",
+        ),
         _check(
             "candidate_identity",
             identity_matches,
@@ -282,8 +313,11 @@ def evaluate_soak_readiness(
         _check(
             "decision_cardinality",
             cardinality_passed,
-            f"cycles={coverage['total_cycles']} missing={coverage['missing_cycles']} "
-            f"duplicates={coverage['duplicate_cycles']}",
+            f"cycles={coverage['total_cycles']} overview_total={overview_total} "
+            f"symbols_passed={coverage['symbols_passed']}/{coverage['expected_symbols']} "
+            f"required_span_seconds={coverage['required_span_seconds']} "
+            f"missing={coverage['missing_cycles']} duplicates={coverage['duplicate_cycles']} "
+            f"irregular={coverage['irregular_intervals']}",
         ),
         _check(
             "required_data_quality",
@@ -619,11 +653,7 @@ async def build_configured_soak_readiness(
         required_quality_failures,
         unsafe_quality_admissions,
     ) = database_state
-    health_state = {
-        **_object(overview.get("runtime"), "overview runtime"),
-        **_object(overview.get("freshness"), "overview freshness"),
-        **_object(overview.get("operations"), "overview operations"),
-    }
+    health_state = _health_state_from_overview(overview)
     health = evaluate_experiment_health(
         state=health_state,
         ledger=ledger,

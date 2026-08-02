@@ -7,7 +7,9 @@ import pytest
 from maais.config.modes import RunMode
 from maais.config.settings import Settings
 from maais.experiments.prepare import RepositoryIdentity
+from maais.operations.health import evaluate_experiment_health
 from maais.operations.soak_readiness import (
+    _health_state_from_overview,
     audit_structured_logs,
     evaluate_soak_readiness,
     write_soak_readiness_bundle,
@@ -88,6 +90,75 @@ def test_soak_readiness_passes_only_complete_healthy_contiguous_evidence() -> No
     assert report["safety"] == {"paper_trading_only": True, "live_money": False}
     assert report["decision_coverage"]["missing_cycles"] == 0  # type: ignore[index]
     assert all(check["passed"] for check in report["checks"])  # type: ignore[union-attr]
+
+
+def test_soak_safety_uses_frozen_runtime_evidence_not_invoking_shell_mode() -> None:
+    inputs = _inputs()
+    inputs["settings"] = Settings(run_mode=RunMode.REPLAY)
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = {check["name"]: check for check in report["checks"]}  # type: ignore[union-attr]
+
+    assert checks["paper_only_safety"]["passed"] is True
+    assert report["passed"] is True
+
+
+def test_soak_health_restores_normalized_runtime_timestamps() -> None:
+    recent = NOW - timedelta(seconds=30)
+    overview = {
+        "runtime": {
+            "worker_status": "running",
+            "checkpoint_at": recent.isoformat(),
+            "lease_status": "active",
+            "lease_heartbeat_at": recent.isoformat(),
+            "lease_expires_at": (NOW + timedelta(seconds=30)).isoformat(),
+            "kill_switch_active": False,
+        },
+        "freshness": {
+            "expected_symbols": 1,
+            "cursor_count": 1,
+            "latest_bar_close_at": recent.isoformat(),
+            "latest_cursor_update_at": recent.isoformat(),
+            "halted_cursors": 0,
+            "active_recoveries": 0,
+        },
+        "operations": {"open_incidents": 0, "review_incidents": 0},
+    }
+
+    state = _health_state_from_overview(overview)
+    health = evaluate_experiment_health(
+        state=state,
+        ledger={"ok": True, "error_count": 0},
+        now=NOW,
+        maximum_lag=timedelta(minutes=3),
+        allow_stopped=False,
+    )
+
+    assert isinstance(state["checkpoint_at"], datetime)
+    assert health["healthy"] is True
+
+
+def test_soak_cardinality_failure_exposes_span_and_symbol_progress() -> None:
+    inputs = _inputs()
+    inputs["decision_times"] = {
+        symbol: values[:2]
+        for symbol, values in inputs["decision_times"].items()  # type: ignore[union-attr]
+    }
+    inputs["overview"] = {
+        **inputs["overview"],  # type: ignore[dict-item]
+        "decisions": {"total": len(inputs["decision_times"]) * 2},  # type: ignore[arg-type]
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    check = next(
+        item
+        for item in report["checks"]
+        if item["name"] == "decision_cardinality"  # type: ignore[union-attr]
+    )
+
+    assert check["passed"] is False
+    assert "symbols_passed=0/" in check["detail"]
+    assert "required_span_seconds=" in check["detail"]
 
 
 def test_soak_readiness_explains_every_material_failure() -> None:
