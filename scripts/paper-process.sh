@@ -5,6 +5,75 @@
 # supervisor can instead be a uv wrapper with the Python process beneath it.
 PAPER_TMUX_PANE_PID=""
 
+paper_resolve_docker_context() {
+  local context="${MAAIS_DOCKER_CONTEXT:-}"
+
+  if [[ -z "${context}" ]]; then
+    context="$(docker context show)" || return 1
+  fi
+  if [[ -z "${context}" || "${context}" == -* || "${context}" =~ [[:space:]] ]]; then
+    echo "Docker context must be a nonempty name without whitespace" >&2
+    return 64
+  fi
+  printf '%s\n' "${context}"
+}
+
+paper_docker_compose() {
+  local context="$1"
+  shift
+  docker --context "${context}" compose "$@"
+}
+
+paper_compose_postgres_identity() {
+  local context="$1"
+  paper_docker_compose "${context}" exec -T postgres \
+    psql -U maais -d maais -Atc \
+    'SELECT system_identifier::text FROM pg_control_system()'
+}
+
+paper_configured_postgres_identity() {
+  uv run maais database-identity | jq -er '.system_identifier'
+}
+
+paper_assert_postgres_route() {
+  local context="$1"
+  local compose_identity
+  local configured_identity
+
+  compose_identity="$(paper_compose_postgres_identity "${context}")" || return 1
+  configured_identity="$(paper_configured_postgres_identity)" || return 1
+  if [[ ! "${compose_identity}" =~ ^[0-9]+$ ]]; then
+    echo "Docker context ${context} returned an invalid PostgreSQL system_identifier" >&2
+    return 1
+  fi
+  if [[ ! "${configured_identity}" =~ ^[0-9]+$ ]]; then
+    echo "configured PostgreSQL returned an invalid system_identifier" >&2
+    return 1
+  fi
+  if [[ "${compose_identity}" != "${configured_identity}" ]]; then
+    echo "configured PostgreSQL system_identifier ${configured_identity} differs from Docker context ${context} system_identifier ${compose_identity}" >&2
+    return 1
+  fi
+  printf '%s\n' "${configured_identity}"
+}
+
+paper_assert_recorded_postgres_route() {
+  local context="$1"
+  local recorded_identity="$2"
+  local configured_identity
+
+  if [[ ! "${recorded_identity}" =~ ^[0-9]+$ ]]; then
+    echo "recorded candidate PostgreSQL system_identifier is invalid" >&2
+    return 1
+  fi
+  configured_identity="$(paper_assert_postgres_route "${context}")" || return 1
+  if [[ "${configured_identity}" != "${recorded_identity}" ]]; then
+    echo "configured PostgreSQL system_identifier ${configured_identity} differs from recorded candidate system_identifier ${recorded_identity}" >&2
+    return 1
+  fi
+  printf '%s\n' "${configured_identity}"
+}
+
 paper_signal_descendants() {
   local parent_pid="$1"
   local child_pid

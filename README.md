@@ -29,9 +29,16 @@ client tools.
 ```bash
 cp .env.template .env
 uv sync --dev
-docker compose up -d --wait postgres
+export MAAIS_DOCKER_CONTEXT=desktop-linux  # use `docker context show` to choose yours
+docker --context "${MAAIS_DOCKER_CONTEXT}" compose up -d --wait postgres
 uv run alembic upgrade head
+uv run maais database-identity
 ```
+
+If more than one local container engine is installed, keep
+`MAAIS_DOCKER_CONTEXT` explicit. Timed-run startup compares the Compose
+PostgreSQL `system_identifier` with the database reached by the application and
+fails closed if they are different.
 
 ## Verification
 

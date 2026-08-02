@@ -49,6 +49,8 @@ def _inputs() -> dict[str, object]:
         "run_state": {
             "experiment_id": str(manifest.experiment_id),
             "started_at": (NOW - timedelta(hours=24, minutes=1)).isoformat(),
+            "docker_context": "desktop-linux",
+            "postgres_system_identifier": "7669409277984608290",
             "process_alive": {"worker": True, "dashboard": True, "awake": True},
         },
         "preflight": {
@@ -72,6 +74,12 @@ def _inputs() -> dict[str, object]:
         },
         "health": {"healthy": True, "checks": []},
         "ledger": {"ok": True, "error_count": 0, "errors": []},
+        "database_identity": {
+            "database": "maais",
+            "system_identifier": "7669409277984608290",
+            "server_address": "172.18.0.2",
+            "server_port": 5432,
+        },
         "decision_times": decision_times,
         "required_quality_failures": 0,
         "unsafe_quality_admissions": 0,
@@ -134,6 +142,26 @@ def test_soak_readiness_requires_verified_daily_report_reconciliation() -> None:
     assert report["passed"] is False
     assert checks["daily_report_reconciliation"]["passed"] is False
     assert "no recorded complete daily report" in checks["daily_report_reconciliation"]["detail"]
+
+
+def test_soak_readiness_rejects_a_replaced_postgresql_cluster() -> None:
+    inputs = _inputs()
+    inputs["database_identity"] = {
+        **inputs["database_identity"],  # type: ignore[dict-item]
+        "system_identifier": "7669553245924327458",
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = {check["name"]: check for check in report["checks"]}  # type: ignore[union-attr]
+
+    assert report["passed"] is False
+    assert checks["postgres_cluster_identity"] == {
+        "name": "postgres_cluster_identity",
+        "passed": False,
+        "detail": (
+            "context=desktop-linux recorded=7669409277984608290 configured=7669553245924327458"
+        ),
+    }
 
 
 def test_soak_health_restores_normalized_runtime_timestamps() -> None:

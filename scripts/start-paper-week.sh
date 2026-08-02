@@ -32,7 +32,9 @@ if [[ -f "${current_state}" ]]; then
 fi
 
 cd "${repository_root}"
-docker compose up -d --wait postgres
+docker_context="$(paper_resolve_docker_context)"
+paper_docker_compose "${docker_context}" up -d --wait postgres
+postgres_system_identifier="$(paper_assert_postgres_route "${docker_context}")"
 uv run alembic upgrade head
 
 preflight_path="${state_dir}/preflight-$(date -u +%Y%m%dT%H%M%SZ).json"
@@ -141,11 +143,13 @@ jq -n \
   --argjson awake_pid "${awake_pid}" \
   --arg awake_kind "${awake_kind}" \
   --arg supervisor "tmux" \
+  --arg docker_context "${docker_context}" \
+  --arg postgres_system_identifier "${postgres_system_identifier}" \
   --arg worker_session "${worker_session}" \
   --arg dashboard_session "${dashboard_session}" \
   --arg awake_session "${awake_session}" \
   --argjson port "${mission_control_port}" \
-  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
+  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
   > "${temporary_state}"
 mv "${temporary_state}" "${current_state}"
 

@@ -5,10 +5,17 @@
 Use the exact candidate manifest and a passing restore-verification artifact:
 
 ```bash
-scripts/start-paper-week.sh \
+MAAIS_DOCKER_CONTEXT=desktop-linux scripts/start-paper-week.sh \
   artifacts/manifests/week-candidate-YYYY-MM-DD.json \
   artifacts/restore-drills/<drill>/restore-verification.json
 ```
+
+Use the context that owns the PostgreSQL port on this machine; `desktop-linux`
+is the Docker Desktop context on macOS, while other installations may use
+`default` or another explicit name. Startup, status, daily close, and recovery
+compare the container cluster, configured database endpoint, and recorded
+candidate system identifier. They fail closed on context drift or cluster
+replacement.
 
 The script starts PostgreSQL, applies migrations, runs fail-closed preflight, starts Mission Control on localhost, starts the paper worker, waits for a running checkpoint plus active lease, and starts a tracked OS sleep inhibitor. The three processes run in named detached `tmux` sessions so they survive the launching terminal. Session names, process IDs, immutable inputs, preflight output, and logs are recorded under `artifacts/run-state/`. Startup fails if `tmux` or both supported sleep inhibitors are unavailable.
 

@@ -28,6 +28,7 @@ from maais.domain.json import content_hash, to_json_data
 from maais.experiments.manifest import ExperimentManifest
 from maais.experiments.prepare import RepositoryIdentity, capture_repository_identity
 from maais.live import load_manifest_file
+from maais.operations.database_identity import collect_configured_database_identity
 from maais.operations.final_reporting import (
     FinalReportValidationError,
     verify_daily_report_bundle,
@@ -198,6 +199,7 @@ def evaluate_soak_readiness(
     overview: Mapping[str, object],
     health: Mapping[str, object],
     ledger: Mapping[str, object],
+    database_identity: Mapping[str, object],
     decision_times: Mapping[str, Sequence[datetime]],
     required_quality_failures: int,
     unsafe_quality_admissions: int,
@@ -224,6 +226,9 @@ def evaluate_soak_readiness(
     operations = _object(overview.get("operations"), "overview operations")
     freshness = _object(overview.get("freshness"), "overview freshness")
     processes = _object(run_state.get("process_alive"), "run state process_alive")
+    docker_context = run_state.get("docker_context")
+    recorded_postgres_identity = run_state.get("postgres_system_identifier")
+    configured_postgres_identity = database_identity.get("system_identifier")
 
     identity_matches = (
         repository.worktree_hash is None
@@ -244,6 +249,14 @@ def evaluate_soak_readiness(
         and experiment.get("mode") == "paper_live"
         and not settings.binance_demo_api_key
         and not settings.binance_demo_api_secret
+    )
+    postgres_identity_passed = (
+        isinstance(docker_context, str)
+        and bool(docker_context)
+        and isinstance(recorded_postgres_identity, str)
+        and recorded_postgres_identity.isdigit()
+        and isinstance(configured_postgres_identity, str)
+        and configured_postgres_identity == recorded_postgres_identity
     )
     preflight_passed = (
         preflight.get("passed") is True
@@ -324,6 +337,12 @@ def evaluate_soak_readiness(
             identity_matches,
             "repository, manifest, stored experiment, and run state share one clean identity",
         ),
+        _check(
+            "postgres_cluster_identity",
+            postgres_identity_passed,
+            f"context={docker_context} recorded={recorded_postgres_identity} "
+            f"configured={configured_postgres_identity}",
+        ),
         _check("preflight_evidence", preflight_passed, "frozen candidate preflight passed"),
         _check(
             "minimum_duration",
@@ -400,6 +419,7 @@ def evaluate_soak_readiness(
         "checks": checks,
         "health": dict(health),
         "ledger": dict(ledger),
+        "database_identity": dict(database_identity),
         "overview": dict(overview),
         "decision_coverage": coverage,
         "required_quality_failures": required_quality_failures,
@@ -685,9 +705,10 @@ async def build_configured_soak_readiness(
     if not isinstance(preflight_value, dict):
         raise TypeError("candidate preflight must be a JSON object")
     generated_at = datetime.now(UTC)
-    repository, database_state = await asyncio.gather(
+    repository, database_state, database_identity = await asyncio.gather(
         asyncio.to_thread(capture_repository_identity, repository_root),
         _database_soak_state(settings.database_url, experiment_id),
+        collect_configured_database_identity(),
     )
     (
         overview,
@@ -772,6 +793,7 @@ async def build_configured_soak_readiness(
         overview=overview,
         health=health,
         ledger=ledger,
+        database_identity=database_identity,
         decision_times=decision_times,
         required_quality_failures=required_quality_failures,
         unsafe_quality_admissions=unsafe_quality_admissions,

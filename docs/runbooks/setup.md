@@ -16,10 +16,19 @@ cp .env.template .env
 uv sync --dev
 npm --prefix dashboard ci
 npm --prefix dashboard run build
-docker compose up -d --wait postgres
+export MAAIS_DOCKER_CONTEXT=desktop-linux  # use `docker context show` to choose yours
+docker --context "${MAAIS_DOCKER_CONTEXT}" compose up -d --wait postgres
 uv run alembic upgrade head
+uv run maais database-identity
 uv run maais verify-ledger
 ```
+
+Keep the Docker context explicit when Docker Desktop, OrbStack, Colima, or
+another engine coexist. Candidate startup reads `MAAIS_DOCKER_CONTEXT` (or the
+current context when it is unset), proves that the Compose container and the
+configured application endpoint share one PostgreSQL `system_identifier`, and
+records both identities in run state. A mismatch fails before migrations,
+preflight, or worker startup.
 
 Keep `BINANCE_DEMO_API_KEY` and `BINANCE_DEMO_API_SECRET` empty for paper-live runs. The start script sets `RUN_MODE=paper_live` for preflight and both long-running services. It also starts Mission Control and the worker with `ENVIRONMENT=production`, which enables JSON-line logs and disables SQL echo for the multi-day run.
 

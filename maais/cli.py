@@ -18,6 +18,7 @@ from maais.live import (
     run_live_paper_manifest,
 )
 from maais.operations.backups import backup_configured_database
+from maais.operations.database_identity import collect_configured_database_identity
 from maais.operations.final_reporting import (
     build_final_report_from_bundles,
     write_final_report_bundle,
@@ -88,6 +89,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve the read-only local paper-trading dashboard API",
     )
     mission_control.add_argument("--port", type=_localhost_port, default=8000)
+    commands.add_parser(
+        "database-identity",
+        help="report the configured PostgreSQL cluster identity",
+    )
     commands.add_parser(
         "verify-ledger",
         help="read-only verification of event, projection, and account consistency",
@@ -203,6 +208,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = asyncio.run(verify_configured_ledger())
         print(json.dumps(result, sort_keys=True))
         return 0 if result["ok"] is True else 1
+    if arguments.command == "database-identity":
+        result = asyncio.run(collect_configured_database_identity())
+        print(json.dumps(result, sort_keys=True))
+        return 0
     if arguments.command == "daily-report":
         report = asyncio.run(
             build_configured_daily_report(arguments.experiment, arguments.report_date)

@@ -38,6 +38,8 @@ awake_pid="$(jq -r '.awake_pid // empty' "${current_state}")"
 worker_session="$(jq -r '.worker_session' "${current_state}")"
 dashboard_session="$(jq -r '.dashboard_session' "${current_state}")"
 awake_session="$(jq -r '.awake_session' "${current_state}")"
+docker_context="$(jq -er '.docker_context' "${current_state}")"
+postgres_system_identifier="$(jq -er '.postgres_system_identifier' "${current_state}")"
 target_pid="${dashboard_pid}"
 if [[ "${service}" == "worker" ]]; then
   target_pid="${worker_pid}"
@@ -53,6 +55,9 @@ fi
 
 mkdir -p "${evidence_dir}"
 cd "${repository_root}"
+paper_assert_recorded_postgres_route \
+  "${docker_context}" \
+  "${postgres_system_identifier}" >/dev/null
 before_ledger="$(uv run maais verify-ledger)"
 before_overview="$(curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
 recovery_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

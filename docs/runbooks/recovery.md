@@ -8,6 +8,10 @@
 4. Run `scripts/recover-paper-week.sh worker "REASON"`. It refuses a live recorded PID, waits for lease expiry, reuses the frozen manifest, requires a higher lease epoch, restores the sleep inhibitor, verifies the ledger before and after, and writes immutable evidence under `artifacts/run-state/recovery-evidence/`.
 5. Compare counts and event positions before and after restart. Any duplicate decision, order, fill, or report fails the candidate.
 
+Recovery reuses the Docker context and PostgreSQL system identifier recorded at
+candidate start. Do not switch container engines or remap the database port; a
+different cluster is rejected before either service is restarted.
+
 ## Mission Control restart
 
 If Mission Control stops but the worker remains alive, run:

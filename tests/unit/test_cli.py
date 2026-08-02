@@ -27,6 +27,7 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     )
     run = parser.parse_args(["paper-live", "--manifest", "candidate.json"])
     mission_control = parser.parse_args(["mission-control"])
+    database_identity = parser.parse_args(["database-identity"])
     verify_ledger = parser.parse_args(["verify-ledger"])
     report = parser.parse_args(
         [
@@ -110,6 +111,7 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert not prepare.force
     assert run.manifest == Path("candidate.json")
     assert mission_control.port == 8000
+    assert database_identity.command == "database-identity"
     assert verify_ledger.command == "verify-ledger"
     assert report.report_date.isoformat() == "2026-08-02"
     assert report.output == Path("artifacts/reports")
@@ -158,6 +160,29 @@ def test_verify_ledger_prints_machine_readable_result_and_returns_success(
         "error_count": 0,
         "errors": [],
         "ok": True,
+    }
+
+
+def test_database_identity_prints_machine_readable_cluster_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async def fake_identity() -> dict[str, object]:
+        return {
+            "database": "maais",
+            "system_identifier": "7669409277984608290",
+            "server_address": "172.18.0.2",
+            "server_port": 5432,
+        }
+
+    monkeypatch.setattr("maais.cli.collect_configured_database_identity", fake_identity)
+
+    assert main(["database-identity"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "database": "maais",
+        "server_address": "172.18.0.2",
+        "server_port": 5432,
+        "system_identifier": "7669409277984608290",
     }
 
 

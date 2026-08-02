@@ -8,6 +8,7 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_dir}/.." && pwd)"
+source "${script_dir}/paper-process.sh"
 experiment_id="$1"
 report_date="$2"
 current_state="${repository_root}/artifacts/run-state/current.json"
@@ -21,8 +22,13 @@ if [[ "${state_experiment_id}" != "${experiment_id}" ]]; then
   echo "current paper-week state belongs to ${state_experiment_id}, not ${experiment_id}" >&2
   exit 1
 fi
+docker_context="$(jq -er '.docker_context' "${current_state}")"
+postgres_system_identifier="$(jq -er '.postgres_system_identifier' "${current_state}")"
 
 cd "${repository_root}"
+paper_assert_recorded_postgres_route \
+  "${docker_context}" \
+  "${postgres_system_identifier}" >/dev/null
 uv run maais verify-ledger
 daily_report_result="$(uv run maais daily-report \
   --experiment "${experiment_id}" \
