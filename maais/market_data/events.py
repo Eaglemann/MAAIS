@@ -247,6 +247,7 @@ class ReferencePricePayload:
     source_bid: Decimal | None
     source_ask: Decimal | None
     source_published_at: datetime | None
+    source_engine_at: datetime | None
 
     def __post_init__(self) -> None:
         if not self.instrument or not self.source_event_id:
@@ -263,6 +264,8 @@ class ReferencePricePayload:
                 raise ValueError("reference source bid must be below ask")
         if self.source_published_at is not None:
             _require_utc(self.source_published_at, "reference source_published_at")
+        if self.source_engine_at is not None:
+            _require_utc(self.source_engine_at, "reference source_engine_at")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -275,6 +278,7 @@ class ReferencePricePayload:
             "source_bid": self.source_bid,
             "source_ask": self.source_ask,
             "source_published_at": self.source_published_at,
+            "source_engine_at": self.source_engine_at,
         }
 
 

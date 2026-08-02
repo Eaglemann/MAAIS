@@ -218,6 +218,7 @@ def parse_binance_spot_book_tickers(
                     source_bid=bid,
                     source_ask=ask,
                     source_published_at=None,
+                    source_engine_at=None,
                 ),
             )
         )

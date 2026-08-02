@@ -78,6 +78,8 @@ class SourceObservation:
     venue_event_at: datetime
     observed_at: datetime
     sequence: int | None
+    source_published_at: datetime | None
+    source_engine_at: datetime | None
     timestamp_basis: TimestampBasis
 
     @classmethod
@@ -85,6 +87,11 @@ class SourceObservation:
         timestamp_basis = TimestampBasis.VENUE_EVENT
         if event.venue_event_at == event.observed_at:
             timestamp_basis = TimestampBasis.LOCAL_OBSERVATION
+        source_published_at: datetime | None = None
+        source_engine_at: datetime | None = None
+        if isinstance(event.payload, ReferencePricePayload):
+            source_published_at = event.payload.source_published_at
+            source_engine_at = event.payload.source_engine_at
         return cls(
             venue=event.venue,
             stream=event.stream,
@@ -93,6 +100,8 @@ class SourceObservation:
             venue_event_at=event.venue_event_at,
             observed_at=event.observed_at,
             sequence=event.sequence,
+            source_published_at=source_published_at,
+            source_engine_at=source_engine_at,
             timestamp_basis=timestamp_basis,
         )
 
@@ -105,6 +114,8 @@ class SourceObservation:
             "venue_event_at": self.venue_event_at,
             "observed_at": self.observed_at,
             "sequence": self.sequence,
+            "source_published_at": self.source_published_at,
+            "source_engine_at": self.source_engine_at,
             "timestamp_basis": self.timestamp_basis,
         }
 

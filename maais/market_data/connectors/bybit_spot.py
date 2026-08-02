@@ -174,7 +174,7 @@ def parse_bybit_reference_book(
             f"{BYBIT_SPOT_VENUE}:orderbook:{bybit_symbol}:{source_event_id}:{observation_id}"
         ),
         kind=MarketEventKind.REFERENCE_PRICE,
-        venue_event_at=engine_at,
+        venue_event_at=published_at,
         observed_at=observed_at,
         sequence=sequence,
         sequence_not_applicable_reason=None,
@@ -188,6 +188,7 @@ def parse_bybit_reference_book(
             source_bid=best_bid,
             source_ask=best_ask,
             source_published_at=published_at,
+            source_engine_at=engine_at,
         ),
     )
 

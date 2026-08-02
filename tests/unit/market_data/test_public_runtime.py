@@ -48,6 +48,7 @@ def _event(kind: MarketEventKind, event_id: str) -> ObservedMarketEvent:
             source_bid=Decimal("100"),
             source_ask=Decimal("101"),
             source_published_at=NOW,
+            source_engine_at=None,
         )
         venue = "binance_spot" if reference_kind is ReferenceKind.PRIMARY_SPOT else "bybit_spot"
     return ObservedMarketEvent(

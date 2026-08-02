@@ -87,6 +87,7 @@ def test_sequence_is_required_or_explicitly_not_applicable() -> None:
             source_bid=None,
             source_ask=None,
             source_published_at=None,
+            source_engine_at=None,
         ),
     )
 

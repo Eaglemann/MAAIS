@@ -13,6 +13,7 @@ from maais.market_data.connectors.bybit_spot import (
     parse_bybit_server_time,
 )
 from maais.market_data.events import ReferenceKind, ReferencePricePayload
+from maais.market_data.frames import SourceObservation
 
 OBSERVED_AT = datetime(2026, 8, 2, 12, 0, 0, 100_000, tzinfo=timezone.utc)
 SERVER_MS = 1785672000000
@@ -105,7 +106,7 @@ def test_bybit_preflight_requires_every_explicit_trading_spot_mapping() -> None:
         )
 
 
-def test_reference_book_retains_exact_engine_time_sequence_and_executable_prices() -> None:
+def test_reference_book_uses_snapshot_time_and_retains_engine_provenance() -> None:
     event = parse_bybit_reference_book(
         _book(),
         primary_symbol="BTCUSDT",
@@ -115,7 +116,7 @@ def test_reference_book_retains_exact_engine_time_sequence_and_executable_prices
 
     assert event.venue == "bybit_spot"
     assert event.venue_event_at == datetime.fromtimestamp(
-        (SERVER_MS - 5) / 1000,
+        (SERVER_MS - 3) / 1000,
         tz=timezone.utc,
     )
     assert event.sequence == 2000
@@ -130,6 +131,36 @@ def test_reference_book_retains_exact_engine_time_sequence_and_executable_prices
     assert event.payload.source_published_at == datetime.fromtimestamp(
         (SERVER_MS - 3) / 1000,
         tz=timezone.utc,
+    )
+    assert event.payload.source_engine_at == datetime.fromtimestamp(
+        (SERVER_MS - 5) / 1000,
+        tz=timezone.utc,
+    )
+    source = SourceObservation.from_event(event)
+    assert source.source_published_at == event.payload.source_published_at
+    assert source.source_engine_at == event.payload.source_engine_at
+    assert source.to_dict()["source_engine_at"] == event.payload.source_engine_at
+
+
+def test_idle_engine_time_does_not_make_a_fresh_rest_snapshot_stale() -> None:
+    raw = _book()
+    result = raw["result"]
+    assert isinstance(result, dict)
+    result["ts"] = SERVER_MS - 100
+    result["cts"] = SERVER_MS - 3_111
+
+    event = parse_bybit_reference_book(
+        raw,
+        primary_symbol="BTCUSDT",
+        bybit_symbol="BTCUSDT",
+        observed_at=datetime.fromtimestamp(SERVER_MS / 1000, tz=timezone.utc),
+    )
+
+    assert (event.observed_at - event.venue_event_at).total_seconds() == pytest.approx(0.1)
+    assert isinstance(event.payload, ReferencePricePayload)
+    assert event.payload.source_engine_at is not None
+    assert (event.observed_at - event.payload.source_engine_at).total_seconds() == pytest.approx(
+        3.111
     )
 
 
