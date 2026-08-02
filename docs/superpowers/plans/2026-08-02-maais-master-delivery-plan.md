@@ -183,6 +183,8 @@ The phase brief below fixes scope and acceptance criteria. Its implementation-gr
 
 ## Phase 3 - Validated End-to-End Orchestrator
 
+**Status:** In progress. Detailed execution plan: `docs/superpowers/plans/2026-08-02-maais-phase-3-validated-orchestrator.md`.
+
 ### Task groups
 
 - [ ] Build exactly-once one-minute frames from live and replay events.
