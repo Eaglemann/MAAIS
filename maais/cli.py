@@ -17,6 +17,7 @@ from maais.live import (
     prepare_live_manifest_file,
     run_live_paper_manifest,
 )
+from maais.operations.backups import backup_configured_database
 from maais.operations.reporting import (
     build_configured_daily_report,
     write_daily_report_bundle,
@@ -70,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--experiment", type=UUID, required=True)
     report.add_argument("--date", dest="report_date", type=_date, required=True)
     report.add_argument("--output", type=Path, required=True)
+    backup = commands.add_parser(
+        "backup",
+        help="verify and create an immutable local PostgreSQL backup bundle",
+    )
+    backup.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -127,6 +133,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(reconciliation, dict):
             raise TypeError("daily report reconciliation must be an object")
         return 0 if reconciliation["ledger_ok"] is True else 1
+    if arguments.command == "backup":
+        paths = asyncio.run(backup_configured_database(arguments.output))
+        print(
+            json.dumps(
+                {
+                    "directory": str(paths.directory),
+                    "dump": str(paths.dump_path),
+                    "manifest": str(paths.manifest_path),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
     manifest = load_manifest_file(arguments.manifest)
     asyncio.run(run_live_paper_manifest(manifest, settings=settings))
     return 0

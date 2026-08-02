@@ -36,6 +36,7 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/reports",
         ]
     )
+    backup = parser.parse_args(["backup", "--output", "backups"])
 
     assert prepare.output == Path("candidate.json")
     assert not prepare.force
@@ -44,6 +45,7 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert verify_ledger.command == "verify-ledger"
     assert report.report_date.isoformat() == "2026-08-02"
     assert report.output == Path("artifacts/reports")
+    assert backup.output == Path("backups")
 
     with pytest.raises(SystemExit):
         parser.parse_args(["mission-control", "--port", "0"])

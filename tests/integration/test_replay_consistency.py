@@ -13,6 +13,7 @@ from maais.db.replay import rebuild_experiment_projection, verify_ledger_consist
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import ExperimentStatus
 from maais.experiments.service import ExperimentLifecycle
+from maais.operations.backups import collect_backup_metadata
 from maais.operations.reporting import build_daily_report
 from maais.operations.verification import verify_ledger_with_factory
 from tests.integration.test_decision_lineage import _prepare_bundle
@@ -94,6 +95,23 @@ async def test_daily_report_reconciles_complete_decision_lineage(
     assert report["account"]["ending_equity"] == "10000"  # type: ignore[index]
     assert report["reconciliation"]["ledger_ok"] is True  # type: ignore[index]
     assert len(report["reconciliation"]["report_hash"]) == 64  # type: ignore[index]
+
+
+async def test_backup_inventory_reconciles_database_before_dump(
+    uow_factory: UnitOfWork,
+    test_database_url: str,
+) -> None:
+    _manifest, bundle = await _prepare_bundle(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.decisions.record_bundle(bundle)
+
+    metadata = await collect_backup_metadata(test_database_url)
+
+    assert metadata.database_name == "maais_test"
+    assert metadata.schema_revision == "0015"
+    assert metadata.table_counts["decision_cycles"] == 1
+    assert metadata.table_counts["agent_evaluations"] == 8
+    assert metadata.ledger == {"ok": True, "error_count": 0, "errors": []}
 
 
 async def test_consistency_report_accepts_reconciled_paper_account(
