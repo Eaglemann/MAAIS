@@ -325,8 +325,11 @@ class DecisionBundle:
                 raise ValueError("agent references another decision cycle")
             if not agent.enabled and ReasonCode.DISABLED_AGENT not in agent.reason_codes:
                 raise ValueError("disabled_agent reason is required")
-            if not agent.compatible and ReasonCode.INCOMPATIBLE_REGIME not in agent.reason_codes:
-                raise ValueError("incompatible_regime reason is required")
+            if not agent.compatible and not {
+                ReasonCode.INCOMPATIBLE_REGIME,
+                ReasonCode.AGENT_FAILED,
+            }.intersection(agent.reason_codes):
+                raise ValueError("incompatible or failed-agent reason is required")
             if (
                 not agent.enabled or not agent.compatible
             ) and agent.direction is not Direction.NEUTRAL:

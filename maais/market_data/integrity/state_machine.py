@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
+from uuid import UUID
 
 from maais.domain.enums import QualityStatus
 from maais.domain.json import JsonValue, content_hash, freeze_json
@@ -175,7 +176,7 @@ class IntegrityResult:
 
 @dataclass(frozen=True, slots=True)
 class IntegrityAssessment:
-    frame_id: object
+    frame_id: UUID
     admission: FrameAdmission
     quality_status: QualityStatus
     results: tuple[IntegrityResult, ...]

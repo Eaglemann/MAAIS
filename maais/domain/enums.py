@@ -75,6 +75,7 @@ class ReasonCode(StrEnum):
     NEUTRAL_CONSENSUS = "neutral_consensus"
     DISABLED_AGENT = "disabled_agent"
     INCOMPATIBLE_REGIME = "incompatible_regime"
+    AGENT_FAILED = "agent_failed"
     DATA_QUALITY_FAILED = "data_quality_failed"
     INSUFFICIENT_HISTORY = "insufficient_history"
     CONSENSUS_FAILED = "consensus_failed"
