@@ -1,6 +1,8 @@
 import json
+from datetime import timezone
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -238,6 +240,60 @@ def test_daily_report_requires_explicit_partial_override_for_stop_evidence(
         )
         == 0
     )
+    assert json.loads(capsys.readouterr().out)["directory"] == str(target)
+
+
+def test_final_report_cli_aggregates_the_exact_seven_day_evidence_set(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_build(reports: Path, **kwargs: object) -> dict[str, object]:
+        captured["reports"] = reports
+        captured.update(kwargs)
+        return {"report_id": "f" * 64}
+
+    target = tmp_path / "final" / "bundle"
+    monkeypatch.setattr(
+        "maais.cli.build_final_report_from_bundles",
+        fake_build,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "maais.cli.write_final_report_bundle",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            directory=target,
+            json_path=target / "report.json",
+            markdown_path=target / "report.md",
+            daily_reports_csv_path=target / "daily-reports.csv",
+            manifest_path=target / "bundle-manifest.json",
+        ),
+        raising=False,
+    )
+
+    assert (
+        main(
+            [
+                "final-report",
+                "--experiment",
+                "11111111-1111-4111-8111-111111111111",
+                "--start-date",
+                "2026-08-03",
+                "--reports",
+                str(tmp_path / "daily"),
+                "--output",
+                str(tmp_path / "final"),
+            ]
+        )
+        == 0
+    )
+    assert captured["reports"] == tmp_path / "daily"
+    assert captured["experiment_id"] == UUID("11111111-1111-4111-8111-111111111111")
+    assert str(captured["start_date"]) == "2026-08-03"
+    assert captured["days"] == 7
+    assert captured["generated_at"].utcoffset() == timezone.utc.utcoffset(None)  # type: ignore[union-attr]
     assert json.loads(capsys.readouterr().out)["directory"] == str(target)
 
 

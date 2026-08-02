@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import json
 from collections.abc import Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -18,6 +18,10 @@ from maais.live import (
     run_live_paper_manifest,
 )
 from maais.operations.backups import backup_configured_database
+from maais.operations.final_reporting import (
+    build_final_report_from_bundles,
+    write_final_report_bundle,
+)
 from maais.operations.health import collect_configured_experiment_health
 from maais.operations.incident_management import (
     IncidentAction,
@@ -96,6 +100,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow a partial current-day bundle for explicit stop evidence only",
     )
+    final_report = commands.add_parser(
+        "final-report",
+        help="verify and aggregate exactly seven immutable Berlin-day report bundles",
+    )
+    final_report.add_argument("--experiment", type=UUID, required=True)
+    final_report.add_argument("--start-date", type=_date, required=True)
+    final_report.add_argument("--reports", type=Path, required=True)
+    final_report.add_argument("--output", type=Path, required=True)
     backup = commands.add_parser(
         "backup",
         help="verify and create an immutable local PostgreSQL backup bundle",
@@ -204,6 +216,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(reconciliation, dict):
             raise TypeError("daily report reconciliation must be an object")
         return 0 if reconciliation["ledger_ok"] is True else 1
+    if arguments.command == "final-report":
+        report = build_final_report_from_bundles(
+            arguments.reports,
+            experiment_id=arguments.experiment,
+            start_date=arguments.start_date,
+            days=7,
+            generated_at=datetime.now(timezone.utc),
+        )
+        paths = write_final_report_bundle(report, arguments.output)
+        print(
+            json.dumps(
+                {
+                    "report_id": report["report_id"],
+                    "directory": str(paths.directory),
+                    "json": str(paths.json_path),
+                    "markdown": str(paths.markdown_path),
+                    "daily_reports_csv": str(paths.daily_reports_csv_path),
+                    "bundle_manifest": str(paths.manifest_path),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
     if arguments.command == "backup":
         paths = asyncio.run(backup_configured_database(arguments.output))
         print(

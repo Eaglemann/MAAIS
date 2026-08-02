@@ -55,6 +55,10 @@ scripts/daily-paper-ops.sh EXPERIMENT_ID YYYY-MM-DD
 
 This verifies the ledger, writes immutable Markdown/JSON/CSV/Parquet report artifacts with hashes, creates a validated PostgreSQL backup, and checks the running processes/API. Never overwrite or delete a daily bundle during the experiment.
 
+The normal daily command fails closed while the requested Berlin day is still in
+progress. `--allow-partial` exists only for the supported stop workflow, which labels the
+bundle partial and keeps it out of the seven-day final aggregate.
+
 ## Stop
 
 ```bash

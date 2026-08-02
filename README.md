@@ -47,9 +47,10 @@ uv run pytest -q
 ## Paper-week operator workflow
 
 The operational CLI now includes ledger verification, immutable daily reports,
-analysis-ready CSV/Parquet exports, validated backups, suffix-constrained restore
-drills, and candidate preflight. The timed run remains blocked until the full
-test/fault-injection suite and 24-hour soak pass.
+analysis-ready CSV/Parquet exports, a hash-verified seven-day final aggregator,
+validated backups, suffix-constrained restore drills, and candidate preflight. The
+timed run remains blocked until the full test/fault-injection suite and 24-hour soak
+pass.
 
 - [Local setup](docs/runbooks/setup.md)
 - [Normal operations](docs/runbooks/operations.md)
