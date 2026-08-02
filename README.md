@@ -44,6 +44,19 @@ uv run detect-secrets scan --baseline .secrets.baseline --exclude-files '(^uv\.l
 uv run pytest -q
 ```
 
+## Paper-week operator workflow
+
+The operational CLI now includes ledger verification, immutable daily reports,
+analysis-ready CSV/Parquet exports, validated backups, suffix-constrained restore
+drills, and candidate preflight. The timed run remains blocked until the full
+test/fault-injection suite and 24-hour soak pass.
+
+- [Local setup](docs/runbooks/setup.md)
+- [Normal operations](docs/runbooks/operations.md)
+- [Incident response](docs/runbooks/incidents.md)
+- [Recovery and restore](docs/runbooks/recovery.md)
+- [Seven-day protocol](docs/runbooks/seven-day-experiment.md)
+
 ## Design and delivery
 
 - [Paper-trading and observability design](docs/superpowers/specs/2026-08-02-maais-paper-trading-observability-design.md)
