@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from maais.db.repositories.decisions import DecisionRepository
 from maais.db.repositories.events import EventRepository
+from maais.db.repositories.execution import PaperExecutionRepository
 from maais.db.repositories.experiments import ExperimentRepository
 
 
@@ -17,6 +18,7 @@ class UnitOfWorkContext:
     events: EventRepository
     experiments: ExperimentRepository
     decisions: DecisionRepository
+    paper_execution: PaperExecutionRepository
 
 
 class UnitOfWork:
@@ -35,4 +37,5 @@ class UnitOfWork:
                     events=events,
                     experiments=ExperimentRepository(session, events),
                     decisions=DecisionRepository(session, events),
+                    paper_execution=PaperExecutionRepository(session, events),
                 )
