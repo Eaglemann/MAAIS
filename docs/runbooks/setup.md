@@ -21,7 +21,7 @@ uv run alembic upgrade head
 uv run maais verify-ledger
 ```
 
-Keep `BINANCE_DEMO_API_KEY` and `BINANCE_DEMO_API_SECRET` empty for paper-live runs. The start script sets `RUN_MODE=paper_live` only for preflight and the worker process.
+Keep `BINANCE_DEMO_API_KEY` and `BINANCE_DEMO_API_SECRET` empty for paper-live runs. The start script sets `RUN_MODE=paper_live` for preflight and both long-running services. It also starts Mission Control and the worker with `ENVIRONMENT=production`, which enables JSON-line logs and disables SQL echo for the multi-day run.
 
 ## Candidate preparation
 

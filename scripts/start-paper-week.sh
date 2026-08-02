@@ -71,7 +71,7 @@ cleanup_startup() {
 trap cleanup_startup ERR INT TERM
 
 printf -v dashboard_command \
-  'cd %q && exec uv run maais mission-control --port %q >> %q 2>&1' \
+  'cd %q && exec env RUN_MODE=paper_live ENVIRONMENT=production uv run maais mission-control --port %q >> %q 2>&1' \
   "${repository_root}" "${mission_control_port}" "${dashboard_log}"
 paper_start_tmux_session "${dashboard_session}" "${dashboard_command}"
 dashboard_pid="${PAPER_TMUX_PANE_PID}"
@@ -91,7 +91,7 @@ if [[ "${dashboard_ready}" != true ]]; then
 fi
 
 printf -v worker_command \
-  'cd %q && exec env RUN_MODE=paper_live uv run maais paper-live --manifest %q >> %q 2>&1' \
+  'cd %q && exec env RUN_MODE=paper_live ENVIRONMENT=production uv run maais paper-live --manifest %q >> %q 2>&1' \
   "${repository_root}" "${manifest_path}" "${worker_log}"
 paper_start_tmux_session "${worker_session}" "${worker_command}"
 worker_pid="${PAPER_TMUX_PANE_PID}"
