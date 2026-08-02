@@ -52,6 +52,10 @@ class PaperWorkerHalt(RuntimeError):
     pass
 
 
+class _DispatchStop:
+    pass
+
+
 class PaperWorkerSupervisor:
     """Own the worker lease, serialized event pump, and durable lifecycle."""
 
@@ -69,6 +73,7 @@ class PaperWorkerSupervisor:
         lease_ttl: timedelta = timedelta(seconds=30),
         lease_renew_interval: timedelta = timedelta(seconds=10),
         drain_timeout: timedelta = timedelta(seconds=30),
+        dispatch_queue_size: int = 10_000,
     ) -> None:
         policy = LivePaperPolicy.from_manifest(manifest)
         if worker_id.int == 0:
@@ -79,6 +84,8 @@ class PaperWorkerSupervisor:
             raise ValueError("paper worker lease TTL must exceed its renewal interval")
         if drain_timeout <= timedelta(0):
             raise ValueError("paper worker drain timeout must be positive")
+        if dispatch_queue_size <= 0:
+            raise ValueError("paper worker dispatch queue size must be positive")
         self._uow = uow
         self._manifest = manifest
         self._policy = policy
@@ -94,7 +101,12 @@ class PaperWorkerSupervisor:
         self._state = PaperWorkerSupervisorState.STOPPED
         self._checkpoint: WorkerCheckpoint | None = None
         self._lease: WorkerLease | None = None
-        self._pump_task: asyncio.Task[None] | None = None
+        self._dispatch_queue: asyncio.Queue[ObservedMarketEvent | _DispatchStop] = (
+            asyncio.Queue(maxsize=dispatch_queue_size)
+        )
+        self._dispatch_stop = _DispatchStop()
+        self._ingest_task: asyncio.Task[None] | None = None
+        self._dispatch_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._monitor_task: asyncio.Task[None] | None = None
         self._stopping = False
@@ -111,7 +123,12 @@ class PaperWorkerSupervisor:
     async def start(self) -> None:
         if self._state is not PaperWorkerSupervisorState.STOPPED or any(
             task is not None
-            for task in (self._pump_task, self._heartbeat_task, self._monitor_task)
+            for task in (
+                self._ingest_task,
+                self._dispatch_task,
+                self._heartbeat_task,
+                self._monitor_task,
+            )
         ):
             raise RuntimeError("paper worker can be started exactly once")
         self._state = PaperWorkerSupervisorState.STARTING
@@ -125,7 +142,14 @@ class PaperWorkerSupervisor:
             raise self._failure from exc
 
         self._state = PaperWorkerSupervisorState.RUNNING
-        self._pump_task = asyncio.create_task(self._pump(), name="paper_worker_event_pump")
+        self._ingest_task = asyncio.create_task(
+            self._ingest(),
+            name="paper_worker_event_ingest",
+        )
+        self._dispatch_task = asyncio.create_task(
+            self._dispatch(),
+            name="paper_worker_event_dispatch",
+        )
         self._heartbeat_task = asyncio.create_task(
             self._heartbeat(),
             name="paper_worker_lease_heartbeat",
@@ -149,9 +173,11 @@ class PaperWorkerSupervisor:
         await self._transition(WorkerStatus.STOPPING)
         try:
             await self._public_data.stop()
-            if self._pump_task is not None:
-                async with asyncio.timeout(self._drain_timeout.total_seconds()):
-                    await self._pump_task
+            async with asyncio.timeout(self._drain_timeout.total_seconds()):
+                if self._ingest_task is not None:
+                    await self._ingest_task
+                if self._dispatch_task is not None:
+                    await self._dispatch_task
         except Exception as exc:
             await self._halt(exc)
             assert self._failure is not None
@@ -238,9 +264,26 @@ class PaperWorkerSupervisor:
                 "triggered protective exits require explicit startup reconciliation"
             )
 
-    async def _pump(self) -> None:
-        async for event in self._public_data.events():
-            await self._observations.observe(event)
+    async def _ingest(self) -> None:
+        try:
+            async for event in self._public_data.events():
+                await self._observations.observe(event)
+                try:
+                    self._dispatch_queue.put_nowait(event)
+                except asyncio.QueueFull as exc:
+                    raise PaperWorkerHalt(
+                        "paper worker dispatch queue reached capacity"
+                    ) from exc
+        finally:
+            await self._dispatch_queue.put(self._dispatch_stop)
+
+    async def _dispatch(self) -> None:
+        while True:
+            event = await self._dispatch_queue.get()
+            if event is self._dispatch_stop:
+                return
+            if not isinstance(event, ObservedMarketEvent):
+                raise TypeError("paper worker dispatch queue contains an invalid item")
             await self._engine.process(event)
 
     async def _heartbeat(self) -> None:
@@ -256,18 +299,30 @@ class PaperWorkerSupervisor:
                 )
 
     async def _monitor(self) -> None:
-        assert self._pump_task is not None and self._heartbeat_task is not None
+        assert (
+            self._ingest_task is not None
+            and self._dispatch_task is not None
+            and self._heartbeat_task is not None
+        )
         done, _ = await asyncio.wait(
-            (self._pump_task, self._heartbeat_task),
+            (self._ingest_task, self._dispatch_task, self._heartbeat_task),
             return_when=asyncio.FIRST_COMPLETED,
         )
         if self._stopping:
             return
-        task = next(iter(done))
-        try:
-            failure = task.exception()
-        except asyncio.CancelledError as exc:
-            failure = exc
+        task = next(
+            (
+                candidate
+                for candidate in done
+                if not candidate.cancelled() and candidate.exception() is not None
+            ),
+            next(iter(done)),
+        )
+        failure = (
+            asyncio.CancelledError()
+            if task.cancelled()
+            else task.exception()
+        )
         if failure is None:
             failure = RuntimeError(f"paper worker task ended unexpectedly: {task.get_name()}")
         await self._halt(failure)
@@ -341,7 +396,11 @@ class PaperWorkerSupervisor:
         current = asyncio.current_task()
         tasks = tuple(
             task
-            for task in (self._pump_task, self._heartbeat_task)
+            for task in (
+                self._ingest_task,
+                self._dispatch_task,
+                self._heartbeat_task,
+            )
             if task is not None and task is not current and not task.done()
         )
         for task in tasks:
@@ -373,6 +432,7 @@ class PaperWorkerSupervisor:
             "lease_epoch": self._lease.epoch if self._lease is not None else None,
             "cursor_count": len(cursors),
             "cursors": cursors,
+            "dispatch_queue_depth": self._dispatch_queue.qsize(),
         }
 
     def _observed_now(self) -> datetime:

@@ -85,6 +85,36 @@ class _AuditFailingSupervisor(PaperWorkerSupervisor):
         raise PaperWorkerHalt("startup audit failed")
 
 
+class _FutureAwareObservations(_Observations):
+    def __init__(self, order: list[str]) -> None:
+        super().__init__(order)
+        self.future_seen = asyncio.Event()
+
+    async def observe(self, event: ObservedMarketEvent) -> bool:
+        result = await super().observe(event)
+        if event.event_id == "future-event":
+            self.future_seen.set()
+        return result
+
+
+class _FutureAwareEngine(_Engine):
+    def __init__(
+        self,
+        order: list[str],
+        observations: _FutureAwareObservations,
+    ) -> None:
+        super().__init__(order)
+        self.observations = observations
+
+    async def process(self, event: ObservedMarketEvent) -> object:
+        self.order.append(f"dispatch-start:{event.event_id}")
+        if event.event_id == "decision-event":
+            async with asyncio.timeout(1):
+                await self.observations.future_seen.wait()
+        self.order.append(f"dispatch:{event.event_id}")
+        return object()
+
+
 async def _blocked_sleep(_: float) -> None:
     await asyncio.Event().wait()
 
@@ -232,3 +262,52 @@ async def test_supervisor_persists_startup_audit_failure_before_public_data(
     assert control.kill_switch_active
     assert control.reason is not None
     assert "startup audit failed" in control.reason
+
+
+async def test_supervisor_ingests_future_observations_while_dispatch_is_waiting(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest = _live_manifest(
+        experiment_id=UUID(int=93),
+        schema_revision="0015",
+    )
+    async with uow_factory.begin() as uow:
+        await uow.experiments.create(manifest)
+    order: list[str] = []
+    public = _PublicData()
+    observations = _FutureAwareObservations(order)
+    supervisor = PaperWorkerSupervisor(
+        uow=uow_factory,
+        manifest=manifest,
+        worker_id=UUID(int=94),
+        public_data=public,
+        observations=observations,  # type: ignore[arg-type]
+        engine=_FutureAwareEngine(order, observations),  # type: ignore[arg-type]
+        now=_Clock(),
+        sleep=_blocked_sleep,
+        lease_ttl=timedelta(seconds=30),
+        lease_renew_interval=timedelta(seconds=10),
+        drain_timeout=timedelta(seconds=2),
+    )
+
+    await supervisor.start()
+    public.queue.put_nowait(_event(MarketEventKind.VENUE_CLOCK, "decision-event"))
+    for _ in range(100):
+        if "dispatch-start:decision-event" in order:
+            break
+        await asyncio.sleep(0)
+    public.queue.put_nowait(_event(MarketEventKind.VENUE_CLOCK, "future-event"))
+    for _ in range(100):
+        if "dispatch:future-event" in order:
+            break
+        await asyncio.sleep(0)
+    await supervisor.stop()
+
+    assert order == [
+        "observe:decision-event",
+        "dispatch-start:decision-event",
+        "observe:future-event",
+        "dispatch:decision-event",
+        "dispatch-start:future-event",
+        "dispatch:future-event",
+    ]
