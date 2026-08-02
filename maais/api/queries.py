@@ -21,6 +21,8 @@ from maais.api.schemas import (
     ExperimentOverview,
     OperationalCounts,
     RuntimeOverview,
+    TradeListItem,
+    TradePage,
 )
 from maais.db.models.accounts import AccountSnapshotModel, PositionModel
 from maais.db.models.counterfactuals import CounterfactualModel
@@ -199,6 +201,107 @@ class MissionControlQueryService:
             next_before_id=items[-1].id if has_more and items else None,
         )
 
+    async def list_trades(
+        self,
+        experiment_id: UUID,
+        *,
+        symbol: str | None = None,
+        proposal_status: str | None = None,
+        decision_disposition: str | None = None,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = 100,
+    ) -> TradePage:
+        """List every directional proposal with its official and research outcomes."""
+        if not 1 <= limit <= 500:
+            raise ValueError("trade limit must be between 1 and 500")
+        if symbol is not None:
+            symbol = symbol.upper()
+        if (before_at is None) != (before_id is None):
+            raise ValueError("trade cursor requires both before_at and before_id")
+        await self._experiment(experiment_id)
+        statement = (
+            select(TradeProposalModel, DecisionCycleModel, CounterfactualModel)
+            .join(
+                DecisionCycleModel,
+                DecisionCycleModel.id == TradeProposalModel.decision_cycle_id,
+            )
+            .outerjoin(
+                CounterfactualModel,
+                CounterfactualModel.proposal_id == TradeProposalModel.id,
+            )
+            .where(TradeProposalModel.experiment_id == experiment_id)
+        )
+        if symbol is not None:
+            statement = statement.where(TradeProposalModel.symbol == symbol)
+        if proposal_status is not None:
+            statement = statement.where(TradeProposalModel.status == proposal_status)
+        if decision_disposition is not None:
+            statement = statement.where(DecisionCycleModel.disposition == decision_disposition)
+        if before_at is not None and before_id is not None:
+            statement = statement.where(
+                or_(
+                    TradeProposalModel.proposed_at < before_at,
+                    and_(
+                        TradeProposalModel.proposed_at == before_at,
+                        TradeProposalModel.id < before_id,
+                    ),
+                )
+            )
+        rows = (
+            await self._session.execute(
+                statement.order_by(
+                    TradeProposalModel.proposed_at.desc(),
+                    TradeProposalModel.id.desc(),
+                ).limit(limit + 1)
+            )
+        ).all()
+        has_more = len(rows) > limit
+        selected = rows[:limit]
+        proposal_ids = tuple(row[0].id for row in selected)
+        orders_by_proposal: dict[UUID, list[OrderIntentModel]] = {
+            proposal_id: [] for proposal_id in proposal_ids
+        }
+        fills_by_order: dict[UUID, list[FillModel]] = {}
+        if proposal_ids:
+            orders = (
+                await self._session.scalars(
+                    select(OrderIntentModel)
+                    .where(OrderIntentModel.proposal_id.in_(proposal_ids))
+                    .order_by(OrderIntentModel.created_at, OrderIntentModel.id)
+                )
+            ).all()
+            for order in orders:
+                orders_by_proposal[order.proposal_id].append(order)
+            order_ids = tuple(order.id for order in orders)
+            if order_ids:
+                fills = (
+                    await self._session.scalars(
+                        select(FillModel)
+                        .where(FillModel.order_intent_id.in_(order_ids))
+                        .order_by(FillModel.fill_at, FillModel.id)
+                    )
+                ).all()
+                for fill in fills:
+                    fills_by_order.setdefault(fill.order_intent_id, []).append(fill)
+        items = tuple(
+            self._trade_item(
+                proposal,
+                decision,
+                counterfactual,
+                orders_by_proposal[proposal.id],
+                fills_by_order,
+            )
+            for proposal, decision, counterfactual in selected
+        )
+        return TradePage(
+            items=items,
+            limit=limit,
+            has_more=has_more,
+            next_before_at=items[-1].proposed_at if has_more and items else None,
+            next_before_id=items[-1].proposal_id if has_more and items else None,
+        )
+
     async def get_decision(self, decision_id: UUID) -> DecisionDetail:
         cycle = await self._session.get(DecisionCycleModel, decision_id)
         if cycle is None:
@@ -310,6 +413,59 @@ class MissionControlQueryService:
                 "market_frame": frame.content_hash,
                 "decision_cycle": cycle.content_hash,
             },
+        )
+
+    @staticmethod
+    def _trade_item(
+        proposal: TradeProposalModel,
+        decision: DecisionCycleModel,
+        counterfactual: CounterfactualModel | None,
+        orders: list[OrderIntentModel],
+        fills_by_order: dict[UUID, list[FillModel]],
+    ) -> TradeListItem:
+        fills = [fill for order in orders for fill in fills_by_order.get(order.id, ())]
+        latest_activity_at = max(
+            (
+                proposal.proposed_at,
+                *(order.created_at for order in orders),
+                *(fill.fill_at for fill in fills),
+                *(
+                    (counterfactual.closed_at,)
+                    if counterfactual is not None and counterfactual.closed_at is not None
+                    else ()
+                ),
+            )
+        )
+        return TradeListItem(
+            proposal_id=proposal.id,
+            decision_cycle_id=proposal.decision_cycle_id,
+            proposed_at=proposal.proposed_at,
+            latest_activity_at=latest_activity_at,
+            symbol=proposal.symbol,
+            direction=proposal.direction,
+            proposal_status=proposal.status,
+            proposal_reason_code=proposal.reason_code,
+            approved_notional=proposal.approved_notional,
+            decision_disposition=decision.disposition,
+            decision_reason_code=decision.reason_code,
+            regime=decision.regime,
+            official_order_count=len(orders),
+            order_statuses=tuple(order.status for order in orders),
+            fill_count=len(fills),
+            filled_quantity=sum((fill.quantity for fill in fills), start=Decimal("0")),
+            gross_fill_notional=sum(
+                (fill.quantity * fill.price for fill in fills),
+                start=Decimal("0"),
+            ),
+            fees=sum((fill.fee for fill in fills), start=Decimal("0")),
+            total_slippage=sum(
+                (fill.total_slippage for fill in fills),
+                start=Decimal("0"),
+            ),
+            counterfactual_status=(counterfactual.status if counterfactual is not None else None),
+            counterfactual_pnl=(
+                counterfactual.hypothetical_pnl if counterfactual is not None else None
+            ),
         )
 
     async def _experiment_item(self, experiment: ExperimentModel) -> ExperimentListItem:

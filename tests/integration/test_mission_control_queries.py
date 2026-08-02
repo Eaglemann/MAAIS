@@ -7,6 +7,7 @@ from maais.api.queries import MissionControlQueryService
 from maais.db.unit_of_work import UnitOfWork
 from maais.decisions.bundle import DecisionBundle
 from tests.integration.test_decision_lineage import _prepare_bundle
+from tests.integration.test_paper_execution_repository import _record
 from tests.unit.experiments.test_manifest import _manifest
 
 pytestmark = pytest.mark.integration
@@ -133,3 +134,31 @@ async def test_decision_cursor_does_not_skip_symbols_at_same_cycle_time(
         first_bundle.cycle.id,
         second_bundle.cycle.id,
     }
+
+
+async def test_trade_ledger_surfaces_proposal_order_fill_cost_and_decision_lineage(
+    uow_factory: UnitOfWork,
+) -> None:
+    execution = await _record(uow_factory)
+    assert execution.account is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(execution)
+    async with uow_factory.begin() as uow:
+        page = await MissionControlQueryService(uow.session).list_trades(
+            execution.account.experiment_id,
+            limit=10,
+        )
+
+    assert not page.has_more
+    assert len(page.items) == 1
+    trade = page.items[0]
+    assert trade.proposal_id == execution.order.proposal_id
+    assert trade.symbol == "BTCUSDT"
+    assert trade.direction == "long"
+    assert trade.official_order_count == 1
+    assert trade.order_statuses == ("filled",)
+    assert trade.fill_count == 1
+    assert trade.filled_quantity == execution.fills[0].quantity
+    assert trade.fees == execution.fills[0].fee
+    assert trade.total_slippage == execution.fills[0].total_slippage
+    assert trade.counterfactual_status is None

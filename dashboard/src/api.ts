@@ -4,6 +4,7 @@ import type {
   DecisionPage,
   ExperimentListItem,
   ExperimentOverview,
+  TradePage,
 } from "./types";
 
 const API_ROOT = import.meta.env.VITE_API_ROOT ?? "/api/v1";
@@ -50,6 +51,19 @@ export function listDecisions(
   if (filters.reasonCode.trim()) params.set("reason_code", filters.reasonCode.trim());
   return getJson<DecisionPage>(
     `/experiments/${experimentId}/decisions?${params.toString()}`,
+    signal,
+  );
+}
+
+export function listTrades(
+  experimentId: string,
+  symbol: string,
+  signal?: AbortSignal,
+): Promise<TradePage> {
+  const params = new URLSearchParams({ limit: "200" });
+  if (symbol.trim()) params.set("symbol", symbol.trim().toUpperCase());
+  return getJson<TradePage>(
+    `/experiments/${experimentId}/trades?${params.toString()}`,
     signal,
   );
 }

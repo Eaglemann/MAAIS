@@ -20,6 +20,7 @@ from maais.api.schemas import (
     DecisionPage,
     ExperimentListItem,
     ExperimentOverview,
+    TradePage,
 )
 from maais.db.connection import get_engine, get_session_factory
 
@@ -131,6 +132,30 @@ def create_app(
             status=status,
             disposition=disposition,
             reason_code=reason_code,
+            before_at=before_at,
+            before_id=before_id,
+            limit=limit,
+        )
+
+    @application.get(
+        "/api/v1/experiments/{experiment_id}/trades",
+        response_model=TradePage,
+    )
+    async def trades(
+        experiment_id: UUID,
+        symbol: str | None = None,
+        proposal_status: str | None = None,
+        decision_disposition: str | None = None,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = Query(100, ge=1, le=500),
+        session: AsyncSession = Depends(read_session),
+    ) -> TradePage:
+        return await MissionControlQueryService(session).list_trades(
+            experiment_id,
+            symbol=symbol,
+            proposal_status=proposal_status,
+            decision_disposition=decision_disposition,
             before_at=before_at,
             before_id=before_id,
             limit=limit,

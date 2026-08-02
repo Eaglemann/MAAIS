@@ -37,6 +37,13 @@ Review Mission Control at least twice daily. Confirm:
 - decision counts, proposal/order/fill counts, account values, and source timestamps are plausible;
 - warm-up `insufficient_history` is distinguished from real quality failures.
 
+Use Mission Control's Trade Ledger for every directional proposal. It keeps official
+orders/fills, quantity, fees, modeled slippage, and research-only counterfactual outcomes
+visibly separate, and opens the exact linked decision bundle for the complete inputs,
+agent explanations, ordered gates, hashes, and event timeline. It intentionally does not
+invent per-proposal P&L when multiple entries share one net position; authoritative
+account and position P&L remain in the account projections and daily reports.
+
 For the Bybit secondary reference, Mission Control preserves the REST snapshot
 publication time (`ts`), matching-engine time (`cts`), and local observation
 time separately. The publication-age gate is five seconds: the documented

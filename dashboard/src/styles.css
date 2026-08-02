@@ -267,6 +267,9 @@ code { color: #b9d8cc; font-family: ui-monospace, SFMono-Regular, Menlo, monospa
 .decision-table tbody tr:last-child td { border-bottom: 0; }
 .decision-table td > span:not(.badge), .decision-table td > time { display: block; color: var(--faint); font-size: 9px; margin-top: 3px; }
 .decision-table td strong { color: var(--text); }
+.row-link { appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700; padding: 0; cursor: pointer; }
+.row-link:hover, .row-link:focus-visible { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.trade-table { min-width: 1120px; }
 .row-action { border: 0; color: var(--mint); background: transparent; font-size: 10px; padding: 4px; }
 .table-footnote { border-top: 1px solid var(--line); padding: 9px 12px; color: var(--faint); font-size: 9px; }
 .empty-state, .table-loading, .drawer-state, .empty-inline { border: 1px dashed var(--line); border-radius: 9px; color: var(--muted); padding: 22px; text-align: center; font-size: 11px; }

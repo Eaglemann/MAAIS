@@ -146,6 +146,38 @@ class DecisionPage(ReadModel):
     next_before_id: UUID | None
 
 
+class TradeListItem(ReadModel):
+    proposal_id: UUID
+    decision_cycle_id: UUID
+    proposed_at: datetime
+    latest_activity_at: datetime
+    symbol: str
+    direction: str
+    proposal_status: str
+    proposal_reason_code: str
+    approved_notional: Decimal | None
+    decision_disposition: str
+    decision_reason_code: str
+    regime: str
+    official_order_count: int
+    order_statuses: tuple[str, ...]
+    fill_count: int
+    filled_quantity: Decimal
+    gross_fill_notional: Decimal
+    fees: Decimal
+    total_slippage: Decimal
+    counterfactual_status: str | None
+    counterfactual_pnl: Decimal | None
+
+
+class TradePage(ReadModel):
+    items: tuple[TradeListItem, ...]
+    limit: int
+    has_more: bool
+    next_before_at: datetime | None
+    next_before_id: UUID | None
+
+
 class AuditEvent(ReadModel):
     id: UUID
     global_position: int

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getDecision, getOverview, listDecisions, listExperiments } from "./api";
+import { getDecision, getOverview, listDecisions, listExperiments, listTrades } from "./api";
 import {
   formatCompact,
   formatMoney,
@@ -19,6 +19,7 @@ import type {
   ExperimentListItem,
   ExperimentOverview,
   JsonRecord,
+  TradePage,
 } from "./types";
 
 const EMPTY_FILTERS: DecisionFilters = {
@@ -344,11 +345,68 @@ function DecisionTable({
   );
 }
 
+export function TradeTable({
+  page,
+  currency,
+  onOpen,
+}: {
+  page: TradePage | null;
+  currency: string;
+  onOpen: (decisionId: string) => void;
+}) {
+  if (!page || page.items.length === 0) {
+    return <div className="empty-state">No directional trade proposals exist yet.</div>;
+  }
+  return (
+    <div className="table-shell">
+      <table className="decision-table trade-table">
+        <thead>
+          <tr>
+            <th>Proposed</th>
+            <th>Market</th>
+            <th>Decision</th>
+            <th>Official execution</th>
+            <th>Fill economics</th>
+            <th>Research outcome</th>
+          </tr>
+        </thead>
+        <tbody>
+          {page.items.map((trade) => (
+            <tr key={trade.proposal_id}>
+              <td><time>{formatTime(trade.proposed_at)}</time><span>latest {formatTime(trade.latest_activity_at)}</span></td>
+              <td>
+                <button className="row-link" type="button" aria-label={`Inspect ${trade.symbol} proposal`} onClick={() => onOpen(trade.decision_cycle_id)}>{trade.symbol}</button>
+                <span>{label(trade.direction)} · {label(trade.regime)}</span>
+              </td>
+              <td><Badge value={trade.decision_disposition} /><span>{label(trade.decision_reason_code)}</span></td>
+              <td>
+                <Badge value={trade.proposal_status} />
+                <span>{trade.official_order_count} {trade.official_order_count === 1 ? "order" : "orders"} · {trade.order_statuses.map(label).join(", ") || "no order"}</span>
+              </td>
+              <td>
+                <strong>{trade.fill_count} {trade.fill_count === 1 ? "fill" : "fills"}</strong>
+                <span>{trade.filled_quantity} units · fees {formatMoney(trade.fees, currency)}</span>
+                <span>modeled slippage {formatMoney(trade.total_slippage, currency)}</span>
+              </td>
+              <td>
+                <Badge value={trade.counterfactual_status ?? "not_applicable"} />
+                <span>{trade.counterfactual_pnl === null ? "Official path" : `Hypothetical ${formatMoney(trade.counterfactual_pnl, currency)}`}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {page.has_more && <div className="table-footnote">Showing the latest {page.limit} proposals. Older proposals remain available through the API cursor.</div>}
+    </div>
+  );
+}
+
 export default function App() {
   const [experiments, setExperiments] = useState<ExperimentListItem[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [overview, setOverview] = useState<ExperimentOverview | null>(null);
   const [decisionPage, setDecisionPage] = useState<DecisionPage | null>(null);
+  const [tradePage, setTradePage] = useState<TradePage | null>(null);
   const [filters, setFilters] = useState<DecisionFilters>(EMPTY_FILTERS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -374,13 +432,15 @@ export default function App() {
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!selectedId) return;
     try {
-      const [nextOverview, nextDecisions, nextExperiments] = await Promise.all([
+      const [nextOverview, nextDecisions, nextTrades, nextExperiments] = await Promise.all([
         getOverview(selectedId, signal),
         listDecisions(selectedId, filters, signal),
+        listTrades(selectedId, filters.symbol, signal),
         listExperiments(signal),
       ]);
       setOverview(nextOverview);
       setDecisionPage(nextDecisions);
+      setTradePage(nextTrades);
       setExperiments(nextExperiments);
       setLastUpdated(new Date().toISOString());
       setError(null);
@@ -409,12 +469,16 @@ export default function App() {
   );
 
   async function openDecision(decision: DecisionListItem) {
+    await openDecisionId(decision.id);
+  }
+
+  async function openDecisionId(decisionId: string) {
     setDrawerOpen(true);
     setSelectedDecision(null);
     setDetailError(null);
     setDetailLoading(true);
     try {
-      setSelectedDecision(await getDecision(decision.id));
+      setSelectedDecision(await getDecision(decisionId));
     } catch (reason: unknown) {
       setDetailError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -447,8 +511,9 @@ export default function App() {
         <div className="brand-lockup"><span className="brand-mark">M</span><div><strong>MAAIS</strong><span>Paper workstation</span></div></div>
         <nav aria-label="Mission Control sections">
           <a className="nav-link nav-link--active" href="#mission"><span>01</span>Mission Control</a>
-          <a className="nav-link" href="#ledger"><span>02</span>Audit Ledger</a>
-          <a className="nav-link" href="#operations"><span>03</span>Operations</a>
+          <a className="nav-link" href="#trades"><span>02</span>Trade Ledger</a>
+          <a className="nav-link" href="#ledger"><span>03</span>Audit Ledger</a>
+          <a className="nav-link" href="#operations"><span>04</span>Operations</a>
         </nav>
         <div className="rail-safety">
           <span className="safety-dot" />
@@ -558,6 +623,15 @@ export default function App() {
             </div>
           </section>
         ) : null}
+
+        <section className="dashboard-section" id="trades">
+          <SectionHeader
+            title="Trade Ledger"
+            subtitle="Every directional proposal with linked official fills, costs, and isolated research outcome"
+            aside={<span className="freshness-label">Click a symbol for the complete decision bundle</span>}
+          />
+          {loading && !tradePage ? <div className="table-loading">Loading proposed trades…</div> : <TradeTable page={tradePage} currency={currency} onOpen={(decisionId) => void openDecisionId(decisionId)} />}
+        </section>
 
         <section className="dashboard-section" id="ledger">
           <SectionHeader

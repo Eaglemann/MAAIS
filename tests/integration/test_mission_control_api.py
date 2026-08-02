@@ -29,6 +29,10 @@ async def test_read_only_api_exposes_overview_feed_and_complete_decision(
             f"/api/v1/experiments/{manifest.experiment_id}/decisions",
             params={"symbol": "btcusdt"},
         )
+        trades = await client.get(
+            f"/api/v1/experiments/{manifest.experiment_id}/trades",
+            params={"symbol": "btcusdt"},
+        )
         detail = await client.get(f"/api/v1/decisions/{bundle.cycle.id}")
 
     assert health.status_code == 200
@@ -41,6 +45,8 @@ async def test_read_only_api_exposes_overview_feed_and_complete_decision(
     assert overview.json()["account"]["source"] == "manifest_initial_state"
     assert decisions.status_code == 200
     assert decisions.json()["items"][0]["id"] == str(bundle.cycle.id)
+    assert trades.status_code == 200
+    assert trades.json()["items"][0]["decision_cycle_id"] == str(bundle.cycle.id)
     assert detail.status_code == 200
     assert len(detail.json()["agents"]) == 8
     assert detail.json()["lineage_hashes"]["decision_cycle"] == bundle.bundle_hash

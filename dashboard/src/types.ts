@@ -126,6 +126,38 @@ export interface DecisionPage {
   next_before_id: string | null;
 }
 
+export interface TradeListItem {
+  proposal_id: string;
+  decision_cycle_id: string;
+  proposed_at: string;
+  latest_activity_at: string;
+  symbol: string;
+  direction: string;
+  proposal_status: string;
+  proposal_reason_code: string;
+  approved_notional: string | null;
+  decision_disposition: string;
+  decision_reason_code: string;
+  regime: string;
+  official_order_count: number;
+  order_statuses: string[];
+  fill_count: number;
+  filled_quantity: string;
+  gross_fill_notional: string;
+  fees: string;
+  total_slippage: string;
+  counterfactual_status: string | null;
+  counterfactual_pnl: string | null;
+}
+
+export interface TradePage {
+  items: TradeListItem[];
+  limit: number;
+  has_more: boolean;
+  next_before_at: string | null;
+  next_before_id: string | null;
+}
+
 export interface AuditEvent {
   id: string;
   global_position: number;
