@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import (
 from maais.db.unit_of_work import UnitOfWork
 
 _PHASE_ONE_TABLES = (
+    "worker_leases",
     "worker_checkpoints",
     "incidents",
     "market_recovery_runs",

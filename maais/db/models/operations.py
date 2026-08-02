@@ -273,3 +273,36 @@ class WorkerCheckpointModel(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     checkpoint_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class WorkerLeaseModel(Base):
+    __tablename__ = "worker_leases"
+    __table_args__ = (
+        CheckConstraint("epoch > 0", name="ck_worker_lease_epoch_positive"),
+        CheckConstraint(
+            "status IN ('active', 'released')",
+            name="ck_worker_lease_status",
+        ),
+        CheckConstraint(
+            "heartbeat_at >= acquired_at",
+            name="ck_worker_lease_heartbeat_order",
+        ),
+        CheckConstraint(
+            "(status = 'active' AND released_at IS NULL AND expires_at > heartbeat_at) OR "
+            "(status = 'released' AND released_at IS NOT NULL "
+            "AND released_at >= heartbeat_at)",
+            name="ck_worker_lease_lifecycle",
+        ),
+        Index("ix_worker_leases_status_expiry", "status", "expires_at"),
+    )
+
+    experiment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("experiments.id", ondelete="RESTRICT"), primary_key=True
+    )
+    worker_id: Mapped[UUID] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -11,9 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionma
 
 from maais.db.connection import Base
 from maais.db.models.ledger import DomainEventModel, OutboxEventModel
-from maais.db.models.operations import IncidentModel, MarketCursorModel, MarketRecoveryRunModel
+from maais.db.models.operations import (
+    IncidentModel,
+    MarketCursorModel,
+    MarketRecoveryRunModel,
+    WorkerLeaseModel,
+)
 from maais.db.replay import verify_ledger_consistency
 from maais.db.repositories.market_data import OperationalStateConflict
+from maais.db.repositories.workers import (
+    WorkerLeaseConflict,
+    WorkerLeaseExpired,
+)
 from maais.db.unit_of_work import UnitOfWork
 from maais.market_data.integrity.state_machine import (
     IntegrityCheck,
@@ -22,7 +31,11 @@ from maais.market_data.integrity.state_machine import (
 )
 from maais.market_data.recovery import GapRange, MarketCursor, RecoveryState
 from maais.operations.incidents import IncidentSeverity, IncidentState
-from maais.orchestration.checkpoints import WorkerCheckpoint, WorkerStatus
+from maais.orchestration.checkpoints import (
+    WorkerCheckpoint,
+    WorkerLeaseStatus,
+    WorkerStatus,
+)
 from tests.integration.test_decision_lineage import _prepare_bundle
 from tests.unit.experiments.test_manifest import _manifest
 from tests.unit.market_data.test_integrity_state_machine import _context, _frame
@@ -97,6 +110,7 @@ async def test_operational_schema_matches_models(db_connection: AsyncConnection)
         "market_recovery_runs",
         "incidents",
         "worker_checkpoints",
+        "worker_leases",
     )
 
     def compare(sync_connection: object) -> None:
@@ -239,6 +253,89 @@ async def test_worker_checkpoint_uses_optimistic_versions_and_restores(
     with pytest.raises(OperationalStateConflict, match="another worker"):
         async with uow_factory.begin() as uow:
             await uow.orchestration.record_checkpoint(wrong_worker)
+
+
+async def test_worker_lease_blocks_competitors_and_audits_expiry_takeover(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    manifest = await _manifest_in_database(uow_factory)
+    first_worker = UUID(int=911)
+    second_worker = UUID(int=912)
+    ttl = timedelta(seconds=30)
+
+    async with uow_factory.begin() as uow:
+        acquired = await uow.workers.acquire(
+            experiment_id=manifest.experiment_id,
+            worker_id=first_worker,
+            acquired_at=NOW,
+            ttl=ttl,
+        )
+    assert acquired.epoch == 1
+    assert acquired.valid_at(NOW + timedelta(seconds=29))
+
+    with pytest.raises(WorkerLeaseConflict, match="another worker"):
+        async with uow_factory.begin() as uow:
+            await uow.workers.acquire(
+                experiment_id=manifest.experiment_id,
+                worker_id=second_worker,
+                acquired_at=NOW + timedelta(seconds=1),
+                ttl=ttl,
+            )
+
+    async with uow_factory.begin() as uow:
+        renewed = await uow.workers.renew(
+            experiment_id=manifest.experiment_id,
+            worker_id=first_worker,
+            heartbeat_at=NOW + timedelta(seconds=10),
+            ttl=ttl,
+        )
+    assert renewed.expires_at == NOW + timedelta(seconds=40)
+
+    with pytest.raises(WorkerLeaseExpired):
+        async with uow_factory.begin() as uow:
+            await uow.workers.renew(
+                experiment_id=manifest.experiment_id,
+                worker_id=first_worker,
+                heartbeat_at=NOW + timedelta(seconds=40),
+                ttl=ttl,
+            )
+
+    async with uow_factory.begin() as uow:
+        taken = await uow.workers.acquire(
+            experiment_id=manifest.experiment_id,
+            worker_id=second_worker,
+            acquired_at=NOW + timedelta(seconds=40),
+            ttl=ttl,
+        )
+        released = await uow.workers.release(
+            experiment_id=manifest.experiment_id,
+            worker_id=second_worker,
+            released_at=NOW + timedelta(seconds=41),
+        )
+        assert (await verify_ledger_consistency(uow.session)).ok
+
+    assert taken.epoch == 2
+    assert taken.worker_id == second_worker
+    assert released.status is WorkerLeaseStatus.RELEASED
+    factory = async_sessionmaker(db_engine)
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(WorkerLeaseModel)) == 1
+        event_types = tuple(
+            await session.scalars(
+                select(DomainEventModel.event_type)
+                .where(
+                    DomainEventModel.aggregate_type == "worker_lease",
+                    DomainEventModel.aggregate_id == manifest.experiment_id,
+                )
+                .order_by(DomainEventModel.stream_version)
+            )
+        )
+    assert event_types == (
+        "worker_lease.acquired",
+        "worker_lease.taken_over",
+        "worker_lease.released",
+    )
 
 
 async def test_quality_rows_are_complete_idempotent_and_event_backed(

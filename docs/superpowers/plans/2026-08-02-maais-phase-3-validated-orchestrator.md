@@ -18,6 +18,7 @@
 - 2026-08-02: Strict, keyless public adapters now cover Binance USD-M REST/WebSocket, Binance Spot primary references, and Bybit Spot secondary references for all ten admitted symbols. They retain venue identity, time, sequence availability, executable quote metadata, and fail closed on schema drift, gaps, queue saturation, or unreconciled depth. Binance Spot uses the standard official public origin because a live check found the market-data-only origin too stale for the five-second admission limit. REST closed-bar recovery coordination and the worker lifecycle remain pending.
 - 2026-08-02: Closed-bar gap recovery now persists detection before public REST I/O, fetches and validates the exact missing range, records bounded retry attempts with exponential backoff, and terminally fails after exhaustion. Completion locks PostgreSQL and requires the exact candidate cursor already be durable; the worker still must dispatch recovered bars through normal frame/cycle transactions before calling completion.
 - 2026-08-02: The managed keyless public runtime now composes all three official sources, periodically revalidates every symbol mapping, and uses Binance's current split public-depth and market-kline/mark WebSocket paths. Readiness requires a reconstructed depth book and mark/funding coverage for all ten symbols. Live all-symbol checks observed every required source and one closed one-minute bar per symbol with zero reconnects; persistent worker dispatch and recovery handoff remain pending.
+- 2026-08-02: Revision `0011` adds an expiring PostgreSQL worker lease. Atomic acquisition blocks a second owner, heartbeats cannot revive an expired lease, takeover increments an epoch, and acquire/takeover/release transitions are event-backed. The isolated downgrade/upgrade drill and contention lifecycle integration tests pass; worker dispatch and heartbeat supervision remain pending.
 
 ## Current defects this phase must retire
 
@@ -95,6 +96,7 @@
 - `maais/db/repositories/orchestration.py` - atomic cycle outcome coordinator.
 - `alembic/versions/0009_orchestrator.py` - Phase 3 schema and constraints.
 - `alembic/versions/0010_exit_trigger_state.py` - restartable protective-exit trigger state.
+- `alembic/versions/0011_worker_leases.py` - expiring single-worker ownership per experiment.
 
 ### Tests and evidence
 
@@ -223,7 +225,7 @@ Gate: public live mode starts with no API keys, and every disconnect or sequence
 ## Task 10 - Worker lifecycle, resume, and CLI
 
 - [ ] Add `replay` and `paper-live` commands with explicit experiment/manifest identity.
-- [ ] Enforce one worker lease per experiment.
+- [x] Enforce one worker lease per experiment.
 - [ ] Start from a reconciled database checkpoint, never an assumed empty account.
 - [ ] Handle SIGINT/SIGTERM with ingestion stop, queue drain, in-flight transaction completion, checkpoint, and connector close.
 - [ ] Resume pending/partial orders, open exits, recoveries, cursors, and counterfactuals idempotently.

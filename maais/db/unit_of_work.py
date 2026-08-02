@@ -14,6 +14,7 @@ from maais.db.repositories.experiments import ExperimentRepository
 from maais.db.repositories.incidents import IncidentRepository
 from maais.db.repositories.market_data import MarketDataRepository
 from maais.db.repositories.orchestration import OrchestrationRepository
+from maais.db.repositories.workers import WorkerLeaseRepository
 
 
 @dataclass(slots=True)
@@ -27,6 +28,7 @@ class UnitOfWorkContext:
     market_data: MarketDataRepository
     incidents: IncidentRepository
     orchestration: OrchestrationRepository
+    workers: WorkerLeaseRepository
 
 
 class UnitOfWork:
@@ -50,4 +52,5 @@ class UnitOfWork:
                     market_data=MarketDataRepository(session, events),
                     incidents=IncidentRepository(session, events),
                     orchestration=OrchestrationRepository(session, events),
+                    workers=WorkerLeaseRepository(session, events),
                 )

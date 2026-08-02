@@ -18,6 +18,46 @@ class WorkerStatus(StrEnum):
     HALTED = "halted"
 
 
+class WorkerLeaseStatus(StrEnum):
+    ACTIVE = "active"
+    RELEASED = "released"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerLease:
+    experiment_id: UUID
+    worker_id: UUID
+    status: WorkerLeaseStatus
+    acquired_at: datetime
+    heartbeat_at: datetime
+    expires_at: datetime
+    released_at: datetime | None
+    epoch: int
+
+    def __post_init__(self) -> None:
+        if self.experiment_id.int == 0 or self.worker_id.int == 0:
+            raise ValueError("worker lease UUIDs cannot be nil")
+        for value in (self.acquired_at, self.heartbeat_at, self.expires_at):
+            _require_utc(value)
+        if self.released_at is not None:
+            _require_utc(self.released_at)
+        if self.epoch <= 0 or self.heartbeat_at < self.acquired_at:
+            raise ValueError("worker lease epoch or heartbeat is invalid")
+        if self.status is WorkerLeaseStatus.ACTIVE:
+            if self.released_at is not None or self.expires_at <= self.heartbeat_at:
+                raise ValueError("active worker lease requires a future expiry")
+        elif self.released_at is None or self.released_at < self.heartbeat_at:
+            raise ValueError("released worker lease requires an ordered release time")
+
+    @property
+    def active(self) -> bool:
+        return self.status is WorkerLeaseStatus.ACTIVE
+
+    def valid_at(self, observed_at: datetime) -> bool:
+        _require_utc(observed_at)
+        return self.active and observed_at < self.expires_at
+
+
 _ALLOWED_TRANSITIONS: Mapping[WorkerStatus, frozenset[WorkerStatus]] = {
     WorkerStatus.STARTING: frozenset({WorkerStatus.RUNNING, WorkerStatus.HALTED}),
     WorkerStatus.RUNNING: frozenset(

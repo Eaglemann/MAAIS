@@ -3,7 +3,12 @@ from uuid import UUID
 
 import pytest
 
-from maais.orchestration.checkpoints import WorkerCheckpoint, WorkerStatus
+from maais.orchestration.checkpoints import (
+    WorkerCheckpoint,
+    WorkerLease,
+    WorkerLeaseStatus,
+    WorkerStatus,
+)
 
 NOW = datetime(2026, 8, 2, 12, tzinfo=timezone.utc)
 
@@ -61,3 +66,33 @@ def test_checkpoint_rejects_illegal_transition_time_regression_and_terminal_chan
     halted = running.transition(WorkerStatus.HALTED, NOW + timedelta(seconds=2), {})
     with pytest.raises(RuntimeError, match="terminal"):
         halted.transition(WorkerStatus.STARTING, NOW + timedelta(seconds=3), {})
+
+
+def test_worker_lease_is_valid_only_before_expiry() -> None:
+    lease = WorkerLease(
+        experiment_id=UUID(int=1),
+        worker_id=UUID(int=2),
+        status=WorkerLeaseStatus.ACTIVE,
+        acquired_at=NOW,
+        heartbeat_at=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+        released_at=None,
+        epoch=1,
+    )
+
+    assert lease.valid_at(NOW + timedelta(seconds=29))
+    assert not lease.valid_at(NOW + timedelta(seconds=30))
+
+
+def test_released_worker_lease_requires_ordered_release_metadata() -> None:
+    with pytest.raises(ValueError, match="ordered release"):
+        WorkerLease(
+            experiment_id=UUID(int=1),
+            worker_id=UUID(int=2),
+            status=WorkerLeaseStatus.RELEASED,
+            acquired_at=NOW,
+            heartbeat_at=NOW + timedelta(seconds=2),
+            expires_at=NOW + timedelta(seconds=1),
+            released_at=NOW + timedelta(seconds=1),
+            epoch=1,
+        )
