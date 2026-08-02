@@ -126,7 +126,9 @@ class IntegrityPolicy:
             max_venue_timestamp_skew=timedelta(seconds=1),
             venue_timestamp_skew_overrides={
                 "primary_spot": timedelta(seconds=5),
-                "secondary_venue": timedelta(seconds=2),
+                # Bybit level-1 snapshots can republish on a three-second idle
+                # cadence; retain two additional seconds for observed transport.
+                "secondary_venue": timedelta(seconds=5),
             },
             max_venue_clock_drift=timedelta(seconds=1),
             max_book_age=timedelta(seconds=2),

@@ -241,7 +241,7 @@ def test_rest_reference_uses_source_specific_skew_and_records_measured_evidence(
         },
         "secondary_venue": {
             "comparable": True,
-            "limit_seconds": "2",
+            "limit_seconds": "5",
             "skew_seconds": "0.001",
             "timestamp_basis": "venue_event",
         },
@@ -270,6 +270,41 @@ def test_rest_reference_uses_source_specific_skew_and_records_measured_evidence(
     failed = _result(over_limit, IntegrityCheck.VENUE_TIMESTAMP)
     assert failed.status is QualityStatus.FAILED
     assert failed.details["sources"] == ("primary_spot",)
+
+
+def test_secondary_snapshot_allows_idle_republish_cadence_but_fails_beyond_limit() -> None:
+    events = list(_inputs())
+    secondary_index = next(index for index, item in enumerate(events) if item.venue == "coinbase")
+    secondary = events[secondary_index]
+    events[secondary_index] = replace(
+        secondary,
+        venue_event_at=secondary.observed_at - timedelta(milliseconds=3309),
+    )
+
+    within_limit = MarketIntegrityStateMachine(IntegrityPolicy.official()).evaluate(
+        _context(_frame(events))
+    )
+    passed = _result(within_limit, IntegrityCheck.VENUE_TIMESTAMP)
+
+    assert passed.status is QualityStatus.PASSED
+    assert passed.details["observations"]["secondary_venue"] == {
+        "comparable": True,
+        "limit_seconds": "5",
+        "skew_seconds": "3.309",
+        "timestamp_basis": "venue_event",
+    }
+
+    events[secondary_index] = replace(
+        secondary,
+        venue_event_at=secondary.observed_at - timedelta(milliseconds=5001),
+    )
+    over_limit = MarketIntegrityStateMachine(IntegrityPolicy.official()).evaluate(
+        _context(_frame(events))
+    )
+    failed = _result(over_limit, IntegrityCheck.VENUE_TIMESTAMP)
+
+    assert failed.status is QualityStatus.FAILED
+    assert failed.details["sources"] == ("secondary_venue",)
 
 
 def test_observation_timed_source_is_explicit_and_not_compared_to_itself() -> None:

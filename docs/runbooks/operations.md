@@ -37,6 +37,12 @@ Review Mission Control at least twice daily. Confirm:
 - decision counts, proposal/order/fill counts, account values, and source timestamps are plausible;
 - warm-up `insufficient_history` is distinguished from real quality failures.
 
+For the Bybit secondary reference, Mission Control preserves the REST snapshot
+publication time (`ts`), matching-engine time (`cts`), and local observation
+time separately. The publication-age gate is five seconds: the documented
+three-second idle level-1 snapshot cadence plus two seconds of transport
+allowance. A value beyond five seconds still fails closed and opens an incident.
+
 If an operator-review incident appears, follow `docs/runbooks/incidents.md`. Do not edit rows directly; the supported acknowledge/resolve commands preserve actor, time, rationale, version, domain event, and content hash.
 
 ## Daily close
