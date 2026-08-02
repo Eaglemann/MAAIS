@@ -56,6 +56,8 @@ uv run pytest -q
 The operational CLI now includes ledger verification, immutable daily reports,
 analysis-ready CSV/Parquet exports, a hash-verified seven-day final aggregator,
 validated backups, suffix-constrained restore drills, and candidate preflight. The
+daily close is concurrency-locked and safely resumes its unique verified bundle after an
+interrupted state update. The
 timed run remains blocked until the full test/fault-injection suite and 24-hour soak
 pass.
 

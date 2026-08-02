@@ -273,6 +273,46 @@ def verify_daily_report_bundle(
     }
 
 
+def resolve_existing_daily_report_bundle(
+    reports_directory: Path,
+    *,
+    expected_date: date,
+    experiment_id: UUID,
+    generated_at: datetime,
+) -> dict[str, object] | None:
+    """Return one verified complete bundle so an interrupted close can resume safely."""
+    if not reports_directory.exists():
+        return None
+    matches = _matching_reports(reports_directory, experiment_id, expected_date)
+    if len(matches) > 1:
+        raise FinalReportValidationError(
+            "expected at most one complete daily report for "
+            f"{expected_date.isoformat()}, found {len(matches)}"
+        )
+    if not matches:
+        return None
+
+    directory, _report, _bundle_evidence = matches[0]
+    evidence = verify_daily_report_bundle(
+        directory,
+        expected_date=expected_date,
+        experiment_id=experiment_id,
+        generated_at=generated_at,
+    )
+    return {
+        "report_id": evidence["report_id"],
+        "directory": str(directory),
+        "json": str(directory / "report.json"),
+        "markdown": str(directory / "report.md"),
+        "decisions_csv": str(directory / "decisions.csv"),
+        "decisions_parquet": str(directory / "decisions.parquet"),
+        "execution_csv": str(directory / "execution.csv"),
+        "execution_parquet": str(directory / "execution.parquet"),
+        "bundle_manifest": str(directory / "bundle-manifest.json"),
+        "resumed": True,
+    }
+
+
 def _same_identity(first: Mapping[str, object], candidate: Mapping[str, object]) -> bool:
     return all(first.get(name) == candidate.get(name) for name in _EXPERIMENT_IDENTITY)
 

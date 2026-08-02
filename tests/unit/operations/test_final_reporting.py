@@ -8,6 +8,7 @@ import pytest
 
 from maais.operations.final_reporting import (
     build_final_report_from_bundles,
+    resolve_existing_daily_report_bundle,
     verify_daily_report_bundle,
     write_final_report_bundle,
 )
@@ -182,6 +183,50 @@ def test_daily_report_bundle_exposes_verified_soak_evidence(tmp_path: Path) -> N
     assert evidence["experiment_id"] == str(EXPERIMENT_ID)
     assert evidence["decision_cycles"] == 10
     assert evidence["ledger_ok"] is True
+
+
+def test_existing_daily_report_can_be_resumed_after_state_write_crash(tmp_path: Path) -> None:
+    report_date = date(2026, 8, 3)
+    paths = write_daily_report_bundle(_daily_report(report_date, 0), tmp_path)
+
+    result = resolve_existing_daily_report_bundle(
+        tmp_path,
+        expected_date=report_date,
+        experiment_id=EXPERIMENT_ID,
+        generated_at=datetime(2026, 8, 3, 22, 6, tzinfo=timezone.utc),
+    )
+
+    assert result is not None
+    assert result["report_id"] == "1".zfill(64)
+    assert result["directory"] == str(paths.directory)
+    assert result["resumed"] is True
+
+
+def test_existing_daily_report_resume_allows_a_new_output_directory(tmp_path: Path) -> None:
+    result = resolve_existing_daily_report_bundle(
+        tmp_path / "not-created-yet",
+        expected_date=date(2026, 8, 3),
+        experiment_id=EXPERIMENT_ID,
+        generated_at=datetime(2026, 8, 3, 22, 6, tzinfo=timezone.utc),
+    )
+
+    assert result is None
+
+
+def test_existing_daily_report_resume_refuses_ambiguous_duplicates(tmp_path: Path) -> None:
+    report_date = date(2026, 8, 3)
+    write_daily_report_bundle(_daily_report(report_date, 0), tmp_path)
+    duplicate = _daily_report(report_date, 1)
+    duplicate["report_id"] = "f" * 64
+    write_daily_report_bundle(duplicate, tmp_path)
+
+    with pytest.raises(ValueError, match="expected at most one complete daily report"):
+        resolve_existing_daily_report_bundle(
+            tmp_path,
+            expected_date=report_date,
+            experiment_id=EXPERIMENT_ID,
+            generated_at=datetime(2026, 8, 3, 22, 6, tzinfo=timezone.utc),
+        )
 
 
 def test_final_report_verifies_and_aggregates_exactly_seven_contiguous_days(

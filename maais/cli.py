@@ -21,6 +21,7 @@ from maais.operations.backups import backup_configured_database
 from maais.operations.database_identity import collect_configured_database_identity
 from maais.operations.final_reporting import (
     build_final_report_from_bundles,
+    resolve_existing_daily_report_bundle,
     write_final_report_bundle,
 )
 from maais.operations.health import collect_configured_experiment_health
@@ -108,6 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-partial",
         action="store_true",
         help="allow a partial current-day bundle for explicit stop evidence only",
+    )
+    report.add_argument(
+        "--resume-existing",
+        action="store_true",
+        help="reuse the unique verified complete bundle after an interrupted daily close",
     )
     final_report = commands.add_parser(
         "final-report",
@@ -213,6 +219,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(result, sort_keys=True))
         return 0
     if arguments.command == "daily-report":
+        if arguments.resume_existing:
+            existing = resolve_existing_daily_report_bundle(
+                arguments.output,
+                expected_date=arguments.report_date,
+                experiment_id=arguments.experiment,
+                generated_at=datetime.now(timezone.utc),
+            )
+            if existing is not None:
+                print(json.dumps(existing, sort_keys=True))
+                return 0
         report = asyncio.run(
             build_configured_daily_report(arguments.experiment, arguments.report_date)
         )
@@ -234,6 +250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "execution_csv": str(paths.execution_csv_path),
                     "execution_parquet": str(paths.execution_parquet_path),
                     "bundle_manifest": str(paths.manifest_path),
+                    "resumed": False,
                 },
                 sort_keys=True,
             )

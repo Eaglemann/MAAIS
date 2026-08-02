@@ -38,7 +38,9 @@ investigate, never permission to begin the week.
 ## During the run
 
 - Do not change code, dependencies, manifest, thresholds, symbols, agent weights, fees, latency, or risk settings.
-- Generate one immutable report and backup for each completed Berlin day.
+- Generate one immutable report and backup for each completed Berlin day. The supported
+  daily-close command is concurrency-locked and crash-resumable; retry that command rather
+  than invoking the report writer separately.
 - Review incidents and decision explanations without editing historical records.
 - Machine sleep, network outage, worker restart, and API interruption must be logged. Recovery must preserve exactly-once identities.
 - A material defect, ledger mismatch, duplicate, missing protection, or configuration/code change ends the candidate. Fix it, commit it, prepare a new manifest, repeat preflight/soak, and restart the seven-day clock.

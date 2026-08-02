@@ -174,3 +174,35 @@ paper_assert_recorded_postgres_route desktop-linux 666666
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "666666"
+
+
+def test_operation_lock_rejects_a_concurrent_live_owner(tmp_path: Path) -> None:
+    lock_directory = tmp_path / "daily.lock"
+    result = _run_bash(
+        f"""
+paper_acquire_operation_lock {shlex.quote(str(lock_directory))} daily-close
+paper_acquire_operation_lock {shlex.quote(str(lock_directory))} daily-close
+"""
+    )
+
+    assert result.returncode == 1
+    assert "operation lock is already held" in result.stderr
+
+
+def test_operation_lock_preserves_stale_evidence_and_recovers(tmp_path: Path) -> None:
+    lock_directory = tmp_path / "daily.lock"
+    lock_directory.mkdir()
+    (lock_directory / "owner.pid").write_text("99999999\n", encoding="utf-8")
+
+    result = _run_bash(
+        f"""
+paper_acquire_operation_lock {shlex.quote(str(lock_directory))} daily-close
+printf 'owner=%s\n' "$(cat {shlex.quote(str(lock_directory / "owner.pid"))})"
+paper_release_operation_lock {shlex.quote(str(lock_directory))}
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().startswith("owner=")
+    assert not lock_directory.exists()
+    assert len(list(tmp_path.glob("daily.lock.stale.*"))) == 1

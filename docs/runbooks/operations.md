@@ -71,7 +71,7 @@ After a Berlin calendar day has ended, run:
 scripts/daily-paper-ops.sh EXPERIMENT_ID YYYY-MM-DD
 ```
 
-This verifies the ledger, writes immutable Markdown/JSON/CSV/Parquet report artifacts with hashes, creates a validated PostgreSQL backup, and checks the running processes/API. Never overwrite or delete a daily bundle during the experiment.
+This verifies the ledger, writes immutable Markdown/JSON/CSV/Parquet report artifacts with hashes, creates a validated PostgreSQL backup, and checks the running processes/API. The command takes a candidate-and-date operation lock. A retry after a crash reuses the unique verified complete bundle and reconciles it into run state; a concurrent close, ambiguous duplicate, changed bundle identity, or tampered artifact fails closed. Never overwrite or delete a daily bundle during the experiment.
 
 The normal daily command fails closed while the requested Berlin day is still in
 progress. `--allow-partial` exists only for the supported stop workflow, which labels the

@@ -4,6 +4,65 @@
 # A tmux-launched worker leads its own process group. A worker launched by another
 # supervisor can instead be a uv wrapper with the Python process beneath it.
 PAPER_TMUX_PANE_PID=""
+PAPER_OPERATION_LOCK_DIR=""
+
+paper_acquire_operation_lock() {
+  local lock_directory="$1"
+  local operation="$2"
+  local existing_owner
+  local stale_directory
+  local attempt
+
+  if [[ -z "${lock_directory}" || -z "${operation}" ]]; then
+    echo "operation lock directory and name are required" >&2
+    return 64
+  fi
+
+  for attempt in 1 2 3; do
+    if mkdir "${lock_directory}" 2>/dev/null; then
+      printf '%s\n' "$$" > "${lock_directory}/owner.pid"
+      printf '%s\n' "${operation}" > "${lock_directory}/operation"
+      date -u +%Y-%m-%dT%H:%M:%SZ > "${lock_directory}/acquired-at"
+      PAPER_OPERATION_LOCK_DIR="${lock_directory}"
+      return 0
+    fi
+
+    existing_owner="$(cat "${lock_directory}/owner.pid" 2>/dev/null || true)"
+    if [[ ! "${existing_owner}" =~ ^[0-9]+$ ]]; then
+      echo "operation lock is present but has no valid owner: ${lock_directory}" >&2
+      return 1
+    fi
+    if kill -0 "${existing_owner}" 2>/dev/null; then
+      echo "operation lock is already held by PID ${existing_owner}: ${lock_directory}" >&2
+      return 1
+    fi
+
+    stale_directory="${lock_directory}.stale.$(date -u +%Y%m%dT%H%M%SZ).${existing_owner}.$$.${attempt}"
+    if mv "${lock_directory}" "${stale_directory}" 2>/dev/null; then
+      continue
+    fi
+  done
+
+  echo "could not acquire operation lock after concurrent recovery: ${lock_directory}" >&2
+  return 1
+}
+
+paper_release_operation_lock() {
+  local lock_directory="$1"
+  local existing_owner
+
+  existing_owner="$(cat "${lock_directory}/owner.pid" 2>/dev/null || true)"
+  if [[ "${existing_owner}" != "$$" ]]; then
+    echo "refusing to release an operation lock owned by PID ${existing_owner:-unknown}" >&2
+    return 1
+  fi
+  rm -f \
+    "${lock_directory}/owner.pid" \
+    "${lock_directory}/operation" \
+    "${lock_directory}/acquired-at"
+  rmdir "${lock_directory}"
+  PAPER_OPERATION_LOCK_DIR=""
+}
 
 paper_resolve_docker_context() {
   local context="${MAAIS_DOCKER_CONTEXT:-}"

@@ -279,6 +279,51 @@ def test_daily_report_requires_explicit_partial_override_for_stop_evidence(
     assert json.loads(capsys.readouterr().out)["directory"] == str(target)
 
 
+def test_daily_report_resumes_existing_complete_bundle_without_rebuilding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = tmp_path / "existing-report"
+
+    async def unexpected_report(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise AssertionError("an existing complete bundle must not be rebuilt")
+
+    monkeypatch.setattr("maais.cli.build_configured_daily_report", unexpected_report)
+    monkeypatch.setattr(
+        "maais.cli.resolve_existing_daily_report_bundle",
+        lambda *_args, **_kwargs: {
+            "report_id": "a" * 64,
+            "directory": str(target),
+            "json": str(target / "report.json"),
+            "markdown": str(target / "report.md"),
+            "decisions_csv": str(target / "decisions.csv"),
+            "decisions_parquet": str(target / "decisions.parquet"),
+            "execution_csv": str(target / "execution.csv"),
+            "execution_parquet": str(target / "execution.parquet"),
+            "bundle_manifest": str(target / "bundle-manifest.json"),
+            "resumed": True,
+        },
+    )
+
+    assert (
+        main(
+            [
+                "daily-report",
+                "--experiment",
+                "11111111-1111-4111-8111-111111111111",
+                "--date",
+                "2026-08-02",
+                "--output",
+                str(tmp_path),
+                "--resume-existing",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["resumed"] is True
+
+
 def test_final_report_cli_aggregates_the_exact_seven_day_evidence_set(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
