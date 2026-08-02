@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --dev
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run pyright
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --dev
+      - run: uv run pytest -q
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --dev
+      - run: uv run pip-audit
+      - run: >-
+          uv run detect-secrets scan --baseline .secrets.baseline
+          --exclude-files '(^uv\.lock$|^\.superpowers/)'
+      - run: uv run pytest tests/test_execution_safety.py -q
+
+  migration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: maais
+          POSTGRES_USER: maais
+          POSTGRES_PASSWORD: maais
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U maais -d maais"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql+psycopg://maais:maais@localhost:5432/maais
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --dev
+      - run: uv run alembic upgrade head
+      - run: >-
+          PGPASSWORD=maais psql -h localhost -U maais -d maais -Atc
+          'select version_num from alembic_version' | grep -Fx 0006
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: maais_test
+          POSTGRES_USER: maais
+          POSTGRES_PASSWORD: maais
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U maais -d maais_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql+psycopg://maais:maais@localhost:5432/maais_test
+      MAAIS_TEST_DATABASE_URL: postgresql+psycopg://maais:maais@localhost:5432/maais_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --dev
+      - run: uv run alembic upgrade head
+      - run: uv run pytest tests/integration -q
+      - run: >-
+          PGPASSWORD=maais psql -h localhost -U maais -d maais_test -Atc
+          'select version_num from alembic_version' | grep -Fx 0006
