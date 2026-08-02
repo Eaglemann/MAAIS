@@ -47,6 +47,7 @@ async def test_live_entry_context_restores_account_and_uses_real_future_book(
             "venue": "binance_usdm",
             "market": "usdt_perpetual",
             "filter_snapshot_hashes": {"BTCUSDT": exchange_filter.content_hash},
+            "filter_snapshots": {"BTCUSDT": exchange_filter.to_dict()},
         },
     )
     policy = LivePaperPolicy.from_manifest(manifest)

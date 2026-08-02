@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 
 from maais.config.modes import RunMode
+from maais.domain.enums import PaperOrderType
+from maais.execution.paper.filters import ExchangeFilterSnapshot
 from maais.experiments.manifest import ExperimentManifest
 from maais.market_data.integrity.state_machine import IntegrityPolicy
 
@@ -70,6 +72,29 @@ def _integer(parent: Mapping[str, object], name: str) -> int:
     return value
 
 
+def _filter_snapshot(value: Mapping[str, object]) -> ExchangeFilterSnapshot:
+    raw_order_types = value.get("supported_order_types")
+    if not isinstance(raw_order_types, Sequence) or isinstance(raw_order_types, str):
+        raise RuntimePolicyError("filter supported_order_types must be an explicit list")
+    raw_captured_at = _text(value, "captured_at").replace("Z", "+00:00")
+    try:
+        captured_at = datetime.fromisoformat(raw_captured_at)
+        order_types = tuple(PaperOrderType(str(item)) for item in raw_order_types)
+        return ExchangeFilterSnapshot(
+            symbol=_text(value, "symbol"),
+            status=_text(value, "status"),
+            price_tick=_decimal(value, "price_tick"),
+            quantity_step=_decimal(value, "quantity_step"),
+            minimum_quantity=_decimal(value, "minimum_quantity"),
+            maximum_quantity=_decimal(value, "maximum_quantity"),
+            minimum_notional=_decimal(value, "minimum_notional"),
+            supported_order_types=order_types,
+            captured_at=captured_at,
+        )
+    except (ValueError, TypeError) as exc:
+        raise RuntimePolicyError("exchange filter snapshot is invalid") from exc
+
+
 def _duration_seconds(value: Decimal, name: str, *, maximum: Decimal) -> timedelta:
     if value <= 0 or value > maximum:
         raise RuntimePolicyError(f"{name} must be in (0, {maximum}]")
@@ -97,6 +122,7 @@ class LivePaperPolicy:
     strategy_implementation_hash: str
     strategy_parameters: Mapping[str, object]
     exchange_filter_hashes: Mapping[str, str]
+    exchange_filters: Mapping[str, ExchangeFilterSnapshot]
 
     @classmethod
     def from_manifest(cls, manifest: ExperimentManifest) -> LivePaperPolicy:
@@ -174,12 +200,25 @@ class LivePaperPolicy:
         raw_filter_hashes = _mapping(manifest.exchange_metadata, "filter_snapshot_hashes")
         if set(raw_filter_hashes) != set(manifest.symbols):
             raise RuntimePolicyError("exchange filter hashes must cover exact manifest symbols")
+        raw_filter_snapshots = _mapping(manifest.exchange_metadata, "filter_snapshots")
+        if set(raw_filter_snapshots) != set(manifest.symbols):
+            raise RuntimePolicyError("exchange filter snapshots must cover exact manifest symbols")
         filter_hashes: dict[str, str] = {}
+        filters: dict[str, ExchangeFilterSnapshot] = {}
         for symbol in manifest.symbols:
             value = _text(raw_filter_hashes, symbol)
             if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
                 raise RuntimePolicyError(f"exchange filter hash is invalid for {symbol}")
+            raw_snapshot = raw_filter_snapshots[symbol]
+            if not isinstance(raw_snapshot, Mapping):
+                raise RuntimePolicyError(f"exchange filter snapshot is invalid for {symbol}")
+            snapshot = _filter_snapshot(raw_snapshot)
+            if snapshot.symbol != symbol:
+                raise RuntimePolicyError(f"exchange filter snapshot symbol differs for {symbol}")
+            if snapshot.content_hash != value:
+                raise RuntimePolicyError(f"exchange filter snapshot hash differs for {symbol}")
             filter_hashes[symbol] = value
+            filters[symbol] = snapshot
 
         versions = {
             name
@@ -207,6 +246,7 @@ class LivePaperPolicy:
             strategy_implementation_hash=strategy_implementation_hash,
             strategy_parameters=MappingProxyType(dict(strategy_parameters)),
             exchange_filter_hashes=MappingProxyType(filter_hashes),
+            exchange_filters=MappingProxyType(filters),
         )
 
     def integrity_policy(self) -> IntegrityPolicy:

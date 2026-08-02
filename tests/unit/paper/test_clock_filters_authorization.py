@@ -77,6 +77,17 @@ def test_filters_quantize_without_increasing_approved_risk(
     assert buy.quantity <= buy.requested_quantity <= buy.approved_quantity
 
 
+def test_filter_rules_hash_excludes_only_capture_provenance(
+    filters: ExchangeFilterSnapshot,
+) -> None:
+    refreshed = replace(filters, captured_at=NOW + timedelta(minutes=1))
+    changed_rule = replace(filters, minimum_notional=Decimal("10"))
+
+    assert refreshed.content_hash != filters.content_hash
+    assert refreshed.rules_hash == filters.rules_hash
+    assert changed_rule.rules_hash != filters.rules_hash
+
+
 @pytest.mark.parametrize(
     ("change", "reason"),
     (

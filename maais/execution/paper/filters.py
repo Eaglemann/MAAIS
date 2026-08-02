@@ -67,6 +67,9 @@ class ExchangeFilterSnapshot:
         require_utc(self.captured_at, "captured_at")
 
     def to_dict(self) -> dict[str, object]:
+        return {**self.rules_dict(), "captured_at": self.captured_at}
+
+    def rules_dict(self) -> dict[str, object]:
         return {
             "symbol": self.symbol,
             "status": self.status,
@@ -76,12 +79,15 @@ class ExchangeFilterSnapshot:
             "maximum_quantity": self.maximum_quantity,
             "minimum_notional": self.minimum_notional,
             "supported_order_types": self.supported_order_types,
-            "captured_at": self.captured_at,
         }
 
     @property
     def content_hash(self) -> str:
         return content_hash(self.to_dict())
+
+    @property
+    def rules_hash(self) -> str:
+        return content_hash(self.rules_dict())
 
     def quantize_quantity(self, value: Decimal) -> Decimal:
         _require_positive(value, "requested_quantity")

@@ -1,14 +1,32 @@
 from dataclasses import replace
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 
 from maais.config.modes import RunMode
+from maais.domain.enums import PaperOrderType
+from maais.execution.paper.filters import ExchangeFilterSnapshot
 from maais.experiments.runtime_policy import LivePaperPolicy, RuntimePolicyError
 from tests.unit.experiments.test_manifest import _manifest
 
 
+def _live_filter(symbol: str = "BTCUSDT") -> ExchangeFilterSnapshot:
+    return ExchangeFilterSnapshot(
+        symbol=symbol,
+        status="TRADING",
+        price_tick=Decimal("0.1"),
+        quantity_step=Decimal("0.001"),
+        minimum_quantity=Decimal("0.001"),
+        maximum_quantity=Decimal("200"),
+        minimum_notional=Decimal("5"),
+        supported_order_types=(PaperOrderType.LIMIT, PaperOrderType.MARKET),
+        captured_at=datetime(2026, 8, 2, 9, tzinfo=timezone.utc),
+    )
+
+
 def _live_manifest(**overrides):
+    exchange_filter = _live_filter()
     values = {
         "mode": RunMode.PAPER_LIVE,
         "configuration": {
@@ -46,7 +64,8 @@ def _live_manifest(**overrides):
         "exchange_metadata": {
             "venue": "binance_usdm",
             "market": "usdt_perpetual",
-            "filter_snapshot_hashes": {"BTCUSDT": "f" * 64},
+            "filter_snapshot_hashes": {"BTCUSDT": exchange_filter.content_hash},
+            "filter_snapshots": {"BTCUSDT": exchange_filter.to_dict()},
         },
         "market_data_sources": {
             "futures": "binance_usdm",
@@ -74,7 +93,8 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
     assert policy.strategy_version == "1.0.0"
     assert policy.strategy_implementation_hash == "b" * 64
     assert policy.strategy_parameters == {"timeframe": "1m"}
-    assert policy.exchange_filter_hashes == {"BTCUSDT": "f" * 64}
+    assert policy.exchange_filter_hashes == {"BTCUSDT": _live_filter().content_hash}
+    assert policy.exchange_filters == {"BTCUSDT": _live_filter()}
     assert policy.integrity_policy().max_decision_lag == policy.maximum_decision_lag
 
 
@@ -154,4 +174,18 @@ def test_live_policy_requires_every_authoritative_component_version() -> None:
     )
 
     with pytest.raises(RuntimePolicyError, match="counterfactual"):
+        LivePaperPolicy.from_manifest(manifest)
+
+
+def test_live_policy_rejects_filter_snapshot_hash_mismatch() -> None:
+    manifest = _live_manifest()
+    manifest = replace(
+        manifest,
+        exchange_metadata={
+            **manifest.exchange_metadata,
+            "filter_snapshot_hashes": {"BTCUSDT": "f" * 64},
+        },
+    )
+
+    with pytest.raises(RuntimePolicyError, match="snapshot hash"):
         LivePaperPolicy.from_manifest(manifest)
