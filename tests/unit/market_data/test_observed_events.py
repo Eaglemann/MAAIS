@@ -81,6 +81,12 @@ def test_sequence_is_required_or_explicitly_not_applicable() -> None:
             reference_kind=ReferenceKind.SECONDARY_VENUE,
             instrument="BTC-USD",
             price=Decimal("100.5"),
+            source_event_id="coinbase-trade-1",
+            source_quantity=Decimal("1"),
+            source_side=None,
+            source_bid=None,
+            source_ask=None,
+            source_published_at=None,
         ),
     )
 

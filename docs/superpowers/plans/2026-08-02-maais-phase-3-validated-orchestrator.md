@@ -15,6 +15,7 @@
 - 2026-08-02: The official agent matrix now always returns eight ordered visible rows with manifest maturity, proxy labels, deterministic or monotonic durations, input contributions, and blocking failure metadata. Pure official monitoring and risk gates now fail closed on price/stop, Kelly, correlation warmup, portfolio loss at stop, drawdown, health, black-swan warmup, liquidity, and benchmark provenance. Atomic orchestration remains pending.
 - 2026-08-02: The pure orchestrator now produces deterministic quarantine and mandatory-agent-failure bundles with incidents, plus admitted neutral, rejected-counterfactual, approved-executed, and approved-but-unfillable halt outcomes. Directional decisions use Decimal consensus, adversarial, cost, EV, benchmark, monitoring, risk, exchange, and broker-capacity gates; successful entries carry exact gate-hash authorization, paper fills, reconciled account/exit state, and sensitivity scenarios. Atomic outcome persistence, protective-exit driving, funding lifecycle, public adapters, and worker resume remain pending.
 - 2026-08-02: Atomic outcome persistence and restart loaders are complete. Revision `0010` persists restartable stop/target trigger reason, venue/local timing, trigger price, executable price, and `Regular`/`Special` funding lineage. Protective marks continue while entries are halted; successful exits and funding reconcile through restart, while unfillable exits atomically persist the triggered plan, critical incident, and terminal experiment halt. Public adapters and worker lifecycle remain pending.
+- 2026-08-02: Strict, keyless public adapters now cover Binance USD-M REST/WebSocket, Binance Spot primary references, and Bybit Spot secondary references for all ten admitted symbols. They retain venue identity, time, sequence availability, executable quote metadata, and fail closed on schema drift, gaps, queue saturation, or unreconciled depth. Binance Spot uses the standard official public origin because a live check found the market-data-only origin too stale for the five-second admission limit. REST closed-bar recovery coordination and the worker lifecycle remain pending.
 
 ## Current defects this phase must retire
 
@@ -67,8 +68,10 @@
 - `maais/market_data/integrity/state_machine.py` - required tri-state checks and quarantine decision.
 - `maais/market_data/reference.py` - true secondary-reference and spot-basis ports.
 - `maais/market_data/recovery.py` - gap detection, backfill, recomputation, and recovery state.
-- `maais/market_data/connectors/public_binance.py` - verified public Futures stream/REST adapter.
-- `maais/market_data/connectors/reference.py` - verified public secondary-venue adapter.
+- `maais/market_data/connectors/binance_rest.py` - verified public Futures REST adapter.
+- `maais/market_data/connectors/binance_websocket.py` - bounded public Futures stream adapter.
+- `maais/market_data/connectors/binance_spot.py` - verified primary Spot reference adapter.
+- `maais/market_data/connectors/bybit_spot.py` - verified secondary-venue reference adapter.
 
 ### Decision, risk, and orchestration
 
@@ -203,14 +206,14 @@ Gate: rollback, concurrent duplicate, conflicting retry, and restart tests pass 
 
 ## Task 9 - Verified public-data adapters
 
-- [ ] Re-check current official venue documentation before implementing message fields, sequence rules, rate limits, and endpoints.
-- [ ] Keep public live REST/WebSocket origins explicit and disjoint from authenticated Demo smoke execution.
-- [ ] Remove parser wall-clock fallbacks and silent defaults.
-- [ ] Use bounded backpressure; queue saturation creates a halt/incident instead of dropping data.
-- [ ] Retain and await connector tasks; expose deterministic start, ready, stop, and failure states.
+- [x] Re-check current official venue documentation before implementing message fields, sequence rules, rate limits, and endpoints.
+- [x] Keep public live REST/WebSocket origins explicit and disjoint from authenticated Demo smoke execution.
+- [x] Remove parser wall-clock fallbacks and silent defaults.
+- [x] Use bounded backpressure; queue saturation creates a halt/incident instead of dropping data.
+- [x] Retain and await connector tasks; expose deterministic start, ready, stop, and failure states.
 - [ ] Implement ping/pong, reconnect backoff with jitter, cursor reconciliation, and REST backfill.
-- [ ] Add a true secondary-reference adapter for every admitted symbol mapping.
-- [ ] Add contract fixtures from sanitized official payload shapes and parser mutation tests.
+- [x] Add a true secondary-reference adapter for every admitted symbol mapping.
+- [x] Add contract fixtures from sanitized official payload shapes and parser mutation tests.
 
 Gate: public live mode starts with no API keys, and every disconnect or sequence gap follows the recovery state machine.
 

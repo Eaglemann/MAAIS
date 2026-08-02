@@ -241,17 +241,40 @@ class ReferencePricePayload:
     reference_kind: ReferenceKind
     instrument: str
     price: Decimal
+    source_event_id: str
+    source_quantity: Decimal | None
+    source_side: AggressorSide | None
+    source_bid: Decimal | None
+    source_ask: Decimal | None
+    source_published_at: datetime | None
 
     def __post_init__(self) -> None:
-        if not self.instrument:
-            raise ValueError("reference instrument is required")
+        if not self.instrument or not self.source_event_id:
+            raise ValueError("reference instrument and source event are required")
         _require_decimal(self.price, "reference price", positive=True)
+        if self.source_quantity is not None:
+            _require_decimal(self.source_quantity, "reference source quantity", positive=True)
+        if (self.source_bid is None) != (self.source_ask is None):
+            raise ValueError("reference bid and ask must be present together")
+        if self.source_bid is not None and self.source_ask is not None:
+            _require_decimal(self.source_bid, "reference source bid", positive=True)
+            _require_decimal(self.source_ask, "reference source ask", positive=True)
+            if self.source_bid >= self.source_ask:
+                raise ValueError("reference source bid must be below ask")
+        if self.source_published_at is not None:
+            _require_utc(self.source_published_at, "reference source_published_at")
 
     def to_dict(self) -> dict[str, object]:
         return {
             "reference_kind": self.reference_kind,
             "instrument": self.instrument,
             "price": self.price,
+            "source_event_id": self.source_event_id,
+            "source_quantity": self.source_quantity,
+            "source_side": self.source_side,
+            "source_bid": self.source_bid,
+            "source_ask": self.source_ask,
+            "source_published_at": self.source_published_at,
         }
 
 
