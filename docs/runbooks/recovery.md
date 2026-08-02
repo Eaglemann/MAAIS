@@ -5,8 +5,21 @@
 1. Confirm the prior worker process is no longer alive.
 2. Run `uv run maais verify-ledger`.
 3. Inspect the latest checkpoint, lease, cursors, recovery runs, incidents, open positions, pending orders, and kill switch in Mission Control.
-4. Start with the same manifest and restore-verification artifact. The worker must restore persisted history/cursors and enforce exactly-once decision keys.
+4. Run `scripts/recover-paper-week.sh worker "REASON"`. It refuses a live recorded PID, waits for lease expiry, reuses the frozen manifest, requires a higher lease epoch, restores the sleep inhibitor, verifies the ledger before and after, and writes immutable evidence under `artifacts/run-state/recovery-evidence/`.
 5. Compare counts and event positions before and after restart. Any duplicate decision, order, fill, or report fails the candidate.
+
+## Mission Control restart
+
+If Mission Control stops but the worker remains alive, run:
+
+```bash
+scripts/recover-paper-week.sh dashboard "REASON"
+```
+
+The recovery refuses to replace a live recorded dashboard PID, restarts only the read-only
+API/UI process with structured logging, verifies health and the ledger, and records the old
+and new process identities plus before/after authoritative state. The worker must continue
+independently throughout the interruption.
 
 ## Database restore drill
 

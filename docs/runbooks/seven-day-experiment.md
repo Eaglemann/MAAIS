@@ -12,6 +12,10 @@ The seven-day clock starts only after all of the following have fresh evidence:
 - Mission Control and daily report reconciliation;
 - no live-money path or exchange credentials.
 
+The required fault matrix and process-drill boundaries are defined in
+`docs/testing/fault-injection.md`. Process-kill drills use a disposable candidate and are
+completed before the clean 24-hour soak begins.
+
 ## During the run
 
 - Do not change code, dependencies, manifest, thresholds, symbols, agent weights, fees, latency, or risk settings.

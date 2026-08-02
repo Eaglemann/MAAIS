@@ -400,26 +400,33 @@ class PaperWorkerSupervisor:
             halted_at,
             {**self._checkpoint_state(), "failure": detail},
         )
-        async with self._uow.begin() as transaction:
-            status = await transaction.experiments.get_status(self._manifest.experiment_id)
-            if status in {ExperimentStatus.RUNNING, ExperimentStatus.PAUSED}:
-                await transaction.experiments.fail_active(
-                    self._manifest,
+        try:
+            async with self._uow.begin() as transaction:
+                status = await transaction.experiments.get_status(self._manifest.experiment_id)
+                if status in {ExperimentStatus.RUNNING, ExperimentStatus.PAUSED}:
+                    await transaction.experiments.fail_active(
+                        self._manifest,
+                        reason=f"paper_worker:{detail}",
+                        failed_at=halted_at,
+                    )
+                await transaction.controls.halt(
+                    self._manifest.experiment_id,
                     reason=f"paper_worker:{detail}",
-                    failed_at=halted_at,
+                    halted_at=halted_at,
+                    actor="paper_worker",
                 )
-            await transaction.controls.halt(
-                self._manifest.experiment_id,
-                reason=f"paper_worker:{detail}",
-                halted_at=halted_at,
-                actor="paper_worker",
+                await transaction.orchestration.record_checkpoint(checkpoint)
+                self._lease = await transaction.workers.release(
+                    experiment_id=self._manifest.experiment_id,
+                    worker_id=self._worker_id,
+                    released_at=halted_at,
+                )
+        except Exception as persistence_error:
+            self._failure = PaperWorkerHalt(
+                f"paper worker halted: {detail}; "
+                f"halt persistence failed: {_failure_detail(persistence_error)}"
             )
-            await transaction.orchestration.record_checkpoint(checkpoint)
-            self._lease = await transaction.workers.release(
-                experiment_id=self._manifest.experiment_id,
-                worker_id=self._worker_id,
-                released_at=halted_at,
-            )
+            return
         self._checkpoint = checkpoint
 
     async def _cancel_background_tasks(self) -> None:
