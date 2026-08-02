@@ -12,6 +12,7 @@
 
 - 2026-08-02: Tasks 1-3 pure contracts completed for immutable observed events, causal exactly-once frames, and mandatory tri-state integrity admission. Public adapters and PostgreSQL persistence remain pending, so this is not yet a runnable live worker.
 - 2026-08-02: Revision `0009` now persists normalized quality rows, ingestion cursors, recovery runs, incidents, and worker checkpoints with event/outbox streams, optimistic versions, restart loaders, ledger checks, rollback/concurrency coverage, and a verified downgrade/upgrade drill. REST recovery orchestration and the live worker remain pending.
+- 2026-08-02: The official agent matrix now always returns eight ordered visible rows with manifest maturity, proxy labels, deterministic or monotonic durations, input contributions, and blocking failure metadata. Pure official monitoring and risk gates now fail closed on price/stop, Kelly, correlation warmup, portfolio loss at stop, drawdown, health, black-swan warmup, liquidity, and benchmark provenance. Atomic orchestration and incident creation from matrix failures remain pending.
 
 ## Current defects this phase must retire
 
@@ -148,26 +149,26 @@ Gate: crash/reconnect fixtures recover without duplicate frames or cycles and wi
 
 ## Task 5 - Exactly-eight agent evaluation matrix
 
-- [ ] Replace silent regime filtering with one row for every configured agent.
-- [ ] Record compatible, enabled, maturity, proxy label, reason codes, input contributions, duration, and output.
-- [ ] Use deterministic injected timing in replay and monotonic timing in live mode.
-- [ ] Convert assertion-only agent validation into runtime exceptions.
-- [ ] Force incompatible and disabled agents to neutral nonvoting rows.
+- [x] Replace silent regime filtering with one row for every configured agent.
+- [x] Record compatible, enabled, maturity, proxy label, reason codes, input contributions, duration, and output.
+- [x] Use deterministic injected timing in replay and monotonic timing in live mode.
+- [x] Convert assertion-only agent validation into runtime exceptions.
+- [x] Force incompatible and disabled agents to neutral nonvoting rows.
 - [ ] Prove a throwing, missing, duplicated, or malformed mandatory agent blocks the cycle and creates an incident.
 
 Gate: every non-quarantined cycle has exactly eight unique agent names and replay-stable authoritative outputs.
 
 ## Task 6 - Official monitoring and risk corrections
 
-- [ ] Size from current executable mark/mid and actual stop distance, not `zscore_mean`.
-- [ ] Reject zero or negative Kelly before any quantity calculation.
-- [ ] Require 60 aligned returns before multi-symbol correlation can admit exposure.
-- [ ] Sum portfolio loss at stop independently from gross-notional and margin caps.
-- [ ] Make drawdown/peak inputs explicit and restorable.
-- [ ] Require warm rolling black-swan baselines per symbol/timeframe.
-- [ ] Require fresh health for every mandatory component.
-- [ ] Require an explicit benchmark observation and reject a default-zero benchmark.
-- [ ] Return a typed gate result for every pass/fail with exact inputs and reason code.
+- [x] Size from current executable mark/mid and actual stop distance, not `zscore_mean`.
+- [x] Reject zero or negative Kelly before any quantity calculation.
+- [x] Require 60 aligned returns before multi-symbol correlation can admit exposure.
+- [x] Sum portfolio loss at stop independently from gross-notional and margin caps.
+- [x] Make drawdown/peak inputs explicit and restorable.
+- [x] Require warm rolling black-swan baselines per symbol/timeframe.
+- [x] Require fresh health for every mandatory component.
+- [x] Require an explicit benchmark observation and reject a default-zero benchmark.
+- [x] Return a typed gate result for every pass/fail with exact inputs and reason code.
 
 Gate: red tests cover every historical permissive default and prove it now fails closed.
 

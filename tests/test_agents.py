@@ -89,19 +89,19 @@ class TestAgentOutput:
         assert out.directional_hypothesis == "long"
 
     def test_invalid_hypothesis_raises(self):
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             AgentOutput("test", "up", 0.7, 0.8, 0.3)
 
     def test_probability_out_of_range_raises(self):
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             AgentOutput("test", "long", 1.5, 0.8, 0.3)
 
     def test_confidence_out_of_range_raises(self):
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             AgentOutput("test", "long", 0.7, -0.1, 0.3)
 
     def test_risk_out_of_range_raises(self):
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             AgentOutput("test", "long", 0.7, 0.8, 1.5)
 
     def test_to_dict_has_all_keys(self):
@@ -578,17 +578,21 @@ class TestAgentRunner:
         for out in results:
             _assert_valid_output(out)
 
-    async def test_run_agents_trending_excludes_mean_reversion(self):
+    async def test_run_agents_trending_retains_neutral_mean_reversion(self):
         features = _features(regime=Regime.TRENDING)
         results = await run_agents(features)
         names = agent_names_ran(results)
-        assert AgentName.MEAN_REVERSION not in names
+        assert AgentName.MEAN_REVERSION in names
+        output = next(item for item in results if item.agent_name == AgentName.MEAN_REVERSION)
+        assert output.directional_hypothesis == "neutral"
 
-    async def test_run_agents_range_bound_excludes_momentum(self):
+    async def test_run_agents_range_bound_retains_neutral_momentum(self):
         features = _features(regime=Regime.RANGE_BOUND)
         results = await run_agents(features)
         names = agent_names_ran(results)
-        assert AgentName.MOMENTUM not in names
+        assert AgentName.MOMENTUM in names
+        output = next(item for item in results if item.agent_name == AgentName.MOMENTUM)
+        assert output.directional_hypothesis == "neutral"
 
     async def test_run_agents_accepts_custom_agent_list(self):
         features = _features(regime=Regime.TRENDING)

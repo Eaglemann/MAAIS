@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from maais.feature_pipeline.features import FeatureSet
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class AgentOutput:
     """Rule 3: exactly 4 outputs per agent."""
 
@@ -25,16 +25,16 @@ class AgentOutput:
     risk_estimate: float  # estimated risk for this trade, ∈ [0.0, 1.0]
 
     def __post_init__(self) -> None:
-        assert self.directional_hypothesis in ("long", "short", "neutral"), (
-            f"Invalid hypothesis: {self.directional_hypothesis}"
-        )
-        assert 0.0 <= self.probability_estimate <= 1.0, (
-            f"probability_estimate out of range: {self.probability_estimate}"
-        )
-        assert 0.0 <= self.confidence_score <= 1.0, (
-            f"confidence_score out of range: {self.confidence_score}"
-        )
-        assert 0.0 <= self.risk_estimate <= 1.0, f"risk_estimate out of range: {self.risk_estimate}"
+        if not self.agent_name:
+            raise ValueError("agent_name is required")
+        if self.directional_hypothesis not in ("long", "short", "neutral"):
+            raise ValueError(f"invalid hypothesis: {self.directional_hypothesis}")
+        for name in ("probability_estimate", "confidence_score", "risk_estimate"):
+            value = getattr(self, name)
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            if value < 0.0 or value > 1.0:
+                raise ValueError(f"{name} out of range: {value}")
 
     def to_dict(self) -> dict:
         return {
