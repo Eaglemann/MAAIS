@@ -11,6 +11,9 @@ from maais.db.repositories.decisions import DecisionRepository
 from maais.db.repositories.events import EventRepository
 from maais.db.repositories.execution import PaperExecutionRepository
 from maais.db.repositories.experiments import ExperimentRepository
+from maais.db.repositories.incidents import IncidentRepository
+from maais.db.repositories.market_data import MarketDataRepository
+from maais.db.repositories.orchestration import OrchestrationRepository
 
 
 @dataclass(slots=True)
@@ -21,6 +24,9 @@ class UnitOfWorkContext:
     decisions: DecisionRepository
     counterfactuals: CounterfactualRepository
     paper_execution: PaperExecutionRepository
+    market_data: MarketDataRepository
+    incidents: IncidentRepository
+    orchestration: OrchestrationRepository
 
 
 class UnitOfWork:
@@ -41,4 +47,7 @@ class UnitOfWork:
                     decisions=DecisionRepository(session, events),
                     counterfactuals=CounterfactualRepository(session, events),
                     paper_execution=PaperExecutionRepository(session, events),
+                    market_data=MarketDataRepository(session, events),
+                    incidents=IncidentRepository(session, events),
+                    orchestration=OrchestrationRepository(session, events),
                 )

@@ -190,7 +190,7 @@ The phase brief below fixes scope and acceptance criteria. Its implementation-gr
 - [x] Build exactly-once one-minute frames from live and replay events.
 - [x] Expand data integrity into pass/fail/not-applicable quarantine and recovery states.
 - [ ] Add true secondary-venue reference prices and separate futures/spot basis validation.
-- [ ] Add venue clock drift, sequence, duplicate, crossed-book, OHLC, volume, symbol-state, and stale checks.
+- [x] Add venue clock drift, sequence, duplicate, crossed-book, OHLC, volume, symbol-state, and stale checks.
 - [ ] Add REST gap backfill with deterministic downstream recomputation.
 - [ ] Persist all eight agent rows, reason codes, durations, maturity, and proxy labeling.
 - [ ] Correct price, correlation warm-up, risk-at-stop, persistent drawdown, and rolling black-swan baselines.

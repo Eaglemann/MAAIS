@@ -19,6 +19,13 @@ from maais.db.models.decisions import (
 from maais.db.models.execution import FillModel, OrderEventModel, OrderIntentModel
 from maais.db.models.experiments import ExperimentModel
 from maais.db.models.ledger import DomainEventModel, EventStreamModel, OutboxEventModel
+from maais.db.models.operations import (
+    DataQualityEvaluationModel,
+    IncidentModel,
+    MarketCursorModel,
+    MarketRecoveryRunModel,
+    WorkerCheckpointModel,
+)
 from maais.domain.enums import ExperimentStatus
 from maais.domain.json import content_hash
 
@@ -436,6 +443,134 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
                     stream,
                     f"events={event_count}, version={counterfactual.version}, "
                     f"hash_matches={hash_matches}",
+                )
+            )
+
+    versioned_operational_rows: tuple[
+        tuple[str, list[MarketCursorModel | MarketRecoveryRunModel | IncidentModel]], ...
+    ] = (
+        ("market_cursor", list((await session.scalars(select(MarketCursorModel))).all())),
+        (
+            "market_recovery",
+            list((await session.scalars(select(MarketRecoveryRunModel))).all()),
+        ),
+        ("incident", list((await session.scalars(select(IncidentModel))).all())),
+    )
+    for aggregate_type, rows in versioned_operational_rows:
+        for row in rows:
+            event_count = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(DomainEventModel)
+                    .where(
+                        DomainEventModel.aggregate_type == aggregate_type,
+                        DomainEventModel.aggregate_id == row.id,
+                    )
+                )
+                or 0
+            )
+            hash_matches = content_hash(row.state_json) == row.content_hash
+            if event_count != row.version or not hash_matches:
+                stream = next(
+                    (
+                        item
+                        for item in streams
+                        if item.aggregate_type == aggregate_type and item.aggregate_id == row.id
+                    ),
+                    None,
+                )
+                errors.append(
+                    _error(
+                        f"{aggregate_type}_projection_mismatch",
+                        stream,
+                        f"events={event_count}, version={row.version}, hash_matches={hash_matches}",
+                    )
+                )
+
+    checkpoints = (await session.scalars(select(WorkerCheckpointModel))).all()
+    for checkpoint in checkpoints:
+        event_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(DomainEventModel)
+                .where(
+                    DomainEventModel.aggregate_type == "worker_checkpoint",
+                    DomainEventModel.aggregate_id == checkpoint.experiment_id,
+                )
+            )
+            or 0
+        )
+        hash_matches = content_hash(checkpoint.state_json) == checkpoint.content_hash
+        if event_count != checkpoint.version or not hash_matches:
+            stream = next(
+                (
+                    item
+                    for item in streams
+                    if item.aggregate_type == "worker_checkpoint"
+                    and item.aggregate_id == checkpoint.experiment_id
+                ),
+                None,
+            )
+            errors.append(
+                _error(
+                    "worker_checkpoint_projection_mismatch",
+                    stream,
+                    f"events={event_count}, version={checkpoint.version}, "
+                    f"hash_matches={hash_matches}",
+                )
+            )
+
+    quality_rows = (await session.scalars(select(DataQualityEvaluationModel))).all()
+    quality_by_frame: dict[UUID, list[DataQualityEvaluationModel]] = {}
+    for row in quality_rows:
+        quality_by_frame.setdefault(row.market_frame_id, []).append(row)
+        expected_hash = content_hash(
+            {
+                "market_frame_id": row.market_frame_id,
+                "check_name": row.check_name,
+                "required": row.required,
+                "status": row.status,
+                "reason_code": row.reason_code,
+                "details": row.details_json,
+                "evaluated_at": row.evaluated_at,
+            }
+        )
+        if expected_hash != row.content_hash:
+            errors.append(
+                LedgerConsistencyError(
+                    code="market_quality_row_hash_mismatch",
+                    aggregate_type="market_quality",
+                    aggregate_id=row.market_frame_id,
+                    details=f"quality row {row.id} content hash differs",
+                )
+            )
+    for frame_id, rows in quality_by_frame.items():
+        names = {row.check_name for row in rows}
+        event_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(DomainEventModel)
+                .where(
+                    DomainEventModel.aggregate_type == "market_quality",
+                    DomainEventModel.aggregate_id == frame_id,
+                )
+            )
+            or 0
+        )
+        if len(names) != len(rows) or event_count != 1:
+            stream = next(
+                (
+                    item
+                    for item in streams
+                    if item.aggregate_type == "market_quality" and item.aggregate_id == frame_id
+                ),
+                None,
+            )
+            errors.append(
+                _error(
+                    "market_quality_projection_mismatch",
+                    stream,
+                    f"rows={len(rows)}, unique_checks={len(names)}, events={event_count}",
                 )
             )
     return LedgerConsistencyReport(tuple(errors))

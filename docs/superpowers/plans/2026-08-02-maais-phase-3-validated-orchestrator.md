@@ -11,6 +11,7 @@
 ## Execution progress
 
 - 2026-08-02: Tasks 1-3 pure contracts completed for immutable observed events, causal exactly-once frames, and mandatory tri-state integrity admission. Public adapters and PostgreSQL persistence remain pending, so this is not yet a runnable live worker.
+- 2026-08-02: Revision `0009` now persists normalized quality rows, ingestion cursors, recovery runs, incidents, and worker checkpoints with event/outbox streams, optimistic versions, restart loaders, ledger checks, rollback/concurrency coverage, and a verified downgrade/upgrade drill. REST recovery orchestration and the live worker remain pending.
 
 ## Current defects this phase must retire
 
@@ -135,12 +136,12 @@ Gate: any failed or required-not-applicable check creates a quarantined cycle an
 
 ## Task 4 - Deterministic gap recovery
 
-- [ ] Detect exact missing closed-bar intervals from persisted cursors.
+- [x] Detect exact missing closed-bar intervals from persisted cursors.
 - [ ] Enter a recovery state that blocks new entries but continues protective exits.
 - [ ] Fetch exact REST ranges through an injected backfill port.
-- [ ] Validate response bounds, duplicates, order, coverage, and closed status.
+- [x] Validate response bounds, duplicates, order, coverage, and closed status.
 - [ ] Rebuild affected derived frames from the earliest changed interval.
-- [ ] Persist recovery start, attempts, source hashes, completion, failure, and cursor movement.
+- [x] Persist recovery start, attempts, source hashes, completion, failure, and cursor movement.
 - [ ] Resume only when live and recovered cursors meet without unexplained gaps.
 
 Gate: crash/reconnect fixtures recover without duplicate frames or cycles and with identical normalized hashes.
@@ -187,12 +188,12 @@ Gate: no public method can call the broker with a raw unapproved quantity or byp
 
 ## Task 8 - PostgreSQL orchestration state and atomicity
 
-- [ ] Add revision `0009` for market cursors, quality rows, recovery runs, incidents, and worker checkpoints.
-- [ ] Add uniqueness/check constraints for cursor monotonicity, one frame/cycle key, active recovery, incident identity, and checkpoint versions.
+- [x] Add revision `0009` for market cursors, quality rows, recovery runs, incidents, and worker checkpoints.
+- [x] Add uniqueness/check constraints for cursor monotonicity, one frame/cycle key, active recovery, incident identity, and checkpoint versions.
 - [ ] Persist frame, quality results, eight evaluations, decision, gates, proposal, counterfactual/execution result, incident, cursor, and outbox atomically where applicable.
-- [ ] Add optimistic concurrency for worker checkpoints and incident transitions.
+- [x] Add optimistic concurrency for worker checkpoints and incident transitions.
 - [ ] Add restart loaders for cursors, active recoveries, pending orders, open positions, exit plans, and unresolved counterfactuals.
-- [ ] Extend ledger consistency checks across new projections.
+- [x] Extend ledger consistency checks across new projections.
 
 Gate: rollback, concurrent duplicate, conflicting retry, and restart tests pass on PostgreSQL revision `0009`.
 

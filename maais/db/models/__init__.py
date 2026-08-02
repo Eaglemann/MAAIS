@@ -24,6 +24,13 @@ from maais.db.models.execution import (
 )
 from maais.db.models.experiments import AgentVersionModel, ExperimentModel, StrategyVersionModel
 from maais.db.models.ledger import DomainEventModel, EventStreamModel, OutboxEventModel
+from maais.db.models.operations import (
+    DataQualityEvaluationModel,
+    IncidentModel,
+    MarketCursorModel,
+    MarketRecoveryRunModel,
+    WorkerCheckpointModel,
+)
 
 __all__ = [
     "AccountSnapshotModel",
@@ -32,6 +39,7 @@ __all__ = [
     "CounterfactualModel",
     "DecisionCycleModel",
     "DecisionSummaryModel",
+    "DataQualityEvaluationModel",
     "DomainEventModel",
     "EventStreamModel",
     "ExecutionSensitivityModel",
@@ -40,7 +48,10 @@ __all__ = [
     "FillModel",
     "FundingEntryModel",
     "GateEvaluationModel",
+    "IncidentModel",
     "MarketFrameModel",
+    "MarketCursorModel",
+    "MarketRecoveryRunModel",
     "OutboxEventModel",
     "OrderEventModel",
     "OrderIntentModel",
@@ -48,4 +59,5 @@ __all__ = [
     "PositionModel",
     "StrategyVersionModel",
     "TradeProposalModel",
+    "WorkerCheckpointModel",
 ]
