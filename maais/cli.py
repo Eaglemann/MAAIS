@@ -1,4 +1,4 @@
-"""Small dependency-free operator CLI for MAAIS."""
+"""Local operator CLI for the paper worker and Mission Control."""
 
 from __future__ import annotations
 
@@ -14,6 +14,13 @@ from maais.live import (
     prepare_live_manifest_file,
     run_live_paper_manifest,
 )
+
+
+def _localhost_port(value: str) -> int:
+    port = int(value)
+    if not 1 <= port <= 65_535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="run a keyless local paper worker from an immutable manifest",
     )
     run.add_argument("--manifest", type=Path, required=True)
+    mission_control = commands.add_parser(
+        "mission-control",
+        help="serve the read-only local paper-trading dashboard API",
+    )
+    mission_control.add_argument("--port", type=_localhost_port, default=8000)
     return parser
 
 
@@ -49,6 +61,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         print(f"prepared paper manifest {manifest.experiment_id} at {arguments.output}")
+        return 0
+    if arguments.command == "mission-control":
+        import uvicorn
+
+        uvicorn.run(
+            "maais.api.app:app",
+            host="127.0.0.1",
+            port=arguments.port,
+            log_config=None,
+        )
         return 0
     manifest = load_manifest_file(arguments.manifest)
     asyncio.run(run_live_paper_manifest(manifest, settings=settings))

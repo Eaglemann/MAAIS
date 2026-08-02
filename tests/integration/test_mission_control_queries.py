@@ -1,13 +1,50 @@
-from uuid import UUID
+from dataclasses import replace
+from uuid import UUID, uuid4
 
 import pytest
 
 from maais.api.queries import MissionControlQueryService
 from maais.db.unit_of_work import UnitOfWork
+from maais.decisions.bundle import DecisionBundle
 from tests.integration.test_decision_lineage import _prepare_bundle
 from tests.unit.experiments.test_manifest import _manifest
 
 pytestmark = pytest.mark.integration
+
+
+def _reidentify_bundle(bundle: DecisionBundle, symbol: str) -> DecisionBundle:
+    frame_id = uuid4()
+    cycle_id = uuid4()
+    proposal_id = uuid4()
+    return DecisionBundle(
+        market_frame=replace(
+            bundle.market_frame,
+            id=frame_id,
+            symbol=symbol,
+            content_hash="c" * 64,
+        ),
+        cycle=replace(
+            bundle.cycle,
+            id=cycle_id,
+            market_frame_id=frame_id,
+            symbol=symbol,
+        ),
+        agents=tuple(
+            replace(agent, id=uuid4(), decision_cycle_id=cycle_id) for agent in bundle.agents
+        ),
+        summary=replace(bundle.summary, decision_cycle_id=cycle_id),
+        gates=tuple(replace(gate, id=uuid4(), decision_cycle_id=cycle_id) for gate in bundle.gates),
+        proposal=(
+            replace(
+                bundle.proposal,
+                id=proposal_id,
+                decision_cycle_id=cycle_id,
+                symbol=symbol,
+            )
+            if bundle.proposal is not None
+            else None
+        ),
+    )
 
 
 async def test_empty_experiment_uses_manifest_as_explicit_account_source(
@@ -70,3 +107,29 @@ async def test_query_limits_fail_closed(uow_factory: UnitOfWork) -> None:
             await queries.list_experiments(limit=0)
         with pytest.raises(ValueError, match="between 1 and 500"):
             await queries.list_decisions(UUID(int=1), limit=501)
+
+
+async def test_decision_cursor_does_not_skip_symbols_at_same_cycle_time(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest, first_bundle = await _prepare_bundle(uow_factory)
+    second_bundle = _reidentify_bundle(first_bundle, "ETHUSDT")
+    async with uow_factory.begin() as uow:
+        await uow.decisions.record_bundle(first_bundle)
+        await uow.decisions.record_bundle(second_bundle)
+    async with uow_factory.begin() as uow:
+        queries = MissionControlQueryService(uow.session)
+        first_page = await queries.list_decisions(manifest.experiment_id, limit=1)
+        second_page = await queries.list_decisions(
+            manifest.experiment_id,
+            before_at=first_page.next_before_at,
+            before_id=first_page.next_before_id,
+            limit=1,
+        )
+
+    assert first_page.has_more
+    assert not second_page.has_more
+    assert {first_page.items[0].id, second_page.items[0].id} == {
+        first_bundle.cycle.id,
+        second_bundle.cycle.id,
+    }

@@ -12,6 +12,14 @@ class ReadModel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+class ApiHealth(ReadModel):
+    service: str
+    status: str
+    database_transaction: str
+    schema_revision: str
+    checked_at: datetime
+
+
 class ExperimentIdentity(ReadModel):
     id: UUID
     name: str
@@ -134,7 +142,8 @@ class DecisionPage(ReadModel):
     items: tuple[DecisionListItem, ...]
     limit: int
     has_more: bool
-    next_before: datetime | None
+    next_before_at: datetime | None
+    next_before_id: UUID | None
 
 
 class AuditEvent(ReadModel):

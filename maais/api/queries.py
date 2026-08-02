@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from maais.api.schemas import (
@@ -125,13 +125,17 @@ class MissionControlQueryService:
         status: str | None = None,
         disposition: str | None = None,
         reason_code: str | None = None,
-        before: datetime | None = None,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
         limit: int = 100,
     ) -> DecisionPage:
         if not 1 <= limit <= 500:
             raise ValueError("decision limit must be between 1 and 500")
         if symbol is not None:
             symbol = symbol.upper()
+        if (before_at is None) != (before_id is None):
+            raise ValueError("decision cursor requires both before_at and before_id")
+        await self._experiment(experiment_id)
         statement = (
             select(
                 DecisionCycleModel,
@@ -167,14 +171,21 @@ class MissionControlQueryService:
             statement = statement.where(DecisionCycleModel.disposition == disposition)
         if reason_code is not None:
             statement = statement.where(DecisionCycleModel.reason_code == reason_code)
-        if before is not None:
-            statement = statement.where(DecisionCycleModel.cycle_at < before)
+        if before_at is not None and before_id is not None:
+            statement = statement.where(
+                or_(
+                    DecisionCycleModel.cycle_at < before_at,
+                    and_(
+                        DecisionCycleModel.cycle_at == before_at,
+                        DecisionCycleModel.id < before_id,
+                    ),
+                )
+            )
         rows = (
             await self._session.execute(
                 statement.order_by(
                     DecisionCycleModel.cycle_at.desc(),
-                    DecisionCycleModel.symbol,
-                    DecisionCycleModel.id,
+                    DecisionCycleModel.id.desc(),
                 ).limit(limit + 1)
             )
         ).all()
@@ -184,7 +195,8 @@ class MissionControlQueryService:
             items=items,
             limit=limit,
             has_more=has_more,
-            next_before=items[-1].cycle_at if has_more and items else None,
+            next_before_at=items[-1].cycle_at if has_more and items else None,
+            next_before_id=items[-1].id if has_more and items else None,
         )
 
     async def get_decision(self, decision_id: UUID) -> DecisionDetail:
@@ -561,7 +573,7 @@ class MissionControlQueryService:
     async def _experiment(self, experiment_id: UUID) -> ExperimentModel:
         experiment = await self._session.get(ExperimentModel, experiment_id)
         if experiment is None:
-            raise RuntimeError("decision experiment is missing")
+            raise LookupError(f"experiment not found: {experiment_id}")
         return experiment
 
     @staticmethod

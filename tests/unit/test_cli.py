@@ -23,10 +23,15 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
         ]
     )
     run = parser.parse_args(["paper-live", "--manifest", "candidate.json"])
+    mission_control = parser.parse_args(["mission-control"])
 
     assert prepare.output == Path("candidate.json")
     assert not prepare.force
     assert run.manifest == Path("candidate.json")
+    assert mission_control.port == 8000
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["mission-control", "--port", "0"])
 
 
 def test_manifest_file_loader_preserves_exact_identity(tmp_path: Path) -> None:
