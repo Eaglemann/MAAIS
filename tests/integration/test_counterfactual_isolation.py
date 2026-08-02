@@ -71,6 +71,7 @@ async def _rejected_state(
         rejection_gate=GateType.EV,
         prior_gate_chain=(GateType.DATA_QUALITY, GateType.EV),
         quantity=rejected.proposal.approved_quantity or Decimal("0.001"),
+        decision_executable_price=Decimal("60000"),
         eligible_after=rejected.cycle.completed_at + timedelta(milliseconds=100),
         fee_rate=Decimal("0.0005"),
         expected_loss_fraction=rejected.summary.expected_loss,

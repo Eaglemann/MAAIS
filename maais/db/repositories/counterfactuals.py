@@ -126,6 +126,7 @@ def state_to_dict(state: CounterfactualState) -> dict[str, object]:
         "rejection_gate": state.rejection_gate,
         "prior_gate_chain": state.prior_gate_chain,
         "quantity": state.quantity,
+        "decision_executable_price": state.decision_executable_price,
         "eligible_after": state.eligible_after,
         "fee_rate": state.fee_rate,
         "expected_loss_fraction": state.expected_loss_fraction,
@@ -300,6 +301,7 @@ class CounterfactualRepository:
             "prior_gate_chain_json": to_json_data(state.prior_gate_chain),
             "status": state.status.value,
             "quantity": state.quantity,
+            "decision_executable_price": state.decision_executable_price,
             "eligible_after": state.eligible_after,
             "fee_rate": state.fee_rate,
             "expected_loss_fraction": state.expected_loss_fraction,
@@ -372,6 +374,7 @@ def _state_from_json(data: Mapping[str, object]) -> CounterfactualState:
         rejection_gate=GateType(str(data["rejection_gate"])),
         prior_gate_chain=tuple(GateType(str(item)) for item in data["prior_gate_chain"]),  # type: ignore[union-attr]
         quantity=_decimal(data["quantity"]),
+        decision_executable_price=_decimal(data["decision_executable_price"]),
         eligible_after=_datetime(data["eligible_after"]),
         fee_rate=_decimal(data["fee_rate"]),
         expected_loss_fraction=_decimal(data["expected_loss_fraction"]),

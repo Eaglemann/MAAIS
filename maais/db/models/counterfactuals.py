@@ -33,6 +33,10 @@ class CounterfactualModel(Base):
             name="ck_counterfactual_status",
         ),
         CheckConstraint("quantity > 0", name="ck_counterfactual_quantity_positive"),
+        CheckConstraint(
+            "decision_executable_price > 0",
+            name="ck_counterfactual_decision_price_positive",
+        ),
         CheckConstraint("fee_rate >= 0 AND fee_rate < 1", name="ck_counterfactual_fee_rate"),
         CheckConstraint(
             "maximum_favorable_excursion >= 0 AND maximum_adverse_excursion >= 0",
@@ -64,6 +68,7 @@ class CounterfactualModel(Base):
     prior_gate_chain_json: Mapped[list[MutableJsonValue]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    decision_executable_price: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     eligible_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     fee_rate: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     expected_loss_fraction: Mapped[Decimal] = mapped_column(MONEY, nullable=False)

@@ -500,6 +500,7 @@ class OfficialOrchestrationService:
                 rejection_gate=rejection_gate,
                 prior_gate_chain=tuple(gate.gate_type for gate in gates[: rejection_index + 1]),
                 quantity=proposed_quantity,
+                decision_executable_price=executable_price,
                 eligible_after=command.completed_at + context.execution_latency,
                 fee_rate=context.taker_fee_rate,
                 expected_loss_fraction=exit_loss,

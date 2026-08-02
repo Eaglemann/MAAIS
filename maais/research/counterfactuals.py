@@ -56,6 +56,7 @@ class CounterfactualState:
     rejection_gate: GateType
     prior_gate_chain: tuple[GateType, ...]
     quantity: Decimal
+    decision_executable_price: Decimal
     eligible_after: datetime
     fee_rate: Decimal
     expected_loss_fraction: Decimal
@@ -88,6 +89,7 @@ class CounterfactualState:
         rejection_gate: GateType,
         prior_gate_chain: tuple[GateType, ...],
         quantity: Decimal,
+        decision_executable_price: Decimal,
         eligible_after: datetime,
         fee_rate: Decimal,
         expected_loss_fraction: Decimal,
@@ -99,6 +101,7 @@ class CounterfactualState:
         if not symbol or not prior_gate_chain or prior_gate_chain[-1] is not rejection_gate:
             raise ValueError("prior gate chain must end at the rejection gate")
         require_positive_decimal(quantity, "quantity")
+        require_positive_decimal(decision_executable_price, "decision_executable_price")
         _require_rate(fee_rate, "fee_rate", allow_zero=True)
         _require_rate(expected_loss_fraction, "expected_loss_fraction")
         _require_rate(expected_gain_fraction, "expected_gain_fraction")
@@ -113,6 +116,7 @@ class CounterfactualState:
                 "rejection_gate": rejection_gate,
                 "prior_gate_chain": prior_gate_chain,
                 "quantity": quantity,
+                "decision_executable_price": decision_executable_price,
                 "eligible_after": eligible_after,
             }
         )
@@ -127,6 +131,7 @@ class CounterfactualState:
             rejection_gate=rejection_gate,
             prior_gate_chain=prior_gate_chain,
             quantity=quantity,
+            decision_executable_price=decision_executable_price,
             eligible_after=eligible_after,
             fee_rate=fee_rate,
             expected_loss_fraction=expected_loss_fraction,

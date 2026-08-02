@@ -48,6 +48,7 @@ def _state() -> CounterfactualState:
         rejection_gate=GateType.EV,
         prior_gate_chain=(GateType.DATA_QUALITY, GateType.CONSENSUS, GateType.EV),
         quantity=Decimal("1"),
+        decision_executable_price=Decimal("101"),
         eligible_after=NOW + timedelta(milliseconds=100),
         fee_rate=Decimal("0.0005"),
         expected_loss_fraction=Decimal("0.01"),
@@ -59,6 +60,8 @@ def _state() -> CounterfactualState:
 def test_counterfactual_tracks_horizons_excursions_costs_and_standard_exit() -> None:
     fill = _fill()
     state = _state().enter(fill, plan_id=UUID(int=5))
+
+    assert state.decision_executable_price == Decimal("101")
     state = state.observe_mark(
         Decimal("102"),
         fill.fill_at + timedelta(minutes=15),

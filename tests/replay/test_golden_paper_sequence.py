@@ -20,7 +20,7 @@ from maais.research.counterfactuals import CounterfactualState
 NOW = datetime(2026, 8, 2, 12, tzinfo=timezone.utc)
 KEY = b"maais frozen paper replay signing key 0001"
 EXPECTED_SHA256 = (
-    "27f401cb48fe5f082fdb399d89ed3197ad06f3b4963226534d33ede457b0726a"  # pragma: allowlist secret
+    "5fe5917394b0f30249848a7fc870e6ec7c52307c8c48802c9c9b9f6a051536f1"  # pragma: allowlist secret
 )
 
 
@@ -274,6 +274,7 @@ def _run_sequence() -> bytes:
         rejection_gate=GateType.EV,
         prior_gate_chain=(GateType.DATA_QUALITY, GateType.CONSENSUS, GateType.EV),
         quantity=Decimal("0.1"),
+        decision_executable_price=Decimal("101"),
         eligible_after=NOW + timedelta(milliseconds=100),
         fee_rate=Decimal("0.0005"),
         expected_loss_fraction=Decimal("0.01"),
