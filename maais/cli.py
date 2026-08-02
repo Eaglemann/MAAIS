@@ -18,6 +18,7 @@ from maais.live import (
     run_live_paper_manifest,
 )
 from maais.operations.backups import backup_configured_database
+from maais.operations.preflight import run_candidate_preflight
 from maais.operations.reporting import (
     build_configured_daily_report,
     write_daily_report_bundle,
@@ -38,6 +39,13 @@ def _date(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("date must be YYYY-MM-DD") from exc
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,6 +93,15 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--target-database", required=True)
     restore.add_argument("--confirm-target", required=True)
     restore.add_argument("--output", type=Path, required=True)
+    preflight = commands.add_parser(
+        "preflight",
+        help="evaluate all local gates for an official timed paper candidate",
+    )
+    preflight.add_argument("--manifest", type=Path, required=True)
+    preflight.add_argument("--restore-verification", type=Path, required=True)
+    preflight.add_argument("--repository", type=Path, default=Path.cwd())
+    preflight.add_argument("--dashboard-dir", type=Path, default=Path("dashboard/dist"))
+    preflight.add_argument("--minimum-free-gb", type=_positive_int, default=5)
     return parser
 
 
@@ -175,6 +192,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0 if passed else 1
+    if arguments.command == "preflight":
+        report = asyncio.run(
+            run_candidate_preflight(
+                manifest_path=arguments.manifest,
+                restore_verification_path=arguments.restore_verification,
+                repository_root=arguments.repository,
+                dashboard_directory=arguments.dashboard_dir,
+                minimum_free_gb=arguments.minimum_free_gb,
+            )
+        )
+        print(json.dumps(report, sort_keys=True))
+        return 0 if report["passed"] is True else 1
     manifest = load_manifest_file(arguments.manifest)
     asyncio.run(run_live_paper_manifest(manifest, settings=settings))
     return 0

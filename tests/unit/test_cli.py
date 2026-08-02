@@ -50,6 +50,15 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/restore-drills",
         ]
     )
+    preflight = parser.parse_args(
+        [
+            "preflight",
+            "--manifest",
+            "artifacts/manifests/week.json",
+            "--restore-verification",
+            "artifacts/restore-drills/latest/restore-verification.json",
+        ]
+    )
 
     assert prepare.output == Path("candidate.json")
     assert not prepare.force
@@ -61,6 +70,8 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert backup.output == Path("backups")
     assert restore.backup == Path("backups/candidate")
     assert restore.target_database == "maais_week_restore"
+    assert preflight.repository == Path.cwd()
+    assert preflight.minimum_free_gb == 5
 
     with pytest.raises(SystemExit):
         parser.parse_args(["mission-control", "--port", "0"])
