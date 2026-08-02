@@ -8,6 +8,10 @@
 
 **Tech stack:** Python 3.12, asyncio, frozen dataclasses, Decimal at financial boundaries, HTTPX, WebSockets, SQLAlchemy async, PostgreSQL 16, Alembic, pytest, Hypothesis, Ruff, Pyright, and public unauthenticated venue APIs.
 
+## Execution progress
+
+- 2026-08-02: Tasks 1-3 pure contracts completed for immutable observed events, causal exactly-once frames, and mandatory tri-state integrity admission. Public adapters and PostgreSQL persistence remain pending, so this is not yet a runnable live worker.
+
 ## Current defects this phase must retire
 
 - The legacy integrity validator logs failures but does not control admission.
