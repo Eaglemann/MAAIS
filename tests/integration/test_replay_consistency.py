@@ -12,6 +12,7 @@ from maais.db.replay import rebuild_experiment_projection, verify_ledger_consist
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import ExperimentStatus
 from maais.experiments.service import ExperimentLifecycle
+from maais.operations.verification import verify_ledger_with_factory
 from tests.integration.test_decision_lineage import _prepare_bundle
 from tests.integration.test_paper_execution_repository import _record
 
@@ -29,6 +30,21 @@ async def test_consistency_report_accepts_valid_ledger(
 
     assert report.ok
     assert not report.errors
+
+
+async def test_operator_verification_returns_serializable_valid_result(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    _manifest, bundle = await _prepare_bundle(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.decisions.record_bundle(bundle)
+
+    result = await verify_ledger_with_factory(
+        async_sessionmaker(db_engine, expire_on_commit=False)
+    )
+
+    assert result == {"ok": True, "error_count": 0, "errors": []}
 
 
 async def test_consistency_report_accepts_reconciled_paper_account(

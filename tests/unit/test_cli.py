@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from maais.cli import build_parser
+from maais.cli import build_parser, main
 from maais.config.modes import RunMode
 from maais.config.settings import Settings
 from maais.live import load_manifest_file, run_live_paper_manifest
@@ -24,14 +24,57 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     )
     run = parser.parse_args(["paper-live", "--manifest", "candidate.json"])
     mission_control = parser.parse_args(["mission-control"])
+    verify_ledger = parser.parse_args(["verify-ledger"])
 
     assert prepare.output == Path("candidate.json")
     assert not prepare.force
     assert run.manifest == Path("candidate.json")
     assert mission_control.port == 8000
+    assert verify_ledger.command == "verify-ledger"
 
     with pytest.raises(SystemExit):
         parser.parse_args(["mission-control", "--port", "0"])
+
+
+def test_verify_ledger_prints_machine_readable_result_and_returns_success(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async def fake_verification() -> dict[str, object]:
+        return {"ok": True, "error_count": 0, "errors": []}
+
+    monkeypatch.setattr("maais.cli.verify_configured_ledger", fake_verification)
+
+    assert main(["verify-ledger"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "error_count": 0,
+        "errors": [],
+        "ok": True,
+    }
+
+
+def test_verify_ledger_returns_failure_when_consistency_errors_exist(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async def fake_verification() -> dict[str, object]:
+        return {
+            "ok": False,
+            "error_count": 1,
+            "errors": [
+                {
+                    "code": "stream_gap",
+                    "aggregate_type": "experiment",
+                    "aggregate_id": "00000000-0000-0000-0000-000000000001",
+                    "details": "expected versions [1, 2], found [1]",
+                }
+            ],
+        }
+
+    monkeypatch.setattr("maais.cli.verify_configured_ledger", fake_verification)
+
+    assert main(["verify-ledger"]) == 1
+    assert json.loads(capsys.readouterr().out)["error_count"] == 1
 
 
 def test_manifest_file_loader_preserves_exact_identity(tmp_path: Path) -> None:

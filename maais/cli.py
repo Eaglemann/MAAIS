@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from maais.live import (
     prepare_live_manifest_file,
     run_live_paper_manifest,
 )
+from maais.operations.verification import verify_configured_ledger
 
 
 def _localhost_port(value: str) -> int:
@@ -44,6 +46,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve the read-only local paper-trading dashboard API",
     )
     mission_control.add_argument("--port", type=_localhost_port, default=8000)
+    commands.add_parser(
+        "verify-ledger",
+        help="read-only verification of event, projection, and account consistency",
+    )
     return parser
 
 
@@ -72,6 +78,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             log_config=None,
         )
         return 0
+    if arguments.command == "verify-ledger":
+        result = asyncio.run(verify_configured_ledger())
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["ok"] is True else 1
     manifest = load_manifest_file(arguments.manifest)
     asyncio.run(run_live_paper_manifest(manifest, settings=settings))
     return 0
