@@ -73,6 +73,7 @@ class PaperWorkerSupervisor:
         sleep: Sleep = asyncio.sleep,
         lease_ttl: timedelta = timedelta(seconds=30),
         lease_renew_interval: timedelta = timedelta(seconds=10),
+        checkpoint_interval: timedelta = timedelta(seconds=60),
         drain_timeout: timedelta = timedelta(seconds=30),
         dispatch_queue_size: int = 10_000,
     ) -> None:
@@ -83,6 +84,8 @@ class PaperWorkerSupervisor:
             raise ValueError("paper worker lease renewal interval must be positive")
         if lease_ttl <= lease_renew_interval:
             raise ValueError("paper worker lease TTL must exceed its renewal interval")
+        if checkpoint_interval <= timedelta(0):
+            raise ValueError("paper worker checkpoint interval must be positive")
         if drain_timeout <= timedelta(0):
             raise ValueError("paper worker drain timeout must be positive")
         if dispatch_queue_size <= 0:
@@ -98,6 +101,7 @@ class PaperWorkerSupervisor:
         self._sleep = sleep
         self._lease_ttl = lease_ttl
         self._renew_interval = lease_renew_interval
+        self._checkpoint_interval = checkpoint_interval
         self._drain_timeout = drain_timeout
         self._state = PaperWorkerSupervisorState.STOPPED
         self._checkpoint: WorkerCheckpoint | None = None
@@ -109,6 +113,7 @@ class PaperWorkerSupervisor:
         self._ingest_task: asyncio.Task[None] | None = None
         self._dispatch_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._checkpoint_task: asyncio.Task[None] | None = None
         self._monitor_task: asyncio.Task[None] | None = None
         self._stopping = False
         self._failure: PaperWorkerHalt | None = None
@@ -128,6 +133,7 @@ class PaperWorkerSupervisor:
                 self._ingest_task,
                 self._dispatch_task,
                 self._heartbeat_task,
+                self._checkpoint_task,
                 self._monitor_task,
             )
         ):
@@ -155,6 +161,10 @@ class PaperWorkerSupervisor:
             self._heartbeat(),
             name="paper_worker_lease_heartbeat",
         )
+        self._checkpoint_task = asyncio.create_task(
+            self._checkpoint_snapshots(),
+            name="paper_worker_checkpoint_snapshots",
+        )
         self._monitor_task = asyncio.create_task(
             self._monitor(),
             name="paper_worker_supervisor",
@@ -171,6 +181,7 @@ class PaperWorkerSupervisor:
 
         self._stopping = True
         self._state = PaperWorkerSupervisorState.STOPPING
+        await self._cancel_checkpoint_snapshots()
         await self._transition(WorkerStatus.STOPPING)
         try:
             await self._public_data.stop()
@@ -295,14 +306,33 @@ class PaperWorkerSupervisor:
                     ttl=self._lease_ttl,
                 )
 
+    async def _checkpoint_snapshots(self) -> None:
+        while True:
+            await self._sleep(self._checkpoint_interval.total_seconds())
+            if self._checkpoint is None:
+                raise RuntimeError("paper worker checkpoint is not initialized")
+            checkpoint = self._checkpoint.snapshot(
+                self._observed_now(),
+                self._checkpoint_state(),
+            )
+            async with self._uow.begin() as transaction:
+                await transaction.orchestration.record_checkpoint(checkpoint)
+                self._checkpoint = checkpoint
+
     async def _monitor(self) -> None:
         assert (
             self._ingest_task is not None
             and self._dispatch_task is not None
             and self._heartbeat_task is not None
+            and self._checkpoint_task is not None
         )
         done, _ = await asyncio.wait(
-            (self._ingest_task, self._dispatch_task, self._heartbeat_task),
+            (
+                self._ingest_task,
+                self._dispatch_task,
+                self._heartbeat_task,
+                self._checkpoint_task,
+            ),
             return_when=asyncio.FIRST_COMPLETED,
         )
         if self._stopping:
@@ -400,6 +430,7 @@ class PaperWorkerSupervisor:
                 self._ingest_task,
                 self._dispatch_task,
                 self._heartbeat_task,
+                self._checkpoint_task,
             )
             if task is not None and task is not current and not task.done()
         )
@@ -413,6 +444,12 @@ class PaperWorkerSupervisor:
             return
         self._heartbeat_task.cancel()
         await asyncio.gather(self._heartbeat_task, return_exceptions=True)
+
+    async def _cancel_checkpoint_snapshots(self) -> None:
+        if self._checkpoint_task is None or self._checkpoint_task.done():
+            return
+        self._checkpoint_task.cancel()
+        await asyncio.gather(self._checkpoint_task, return_exceptions=True)
 
     def _checkpoint_state(self) -> dict[str, object]:
         cursors = tuple(

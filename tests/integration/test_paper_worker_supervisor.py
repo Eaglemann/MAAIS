@@ -119,6 +119,17 @@ async def _blocked_sleep(_: float) -> None:
     await asyncio.Event().wait()
 
 
+class _SleepControl:
+    def __init__(self) -> None:
+        self._releases: dict[float, asyncio.Queue[None]] = {}
+
+    async def __call__(self, seconds: float) -> None:
+        await self._releases.setdefault(seconds, asyncio.Queue()).get()
+
+    def release(self, seconds: float) -> None:
+        self._releases.setdefault(seconds, asyncio.Queue()).put_nowait(None)
+
+
 async def test_supervisor_owns_lease_checkpoints_orders_events_and_drains(
     uow_factory: UnitOfWork,
 ) -> None:
@@ -174,6 +185,56 @@ async def test_supervisor_owns_lease_checkpoints_orders_events_and_drains(
     )
     assert not control.kill_switch_active
     assert experiment_status is ExperimentStatus.RUNNING
+
+
+async def test_supervisor_persists_periodic_running_checkpoint_snapshot(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest = _live_manifest(
+        experiment_id=UUID(int=95),
+        schema_revision="0015",
+    )
+    async with uow_factory.begin() as uow:
+        await uow.experiments.create(manifest)
+    sleep = _SleepControl()
+    supervisor = PaperWorkerSupervisor(
+        uow=uow_factory,
+        manifest=manifest,
+        worker_id=UUID(int=96),
+        public_data=_PublicData(),
+        observations=_Observations([]),  # type: ignore[arg-type]
+        engine=_Engine([]),  # type: ignore[arg-type]
+        now=_Clock(),
+        sleep=sleep,
+        lease_ttl=timedelta(seconds=30),
+        lease_renew_interval=timedelta(seconds=10),
+        checkpoint_interval=timedelta(seconds=60),
+        drain_timeout=timedelta(seconds=1),
+    )
+
+    await supervisor.start()
+    sleep.release(60)
+    for _ in range(100):
+        async with uow_factory.begin() as uow:
+            checkpoint = await uow.orchestration.get_checkpoint(manifest.experiment_id)
+        if checkpoint.version == 3:
+            break
+        await asyncio.sleep(0)
+
+    assert checkpoint.status is WorkerStatus.RUNNING
+    assert checkpoint.events[-1].event_type == "worker_checkpoint.snapshotted"
+    assert checkpoint.checkpoint_at > checkpoint.events[-2].event_at
+    await supervisor.stop()
+
+    async with uow_factory.begin() as uow:
+        stopped = await uow.orchestration.get_checkpoint(manifest.experiment_id)
+    assert tuple(event.event_type for event in stopped.events) == (
+        "worker_checkpoint.starting",
+        "worker_checkpoint.running",
+        "worker_checkpoint.snapshotted",
+        "worker_checkpoint.stopping",
+        "worker_checkpoint.stopped",
+    )
 
 
 async def test_supervisor_persists_halt_and_releases_lease_on_dispatch_failure(

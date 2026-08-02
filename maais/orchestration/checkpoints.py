@@ -173,6 +173,33 @@ class WorkerCheckpoint:
             events=(*self.events, event),
         )
 
+    def snapshot(
+        self,
+        checkpoint_at: datetime,
+        state: Mapping[str, object],
+    ) -> WorkerCheckpoint:
+        if self.status in {WorkerStatus.STOPPED, WorkerStatus.HALTED}:
+            raise RuntimeError("worker checkpoint is terminal")
+        if self.status not in {WorkerStatus.RUNNING, WorkerStatus.RECOVERING}:
+            raise RuntimeError("only an active worker checkpoint can be snapshotted")
+        _require_utc(checkpoint_at)
+        if checkpoint_at <= self.checkpoint_at:
+            raise ValueError("checkpoint snapshot time must advance")
+        normalized = _payload(state)
+        event = CheckpointTransition(
+            sequence=self.version + 1,
+            event_type="worker_checkpoint.snapshotted",
+            event_at=checkpoint_at,
+            payload=normalized,
+        )
+        return replace(
+            self,
+            state=normalized,
+            checkpoint_at=checkpoint_at,
+            version=self.version + 1,
+            events=(*self.events, event),
+        )
+
     def restart(
         self,
         *,

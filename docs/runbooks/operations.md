@@ -30,6 +30,7 @@ incidents remain authoritative.
 Review Mission Control at least twice daily. Confirm:
 
 - worker checkpoint is `running` and lease is `active`;
+- checkpoint time advances at least once per minute while the 10-second lease heartbeat remains fresh;
 - expected cursor count equals configured symbols and no cursor is halted;
 - no unresolved operator-review incident exists;
 - kill switch is inactive;

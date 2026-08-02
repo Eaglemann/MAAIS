@@ -56,6 +56,25 @@ def test_checkpoint_legal_lifecycle_is_versioned_and_immutable() -> None:
         stopped.state["queue_depth"] = 2  # type: ignore[index]
 
 
+def test_running_checkpoint_can_append_a_same_status_durable_snapshot() -> None:
+    running = _checkpoint().transition(
+        WorkerStatus.RUNNING,
+        NOW + timedelta(seconds=1),
+        {"cursor_count": 0},
+    )
+
+    snapshotted = running.snapshot(
+        NOW + timedelta(seconds=61),
+        {"cursor_count": 10, "dispatch_queue_depth": 0},
+    )
+
+    assert snapshotted.status is WorkerStatus.RUNNING
+    assert snapshotted.version == 3
+    assert snapshotted.checkpoint_at == NOW + timedelta(seconds=61)
+    assert snapshotted.state["cursor_count"] == 10
+    assert snapshotted.events[-1].event_type == "worker_checkpoint.snapshotted"
+
+
 def test_checkpoint_rejects_illegal_transition_time_regression_and_terminal_change() -> None:
     checkpoint = _checkpoint()
     with pytest.raises(RuntimeError, match="illegal worker transition"):
@@ -66,6 +85,8 @@ def test_checkpoint_rejects_illegal_transition_time_regression_and_terminal_chan
     halted = running.transition(WorkerStatus.HALTED, NOW + timedelta(seconds=2), {})
     with pytest.raises(RuntimeError, match="terminal"):
         halted.transition(WorkerStatus.STARTING, NOW + timedelta(seconds=3), {})
+    with pytest.raises(RuntimeError, match="terminal"):
+        halted.snapshot(NOW + timedelta(seconds=3), {})
 
 
 def test_worker_lease_is_valid_only_before_expiry() -> None:
