@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from maais.db.repositories.counterfactuals import CounterfactualRepository
 from maais.db.repositories.decisions import DecisionRepository
 from maais.db.repositories.events import EventRepository
 from maais.db.repositories.execution import PaperExecutionRepository
@@ -18,6 +19,7 @@ class UnitOfWorkContext:
     events: EventRepository
     experiments: ExperimentRepository
     decisions: DecisionRepository
+    counterfactuals: CounterfactualRepository
     paper_execution: PaperExecutionRepository
 
 
@@ -37,5 +39,6 @@ class UnitOfWork:
                     events=events,
                     experiments=ExperimentRepository(session, events),
                     decisions=DecisionRepository(session, events),
+                    counterfactuals=CounterfactualRepository(session, events),
                     paper_execution=PaperExecutionRepository(session, events),
                 )

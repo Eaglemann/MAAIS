@@ -7,6 +7,7 @@ from maais.db.models.accounts import (
     PositionLotModel,
     PositionModel,
 )
+from maais.db.models.counterfactuals import CounterfactualModel
 from maais.db.models.decisions import (
     AgentEvaluationModel,
     DecisionCycleModel,
@@ -28,6 +29,7 @@ __all__ = [
     "AccountSnapshotModel",
     "AgentVersionModel",
     "AgentEvaluationModel",
+    "CounterfactualModel",
     "DecisionCycleModel",
     "DecisionSummaryModel",
     "DomainEventModel",

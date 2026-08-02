@@ -75,8 +75,13 @@ class LimitQueueState:
         require_utc(expires_at, "expires_at")
         if expires_at <= eligible_after:
             raise ValueError("expires_at must follow eligible_after")
-        if not maker_fee_rate.is_finite() or maker_fee_rate < 0 or maker_fee_rate > Decimal("1"):
-            raise ValueError("maker_fee_rate must be in [0, 1]")
+        if (
+            not isinstance(maker_fee_rate, Decimal)
+            or not maker_fee_rate.is_finite()
+            or maker_fee_rate < 0
+            or maker_fee_rate > Decimal("1")
+        ):
+            raise ValueError("maker_fee_rate must be a finite Decimal in [0, 1]")
         resting_levels = book.bids if side is PaperOrderSide.BUY else book.asks
         queue_ahead = next(
             (level.quantity for level in resting_levels if level.price == limit_price),

@@ -12,11 +12,18 @@ from maais.db.connection import Base
 from maais.db.models.accounts import (
     AccountSnapshotModel,
     ExitPlanModel,
+    FundingEntryModel,
     PositionLotModel,
     PositionModel,
 )
-from maais.db.models.execution import FillModel, OrderEventModel, OrderIntentModel
+from maais.db.models.execution import (
+    ExecutionSensitivityModel,
+    FillModel,
+    OrderEventModel,
+    OrderIntentModel,
+)
 from maais.db.models.ledger import DomainEventModel, OutboxEventModel
+from maais.db.replay import verify_ledger_consistency
 from maais.db.repositories.execution import (
     ExecutionFillRecord,
     OrderIdentityConflict,
@@ -30,9 +37,16 @@ from maais.domain.enums import (
     PositionEffect,
 )
 from maais.execution.paper.account import AccountState
+from maais.execution.paper.authorization import ExecutionAuthorizer
+from maais.execution.paper.broker import MarketExitCommand, PaperBroker
+from maais.execution.paper.clock import DeterministicClock
 from maais.execution.paper.exits import ExitPlan
+from maais.execution.paper.fills import MarketFillEngine
 from maais.execution.paper.filters import ExchangeFilterSnapshot
+from maais.execution.paper.market import BookLevel, BookSnapshot
 from maais.execution.paper.orders import PaperOrder
+from maais.execution.paper.records import FundingRecord
+from maais.execution.paper.sensitivity import SensitivityOutcome, SensitivityScenario
 from tests.integration.test_decision_lineage import _prepare_bundle
 
 pytestmark = pytest.mark.integration
@@ -348,3 +362,174 @@ async def test_concurrent_identical_execution_has_one_creator(
     results = await asyncio.gather(persist(), persist())
 
     assert sorted(item.created for item in results) == [False, True]
+
+
+async def test_sensitivity_records_are_immutable_and_do_not_change_account(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    record = await _record(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(record)
+    calculated_at = NOW + timedelta(minutes=15)
+    outcomes = tuple(
+        SensitivityOutcome(
+            scenario=scenario,
+            calculated_at=calculated_at,
+            effective_fill_price=Decimal(price),
+            fee=Decimal("3"),
+            execution_cost=Decimal(cost),
+            marked_pnl=Decimal(pnl),
+        )
+        for scenario, price, cost, pnl in (
+            (SensitivityScenario.OPTIMISTIC, "59990", "3", "7"),
+            (SensitivityScenario.CONSERVATIVE, "60000", "4", "6"),
+            (SensitivityScenario.STRESS, "60020", "6", "4"),
+        )
+    )
+    async with uow_factory.begin() as uow:
+        assert await uow.paper_execution.record_sensitivities(record.order.order_id, outcomes) == 3
+    async with uow_factory.begin() as uow:
+        assert await uow.paper_execution.record_sensitivities(record.order.order_id, outcomes) == 0
+
+    factory = async_sessionmaker(db_engine)
+    async with factory() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(ExecutionSensitivityModel)) == 3
+        )
+        assert await session.scalar(select(func.count()).select_from(AccountSnapshotModel)) == 1
+
+
+async def test_observed_funding_persists_with_reconciled_account_snapshot(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    record = await _record(uow_factory)
+    assert record.account is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(record)
+    funding_at = NOW + timedelta(hours=8)
+    rate = Decimal("0.001")
+    position = record.account.position("BTCUSDT")
+    notional = position.gross_notional
+    funded = record.account.apply_funding(
+        "BTCUSDT",
+        rate=rate,
+        observed_at=funding_at,
+    )
+    funding = FundingRecord(
+        id=UUID(int=801),
+        experiment_id=record.account.experiment_id,
+        position_id=position.position_id,
+        market_event_id="funding-2026-08-02T20:00:00Z",
+        observed_at=funding_at,
+        rate=rate,
+        notional=notional,
+        amount=-notional * rate,
+    )
+    async with uow_factory.begin() as uow:
+        assert await uow.paper_execution.record_funding(funding, funded)
+    async with uow_factory.begin() as uow:
+        assert not await uow.paper_execution.record_funding(funding, funded)
+        restored = await uow.paper_execution.load_account(record.account.experiment_id)
+
+    assert restored.snapshot() == funded.snapshot()
+    assert restored.reconcile().ok
+    factory = async_sessionmaker(db_engine)
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(FundingEntryModel)) == 1
+        assert await session.scalar(select(func.count()).select_from(AccountSnapshotModel)) == 2
+
+
+async def test_entry_funding_stop_gap_exit_and_restart_reconstruct_exactly(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    entry = await _record(uow_factory)
+    assert entry.account is not None
+    assert entry.exit_plan is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(entry)
+
+    funding_at = NOW + timedelta(hours=8)
+    position = entry.account.position("BTCUSDT")
+    funding_rate = Decimal("0.001")
+    funded = entry.account.apply_funding(
+        "BTCUSDT",
+        rate=funding_rate,
+        observed_at=funding_at,
+    )
+    funding = FundingRecord(
+        id=UUID(int=801),
+        experiment_id=entry.account.experiment_id,
+        position_id=position.position_id,
+        market_event_id="funding-full-sequence",
+        observed_at=funding_at,
+        rate=funding_rate,
+        notional=position.gross_notional,
+        amount=-position.gross_notional * funding_rate,
+    )
+    async with uow_factory.begin() as uow:
+        assert await uow.paper_execution.record_funding(funding, funded)
+
+    trigger_at = funding_at + timedelta(seconds=1)
+    triggered = entry.exit_plan.evaluate_mark(entry.exit_plan.stop_price, trigger_at)
+    assert triggered.intent is not None
+    book_at = trigger_at + timedelta(milliseconds=101)
+    exit_book = BookSnapshot(
+        event_id="stop-gap-depth-1",
+        symbol="BTCUSDT",
+        venue_event_at=book_at - timedelta(milliseconds=1),
+        observed_at=book_at,
+        sequence=901,
+        bids=(BookLevel(Decimal("59000"), Decimal("1")),),
+        asks=(BookLevel(Decimal("59001"), Decimal("1")),),
+        mark_price=Decimal("59000.5"),
+    )
+    broker = PaperBroker(
+        clock=DeterministicClock(lambda: trigger_at),
+        authorizer=ExecutionAuthorizer(b"paper exit integration key is at least 32 bytes"),
+        market_fills=MarketFillEngine(timedelta(seconds=1)),
+    )
+    exit_result = broker.execute_market_exit(
+        MarketExitCommand(
+            order_id=UUID(int=402),
+            fill_id=UUID(int=502),
+            experiment_id=entry.account.experiment_id,
+            proposal_id=entry.order.proposal_id,
+            client_order_id="paper-btc-stop-1",
+            symbol="BTCUSDT",
+            decision_executable_price=entry.exit_plan.stop_price,
+            execution_latency=timedelta(milliseconds=100),
+            created_at=trigger_at,
+            expires_at=trigger_at + timedelta(seconds=30),
+            taker_fee_rate=Decimal("0.0005"),
+            intent=triggered.intent,
+            exchange_filters=entry.exchange_filters,
+        ),
+        account=funded,
+        exit_plan=triggered.plan,
+        books=(exit_book,),
+    )
+    assert exit_result.record.account is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(exit_result.record)
+    async with uow_factory.begin() as uow:
+        restored = await uow.paper_execution.load_account(entry.account.experiment_id)
+        report = await verify_ledger_consistency(uow.session)
+
+    assert exit_result.fill.price == Decimal("59000")
+    assert restored.snapshot() == exit_result.record.account.snapshot()
+    assert restored.position("BTCUSDT").is_flat
+    assert restored.cash_balance == Decimal("9888.05000")
+    assert restored.reconcile().ok
+    assert report.ok
+
+    factory = async_sessionmaker(db_engine)
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(OrderIntentModel)) == 2
+        assert await session.scalar(select(func.count()).select_from(FillModel)) == 2
+        assert await session.scalar(select(func.count()).select_from(AccountSnapshotModel)) == 3
+        exit_plan = await session.get(ExitPlanModel, entry.exit_plan.plan_id)
+        assert exit_plan is not None
+        assert exit_plan.status == "closed"

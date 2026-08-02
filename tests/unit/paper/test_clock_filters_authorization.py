@@ -129,10 +129,43 @@ def test_execution_capability_binds_every_material_claim() -> None:
     capability = authorizer.issue(claims, all_gates_passed=True)
 
     assert authorizer.verify(capability, at=NOW + timedelta(seconds=1))
-    assert not authorizer.verify(
-        replace(capability, claims=replace(claims, quantity=Decimal("1"))), at=NOW
-    )
     assert not authorizer.verify(capability, at=claims.expires_at + timedelta(microseconds=1))
+
+
+@pytest.mark.parametrize(
+    "change",
+    (
+        {"experiment_id": UUID(int=10)},
+        {"decision_cycle_id": UUID(int=11)},
+        {"proposal_id": UUID(int=12)},
+        {"gate_chain_hash": "b" * 64},
+        {"symbol": "ETHUSDT"},
+        {"side": PaperOrderSide.SELL},
+        {"quantity": Decimal("1")},
+        {"approved_notional": Decimal("7390")},
+        {"issued_at": NOW - timedelta(seconds=1)},
+        {"expires_at": NOW + timedelta(seconds=31)},
+    ),
+)
+def test_execution_capability_rejects_every_tampered_claim(change: dict[str, object]) -> None:
+    authorizer = ExecutionAuthorizer(b"a deterministic test key at least 32 bytes long")
+    claims = AuthorizationClaims(
+        experiment_id=UUID(int=1),
+        decision_cycle_id=UUID(int=2),
+        proposal_id=UUID(int=3),
+        gate_chain_hash="a" * 64,
+        symbol="BTCUSDT",
+        side=PaperOrderSide.BUY,
+        quantity=Decimal("0.123"),
+        approved_notional=Decimal("7380"),
+        issued_at=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    capability = authorizer.issue(claims, all_gates_passed=True)
+
+    tampered = replace(capability, claims=replace(claims, **change))  # type: ignore[arg-type]
+
+    assert not authorizer.verify(tampered, at=NOW)
 
 
 def test_execution_capability_is_not_issued_for_failed_gate_chain() -> None:

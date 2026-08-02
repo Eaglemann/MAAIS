@@ -207,6 +207,17 @@ class ExitPlan:
         require_utc(triggered_at, "triggered_at")
         return self._trigger(ExitReason.EMERGENCY, triggered_at, None)
 
+    def close(self, closed_at: datetime) -> ExitPlan:
+        require_utc(closed_at, "closed_at")
+        if self.status is not ExitPlanStatus.TRIGGERED:
+            raise RuntimeError("only a triggered exit plan can be closed")
+        return replace(
+            self,
+            status=ExitPlanStatus.CLOSED,
+            changed_at=closed_at,
+            version=self.version + 1,
+        )
+
     def _trigger(
         self,
         reason: ExitReason,

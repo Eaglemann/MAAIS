@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -13,10 +12,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from maais.db.models.accounts import (
     AccountSnapshotModel,
     ExitPlanModel,
+    FundingEntryModel,
     PositionLotModel,
     PositionModel,
 )
-from maais.db.models.execution import FillModel, OrderEventModel, OrderIntentModel
+from maais.db.models.execution import (
+    ExecutionSensitivityModel,
+    FillModel,
+    OrderEventModel,
+    OrderIntentModel,
+)
 from maais.db.models.experiments import ExperimentModel
 from maais.db.repositories.events import EventRepository
 from maais.domain.enums import Direction
@@ -27,6 +32,12 @@ from maais.execution.paper.exits import ExitPlan, ExitPlanStatus
 from maais.execution.paper.filters import ExchangeFilterSnapshot
 from maais.execution.paper.orders import OrderTransition, PaperOrder
 from maais.execution.paper.positions import PositionLot, PositionState
+from maais.execution.paper.records import (
+    ExecutionFillRecord,
+    FundingRecord,
+    PaperExecutionRecord,
+)
+from maais.execution.paper.sensitivity import SensitivityOutcome, SensitivityScenario
 
 
 class OrderIdentityConflict(RuntimeError):
@@ -35,75 +46,6 @@ class OrderIdentityConflict(RuntimeError):
 
 class StaleExecutionState(RuntimeError):
     pass
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutionFillRecord:
-    id: UUID
-    order_intent_id: UUID
-    market_event_id: str
-    fill_at: datetime
-    quantity: Decimal
-    price: Decimal
-    liquidity_role: str
-    fee: Decimal
-    fee_asset: str
-    spread_cost: Decimal
-    depth_slippage: Decimal
-    latency_slippage: Decimal
-    total_slippage: Decimal
-    market_snapshot: Mapping[str, JsonValue]
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "id": self.id,
-            "order_intent_id": self.order_intent_id,
-            "market_event_id": self.market_event_id,
-            "fill_at": self.fill_at,
-            "quantity": self.quantity,
-            "price": self.price,
-            "liquidity_role": self.liquidity_role,
-            "fee": self.fee,
-            "fee_asset": self.fee_asset,
-            "spread_cost": self.spread_cost,
-            "depth_slippage": self.depth_slippage,
-            "latency_slippage": self.latency_slippage,
-            "total_slippage": self.total_slippage,
-            "market_snapshot": self.market_snapshot,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class PaperExecutionRecord:
-    order: PaperOrder
-    exchange_filters: ExchangeFilterSnapshot
-    fills: tuple[ExecutionFillRecord, ...]
-    account: AccountState | None
-    exit_plan: ExitPlan | None
-
-    def validate(self) -> None:
-        if self.account is not None and self.order.experiment_id != self.account.experiment_id:
-            raise ValueError("order and account experiment differ")
-        if self.order.symbol != self.exchange_filters.symbol:
-            raise ValueError("order and exchange filter symbol differ")
-        if any(fill.order_intent_id != self.order.order_id for fill in self.fills):
-            raise ValueError("fill order identity differs")
-        total_filled = sum((fill.quantity for fill in self.fills), start=Decimal("0"))
-        if total_filled != self.order.filled_quantity:
-            raise ValueError("fill projection does not match order filled quantity")
-        if self.fills and self.account is None:
-            raise ValueError("filled execution requires account state")
-        if self.account is None and self.exit_plan is not None:
-            raise ValueError("exit plan requires account state")
-        if self.account is not None and not self.account.reconcile().ok:
-            raise ValueError("account does not reconcile")
-        if self.exit_plan is not None:
-            assert self.account is not None
-            position = self.account.position(self.order.symbol)
-            if self.exit_plan.position_id != position.position_id:
-                raise ValueError("exit plan position identity differs")
-            if self.exit_plan.quantity != position.quantity:
-                raise ValueError("exit plan quantity differs from position")
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,6 +310,179 @@ class PaperExecutionRepository:
             raise ArithmeticError("restored account does not reconcile")
         return account
 
+    async def record_sensitivities(
+        self,
+        order_intent_id: UUID,
+        outcomes: tuple[SensitivityOutcome, ...],
+    ) -> int:
+        order = await self._session.get(OrderIntentModel, order_intent_id)
+        if order is None:
+            raise LookupError("paper order does not exist")
+        if {item.scenario for item in outcomes} != set(SensitivityScenario) or len(outcomes) != 3:
+            raise ValueError("exactly one optimistic, conservative, and stress outcome is required")
+        created = 0
+        for outcome in outcomes:
+            aggregate_id = uuid5(
+                NAMESPACE_URL,
+                f"maais://paper-order/{order_intent_id}/sensitivity/{outcome.scenario.value}",
+            )
+            payload = _json_object(outcome.to_dict())
+            inserted_id = await self._session.scalar(
+                insert(ExecutionSensitivityModel)
+                .values(
+                    id=aggregate_id,
+                    order_intent_id=order_intent_id,
+                    scenario=outcome.scenario.value,
+                    calculated_at=outcome.calculated_at,
+                    outcome_json=payload,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        ExecutionSensitivityModel.order_intent_id,
+                        ExecutionSensitivityModel.scenario,
+                    ]
+                )
+                .returning(ExecutionSensitivityModel.id)
+            )
+            if inserted_id is None:
+                row = await self._session.scalar(
+                    select(ExecutionSensitivityModel).where(
+                        ExecutionSensitivityModel.order_intent_id == order_intent_id,
+                        ExecutionSensitivityModel.scenario == outcome.scenario.value,
+                    )
+                )
+                if row is None or row.outcome_json != payload:
+                    raise OrderIdentityConflict(
+                        "execution sensitivity identity has different content"
+                    )
+                continue
+            created += 1
+            await self._events.append(
+                aggregate_id,
+                "execution_sensitivity",
+                0,
+                (
+                    NewDomainEvent(
+                        aggregate_id=aggregate_id,
+                        aggregate_type="execution_sensitivity",
+                        event_type="execution_sensitivity.recorded",
+                        payload=_event_object(outcome.to_dict()),
+                        metadata={
+                            "experiment_id": str(order.experiment_id),
+                            "order_intent_id": str(order_intent_id),
+                        },
+                        occurred_at=outcome.calculated_at,
+                    ),
+                ),
+            )
+        return created
+
+    async def record_funding(self, funding: FundingRecord, account: AccountState) -> bool:
+        if funding.experiment_id != account.experiment_id:
+            raise ValueError("funding and account experiment differ")
+        position = next(
+            (
+                item
+                for item in account.positions.values()
+                if item.position_id == funding.position_id
+            ),
+            None,
+        )
+        if position is None:
+            raise ValueError("funding position does not exist in account state")
+        expected_amount = funding.notional * funding.rate
+        if position.side is Direction.LONG:
+            expected_amount = -expected_amount
+        if expected_amount != funding.amount:
+            raise ValueError("funding amount does not match side, notional, and rate")
+        latest = await self._session.scalar(
+            select(AccountSnapshotModel)
+            .where(AccountSnapshotModel.experiment_id == account.experiment_id)
+            .order_by(AccountSnapshotModel.account_version.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if latest is None:
+            raise ValueError("funding requires an existing official account snapshot")
+        if account.version <= latest.account_version:
+            existing = await self._session.scalar(
+                select(FundingEntryModel).where(
+                    FundingEntryModel.experiment_id == funding.experiment_id,
+                    FundingEntryModel.market_event_id == funding.market_event_id,
+                )
+            )
+            if existing is not None and self._same_funding(existing, funding):
+                return False
+            raise StaleExecutionState("funding account state is not newer than persisted state")
+        if account.funding - latest.funding != funding.amount:
+            raise ValueError("funding delta does not reconcile to the prior snapshot")
+        if account.cash_balance - latest.cash_balance != funding.amount:
+            raise ValueError("funding cash delta does not reconcile to the prior snapshot")
+        inserted_id = await self._session.scalar(
+            insert(FundingEntryModel)
+            .values(
+                id=funding.id,
+                experiment_id=funding.experiment_id,
+                position_id=funding.position_id,
+                observed_at=funding.observed_at,
+                rate=funding.rate,
+                notional=funding.notional,
+                amount=funding.amount,
+                market_event_id=funding.market_event_id,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    FundingEntryModel.experiment_id,
+                    FundingEntryModel.market_event_id,
+                ]
+            )
+            .returning(FundingEntryModel.id)
+        )
+        if inserted_id is None:
+            existing = await self._session.scalar(
+                select(FundingEntryModel).where(
+                    FundingEntryModel.experiment_id == funding.experiment_id,
+                    FundingEntryModel.market_event_id == funding.market_event_id,
+                )
+            )
+            if existing is not None and self._same_funding(existing, funding):
+                return False
+            raise OrderIdentityConflict("funding market event has different content")
+        account_snapshot_created = await self._persist_account(account, None)
+        if not account_snapshot_created:
+            raise StaleExecutionState("funding account snapshot already exists")
+        await self._events.append(
+            funding.id,
+            "paper_funding",
+            0,
+            (
+                NewDomainEvent(
+                    aggregate_id=funding.id,
+                    aggregate_type="paper_funding",
+                    event_type="paper_funding.recorded",
+                    payload=_event_object(
+                        {
+                            "position_id": funding.position_id,
+                            "market_event_id": funding.market_event_id,
+                            "rate": funding.rate,
+                            "notional": funding.notional,
+                            "amount": funding.amount,
+                        }
+                    ),
+                    metadata={"experiment_id": str(funding.experiment_id)},
+                    occurred_at=funding.observed_at,
+                ),
+            ),
+        )
+        await self._append_account_snapshot(
+            account,
+            metadata={
+                "funding_entry_id": str(funding.id),
+                "market_event_id": funding.market_event_id,
+            },
+        )
+        return True
+
     @staticmethod
     def _order_values(record: PaperExecutionRecord, execution_hash: str) -> dict[str, object]:
         order = record.order
@@ -430,6 +545,17 @@ class PaperExecutionRepository:
             and row.market_snapshot_json == _json_object(fill.market_snapshot)
         )
 
+    @staticmethod
+    def _same_funding(row: FundingEntryModel, funding: FundingRecord) -> bool:
+        return (
+            row.id == funding.id
+            and row.position_id == funding.position_id
+            and row.observed_at == funding.observed_at
+            and row.rate == funding.rate
+            and row.notional == funding.notional
+            and row.amount == funding.amount
+        )
+
     async def _persist_account(
         self,
         account: AccountState,
@@ -490,6 +616,19 @@ class PaperExecutionRepository:
         risk_at_stop = Decimal("0")
         if exit_plan is not None and exit_plan.status is ExitPlanStatus.ACTIVE:
             risk_at_stop = abs(exit_plan.average_entry - exit_plan.stop_price) * exit_plan.quantity
+        elif account.positions:
+            active_exit = await self._session.scalar(
+                select(ExitPlanModel).where(
+                    ExitPlanModel.position_id.in_(
+                        position.position_id for position in account.positions.values()
+                    ),
+                    ExitPlanModel.status == ExitPlanStatus.ACTIVE.value,
+                )
+            )
+            if active_exit is not None:
+                risk_at_stop = (
+                    abs(active_exit.average_entry - active_exit.stop_price) * active_exit.quantity
+                )
         snapshot_id = await self._session.scalar(
             insert(AccountSnapshotModel)
             .values(
@@ -618,27 +757,36 @@ class PaperExecutionRepository:
             )
         if not account_snapshot_created or record.account is None:
             return
-        account_version = await self._events.stream_version(
-            record.account.experiment_id, "paper_account"
+        await self._append_account_snapshot(
+            record.account,
+            metadata={"order_intent_id": str(order.order_id)},
         )
-        snapshot_at = record.account.updated_at
+
+    async def _append_account_snapshot(
+        self,
+        account: AccountState,
+        *,
+        metadata: Mapping[str, JsonValue],
+    ) -> None:
+        account_version = await self._events.stream_version(account.experiment_id, "paper_account")
+        snapshot_at = account.updated_at
         assert snapshot_at is not None
         await self._events.append(
-            record.account.experiment_id,
+            account.experiment_id,
             "paper_account",
             account_version,
             (
                 NewDomainEvent(
-                    aggregate_id=record.account.experiment_id,
+                    aggregate_id=account.experiment_id,
                     aggregate_type="paper_account",
                     event_type="paper_account.snapshotted",
                     payload=_event_object(
                         {
-                            "account_version": record.account.version,
-                            "snapshot": _snapshot_dict(record.account),
+                            "account_version": account.version,
+                            "snapshot": _snapshot_dict(account),
                         }
                     ),
-                    metadata={"order_intent_id": str(order.order_id)},
+                    metadata=metadata,
                     occurred_at=snapshot_at,
                 ),
             ),

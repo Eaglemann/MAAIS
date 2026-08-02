@@ -112,6 +112,20 @@ def test_limit_expiry_is_terminal_and_ignores_late_volume() -> None:
     assert not result.fills
 
 
+def test_limit_queue_rejects_float_fee_rate() -> None:
+    with pytest.raises(ValueError, match="Decimal"):
+        LimitQueueState.from_book(
+            order_id=UUID(int=1),
+            side=PaperOrderSide.BUY,
+            limit_price=Decimal("100"),
+            quantity=Decimal("1"),
+            eligible_after=NOW + timedelta(milliseconds=10),
+            expires_at=NOW + timedelta(seconds=10),
+            maker_fee_rate=0.0002,  # type: ignore[arg-type]
+            book=_book(),
+        )
+
+
 def test_order_aggregate_transitions_and_reduce_only_bounds() -> None:
     order = PaperOrder.create(
         order_id=UUID(int=1),

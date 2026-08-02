@@ -8,6 +8,10 @@
 
 **Tech stack:** Python 3.12, frozen dataclasses, Decimal, HMAC-SHA256 capabilities, SQLAlchemy async, PostgreSQL 16, Alembic, pytest, Hypothesis, Ruff, and Pyright.
 
+**Status:** Completed and verified locally on 2026-08-02. This completes only the deterministic Phase 2 substrate; Phase 3 orchestration, Mission Control, operational hardening, and the 24-hour soak remain required before a timed paper run.
+
+The task checklists below are retained as the original execution specification. Completion is recorded by this status, the master delivery-plan checkboxes, the execution record, and the ignored verification evidence.
+
 ## Fixed safety and realism constraints
 
 - `PAPER_LIVE` execution never requires or accepts Binance API credentials.
@@ -166,3 +170,12 @@ Gate: database-isolation tests compare official table counts and account hashes 
 - Official and counterfactual persistence are mechanically isolated.
 - All execution is local paper simulation; no credential or authenticated production path is involved.
 - Phase 2 evidence is green and explicitly states that the live orchestrator, dashboard, operational hardening, and 24-hour soak are still pending.
+
+## Execution record
+
+- Schema revisions `0007` and `0008` are applied to both local development and isolated test databases.
+- The frozen full-sequence replay SHA-256 is `27f401cb48fe5f082fdb399d89ed3197ad06f3b4963226534d33ede457b0726a`.
+- The non-database suite passed with 467 tests and 32 PostgreSQL tests skipped.
+- The full PostgreSQL integration suite passed with 32 tests.
+- Ruff, Pyright, dependency audit, secret scanning, migration checks, account reconciliation, event/projection consistency, restart reconstruction, and counterfactual isolation passed.
+- No Binance credential, authenticated production client, or live-money execution path is used by the paper broker.

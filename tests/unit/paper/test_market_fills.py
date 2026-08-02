@@ -146,3 +146,17 @@ def test_book_rejects_crossed_or_malformed_depth() -> None:
             _book(),
             bids=(BookLevel(Decimal("102"), Decimal("1")),),
         )
+
+
+def test_market_boundaries_reject_float_price_quantity_and_fee_rate() -> None:
+    with pytest.raises(ValueError, match="Decimal"):
+        BookLevel(101.0, Decimal("1"))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="Decimal"):
+        MarketFillRequest(
+            symbol="BTCUSDT",
+            side=PaperOrderSide.BUY,
+            quantity=Decimal("1"),
+            eligible_after=NOW + timedelta(milliseconds=100),
+            decision_executable_price=Decimal("101"),
+            taker_fee_rate=0.0005,  # type: ignore[arg-type]
+        )

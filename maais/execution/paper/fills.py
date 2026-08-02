@@ -44,6 +44,10 @@ class FillSlice:
     price: Decimal
     quantity: Decimal
 
+    def __post_init__(self) -> None:
+        require_positive_decimal(self.price, "fill slice price")
+        require_positive_decimal(self.quantity, "fill slice quantity")
+
 
 @dataclass(frozen=True, slots=True)
 class PaperFill:
@@ -62,6 +66,41 @@ class PaperFill:
     latency_slippage: Decimal
     total_slippage: Decimal
     book: BookSnapshot
+
+    def __post_init__(self) -> None:
+        if not self.market_event_id or not self.symbol:
+            raise ValueError("market_event_id and symbol are required")
+        require_utc(self.fill_at, "fill_at")
+        require_positive_decimal(self.quantity, "fill quantity")
+        require_positive_decimal(self.price, "fill price")
+        require_positive_decimal(self.notional, "fill notional")
+        for value, field in (
+            (self.fee, "fee"),
+            (self.spread_cost, "spread_cost"),
+            (self.depth_slippage, "depth_slippage"),
+            (self.latency_slippage, "latency_slippage"),
+            (self.total_slippage, "total_slippage"),
+        ):
+            if not isinstance(value, Decimal) or not value.is_finite():
+                raise ValueError(f"{field} must be a finite Decimal")
+        if self.fee < 0:
+            raise ValueError("fee must be nonnegative")
+        slice_quantity = sum((item.quantity for item in self.slices), start=Decimal("0"))
+        slice_notional = sum(
+            (item.quantity * item.price for item in self.slices), start=Decimal("0")
+        )
+        if not self.slices or slice_quantity != self.quantity or slice_notional != self.notional:
+            raise ValueError("fill slices do not reconcile to quantity and notional")
+        if self.price != self.notional / self.quantity:
+            raise ValueError("fill price does not reconcile to notional and quantity")
+        if self.total_slippage != (self.spread_cost + self.depth_slippage + self.latency_slippage):
+            raise ValueError("total slippage does not reconcile to its components")
+        if (
+            self.book.event_id != self.market_event_id
+            or self.book.symbol != self.symbol
+            or self.book.observed_at != self.fill_at
+        ):
+            raise ValueError("fill identity differs from its source book")
 
 
 class MarketFillEngine:

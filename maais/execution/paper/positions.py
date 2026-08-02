@@ -203,8 +203,8 @@ class PositionState:
         return replace(self, mark_price=price, version=self.version + 1)
 
     def apply_funding(self, amount: Decimal) -> PositionState:
-        if not amount.is_finite():
-            raise ValueError("funding amount must be finite")
+        if not isinstance(amount, Decimal) or not amount.is_finite():
+            raise ValueError("funding amount must be a finite Decimal")
         if self.is_flat:
             raise ValueError("cannot apply funding to a flat position")
         quantity = self.quantity

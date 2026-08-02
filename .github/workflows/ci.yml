@@ -36,7 +36,8 @@ jobs:
       - run: uv sync --locked --dev
       - run: uv run pip-audit
       - run: >-
-          uv run detect-secrets scan --baseline .secrets.baseline
+          git ls-files -z |
+          xargs -0 uv run detect-secrets-hook --baseline .secrets.baseline
           --exclude-files '(^uv\.lock$|^\.superpowers/)'
       - run: uv run pytest tests/test_execution_safety.py -q
 
@@ -65,7 +66,7 @@ jobs:
       - run: uv run alembic upgrade head
       - run: >-
           PGPASSWORD=maais psql -h localhost -U maais -d maais -Atc
-          'select version_num from alembic_version' | grep -Fx 0007
+          'select version_num from alembic_version' | grep -Fx 0008
 
   postgres-integration:
     runs-on: ubuntu-latest
@@ -96,4 +97,4 @@ jobs:
       - run: uv run pytest tests/integration -q
       - run: >-
           PGPASSWORD=maais psql -h localhost -U maais -d maais_test -Atc
-          'select version_num from alembic_version' | grep -Fx 0007
+          'select version_num from alembic_version' | grep -Fx 0008

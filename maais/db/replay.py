@@ -2,20 +2,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from maais.db.models.accounts import AccountSnapshotModel, ExitPlanModel, PositionModel
+from maais.db.models.counterfactuals import CounterfactualModel
 from maais.db.models.decisions import (
     AgentEvaluationModel,
     DecisionCycleModel,
     GateEvaluationModel,
     TradeProposalModel,
 )
+from maais.db.models.execution import FillModel, OrderEventModel, OrderIntentModel
 from maais.db.models.experiments import ExperimentModel
 from maais.db.models.ledger import DomainEventModel, EventStreamModel, OutboxEventModel
 from maais.domain.enums import ExperimentStatus
+from maais.domain.json import content_hash
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +284,158 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
                     "experiment_projection_mismatch",
                     stream,
                     f"rebuilt={rebuilt.normalized()!r}, stored={stored.normalized()!r}",
+                )
+            )
+
+    orders = (await session.scalars(select(OrderIntentModel))).all()
+    for order in orders:
+        projection_event_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(OrderEventModel)
+                .where(OrderEventModel.order_intent_id == order.id)
+            )
+            or 0
+        )
+        domain_event_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(DomainEventModel)
+                .where(
+                    DomainEventModel.aggregate_type == "paper_order",
+                    DomainEventModel.aggregate_id == order.id,
+                )
+            )
+            or 0
+        )
+        filled_quantity = await session.scalar(
+            select(func.coalesce(func.sum(FillModel.quantity), 0)).where(
+                FillModel.order_intent_id == order.id
+            )
+        )
+        if (
+            projection_event_count != order.version
+            or domain_event_count != order.version
+            or filled_quantity != order.filled_quantity
+        ):
+            stream = next(
+                (
+                    item
+                    for item in streams
+                    if item.aggregate_type == "paper_order" and item.aggregate_id == order.id
+                ),
+                None,
+            )
+            errors.append(
+                _error(
+                    "order_projection_mismatch",
+                    stream,
+                    f"projection_events={projection_event_count}, "
+                    f"domain_events={domain_event_count}, version={order.version}, "
+                    f"fill_quantity={filled_quantity}, stored_fill={order.filled_quantity}",
+                )
+            )
+
+    for experiment in experiments:
+        latest_account = await session.scalar(
+            select(AccountSnapshotModel)
+            .where(AccountSnapshotModel.experiment_id == experiment.id)
+            .order_by(AccountSnapshotModel.account_version.desc())
+            .limit(1)
+        )
+        if latest_account is None:
+            continue
+        positions = (
+            await session.scalars(
+                select(PositionModel).where(PositionModel.experiment_id == experiment.id)
+            )
+        ).all()
+        zero = Decimal("0")
+        realized = sum((item.realized_pnl for item in positions), start=zero)
+        unrealized = sum((item.unrealized_pnl for item in positions), start=zero)
+        fees = sum((item.fees for item in positions), start=zero)
+        funding = sum((item.funding for item in positions), start=zero)
+        gross_notional = sum((item.quantity * item.mark_price for item in positions), start=zero)
+        used_margin = sum((item.initial_margin for item in positions), start=zero)
+        expected_cash = experiment.initial_capital + realized - fees + funding
+        expected_equity = latest_account.cash_balance + unrealized
+        expected_free_margin = expected_equity - used_margin
+        active_exits = (
+            await session.scalars(
+                select(ExitPlanModel)
+                .join(PositionModel, PositionModel.id == ExitPlanModel.position_id)
+                .where(
+                    PositionModel.experiment_id == experiment.id,
+                    ExitPlanModel.status == "active",
+                )
+            )
+        ).all()
+        expected_risk_at_stop = sum(
+            (
+                abs(exit_plan.average_entry - exit_plan.stop_price) * exit_plan.quantity
+                for exit_plan in active_exits
+            ),
+            start=zero,
+        )
+        if (
+            latest_account.cash_balance != expected_cash
+            or latest_account.equity != expected_equity
+            or latest_account.free_margin != expected_free_margin
+            or latest_account.realized_pnl != realized
+            or latest_account.unrealized_pnl != unrealized
+            or latest_account.fees != fees
+            or latest_account.funding != funding
+            or latest_account.gross_notional != gross_notional
+            or latest_account.used_margin != used_margin
+            or latest_account.risk_at_stop != expected_risk_at_stop
+        ):
+            stream = next(
+                (
+                    item
+                    for item in streams
+                    if item.aggregate_type == "paper_account" and item.aggregate_id == experiment.id
+                ),
+                None,
+            )
+            errors.append(
+                _error(
+                    "account_projection_mismatch",
+                    stream,
+                    f"stored_cash={latest_account.cash_balance}, expected_cash={expected_cash}, "
+                    f"stored_equity={latest_account.equity}, expected_equity={expected_equity}",
+                )
+            )
+
+    counterfactuals = (await session.scalars(select(CounterfactualModel))).all()
+    for counterfactual in counterfactuals:
+        event_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(DomainEventModel)
+                .where(
+                    DomainEventModel.aggregate_type == "counterfactual",
+                    DomainEventModel.aggregate_id == counterfactual.id,
+                )
+            )
+            or 0
+        )
+        hash_matches = content_hash(counterfactual.state_json) == counterfactual.content_hash
+        if event_count != counterfactual.version or not hash_matches:
+            stream = next(
+                (
+                    item
+                    for item in streams
+                    if item.aggregate_type == "counterfactual"
+                    and item.aggregate_id == counterfactual.id
+                ),
+                None,
+            )
+            errors.append(
+                _error(
+                    "counterfactual_projection_mismatch",
+                    stream,
+                    f"events={event_count}, version={counterfactual.version}, "
+                    f"hash_matches={hash_matches}",
                 )
             )
     return LedgerConsistencyReport(tuple(errors))

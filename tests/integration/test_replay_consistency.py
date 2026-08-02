@@ -6,12 +6,14 @@ import pytest
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from maais.db.models.execution import OrderIntentModel
 from maais.db.models.ledger import EventStreamModel, OutboxEventModel
 from maais.db.replay import rebuild_experiment_projection, verify_ledger_consistency
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import ExperimentStatus
 from maais.experiments.service import ExperimentLifecycle
 from tests.integration.test_decision_lineage import _prepare_bundle
+from tests.integration.test_paper_execution_repository import _record
 
 pytestmark = pytest.mark.integration
 
@@ -27,6 +29,39 @@ async def test_consistency_report_accepts_valid_ledger(
 
     assert report.ok
     assert not report.errors
+
+
+async def test_consistency_report_accepts_reconciled_paper_account(
+    uow_factory: UnitOfWork,
+) -> None:
+    record = await _record(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(record)
+        report = await verify_ledger_consistency(uow.session)
+
+    assert report.ok
+
+
+async def test_consistency_report_finds_paper_order_projection_damage(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    record = await _record(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(record)
+
+    factory = async_sessionmaker(db_engine)
+    async with factory.begin() as session:
+        await session.execute(
+            update(OrderIntentModel)
+            .where(OrderIntentModel.id == record.order.order_id)
+            .values(version=record.order.version + 1)
+        )
+    async with factory() as session:
+        report = await verify_ledger_consistency(session)
+
+    assert not report.ok
+    assert any(error.code == "order_projection_mismatch" for error in report.errors)
 
 
 async def test_consistency_report_finds_stream_and_outbox_damage(

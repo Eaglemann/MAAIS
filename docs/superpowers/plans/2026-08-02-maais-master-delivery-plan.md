@@ -161,18 +161,18 @@ The phase brief below fixes scope and acceptance criteria. Its implementation-gr
 
 ### Task groups
 
-- [ ] Add deterministic live/replay clock and order eligibility timestamps.
-- [ ] Add exchange-filter snapshots, conservative Decimal quantization, and risk-preserving rejection.
-- [ ] Add unforgeable execution authorization linked to the complete gate chain.
-- [ ] Implement market depth walking, latency attribution, stale-book rejection, and insufficient-depth rejection.
-- [ ] Implement limit queue model, trade-through requirement, 10% participation cap, partial fills, cancellation, and expiry.
-- [ ] Implement order aggregate event transitions and idempotency.
-- [ ] Implement 10,000 USDT account, 1x initial leverage, margin, fees, funding, equity, and reconciliation.
-- [ ] Implement one-way positions and persisted FIFO lots.
-- [ ] Implement one-ATR stop, one-ATR target, 60-bar time exit, two-bar opposing-signal exit, and emergency flatten.
-- [ ] Implement isolated counterfactual broker and 15m/1h/4h/24h outcomes.
-- [ ] Add optimistic/conservative/stress execution sensitivity records.
-- [ ] Prove accounting and isolation invariants with Hypothesis and PostgreSQL integration tests.
+- [x] Add deterministic live/replay clock and order eligibility timestamps.
+- [x] Add exchange-filter snapshots, conservative Decimal quantization, and risk-preserving rejection.
+- [x] Add unforgeable execution authorization linked to the complete gate chain.
+- [x] Implement market depth walking, latency attribution, stale-book rejection, and insufficient-depth rejection.
+- [x] Implement limit queue model, trade-through requirement, 10% participation cap, partial fills, cancellation, and expiry.
+- [x] Implement order aggregate event transitions and idempotency.
+- [x] Implement 10,000 USDT account, 1x initial leverage, margin, fees, funding, equity, and reconciliation.
+- [x] Implement one-way positions and persisted FIFO lots.
+- [x] Implement one-ATR stop, one-ATR target, 60-bar time exit, two-bar opposing-signal exit, and emergency flatten.
+- [x] Implement isolated counterfactual broker and 15m/1h/4h/24h outcomes.
+- [x] Add optimistic/conservative/stress execution sensitivity records.
+- [x] Prove accounting and isolation invariants with Hypothesis and PostgreSQL integration tests.
 
 ### Definition of done
 

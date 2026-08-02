@@ -120,6 +120,22 @@ def test_short_fifo_and_funding_follow_position_side() -> None:
     assert account.reconcile().ok
 
 
+def test_position_rejects_float_funding_amount() -> None:
+    account = AccountState.create(UUID(int=1), Decimal("10000"), "USDT")
+    account = _apply(
+        account,
+        fill_id=1,
+        side=PaperOrderSide.BUY,
+        effect=PositionEffect.OPEN,
+        quantity="1",
+        price="100",
+        fee="0.05",
+    )
+
+    with pytest.raises(ValueError, match="Decimal"):
+        account.position("BTCUSDT").apply_funding(0.1)  # type: ignore[arg-type]
+
+
 def test_account_rejects_margin_breach_reversal_and_over_close() -> None:
     account = AccountState.create(UUID(int=1), Decimal("100"), "USDT", leverage=1)
     with pytest.raises(InsufficientMargin):
