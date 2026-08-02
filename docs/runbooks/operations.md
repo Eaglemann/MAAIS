@@ -36,6 +36,8 @@ Review Mission Control at least twice daily. Confirm:
 - decision counts, proposal/order/fill counts, account values, and source timestamps are plausible;
 - warm-up `insufficient_history` is distinguished from real quality failures.
 
+If an operator-review incident appears, follow `docs/runbooks/incidents.md`. Do not edit rows directly; the supported acknowledge/resolve commands preserve actor, time, rationale, version, domain event, and content hash.
+
 ## Daily close
 
 After a Berlin calendar day has ended, run:

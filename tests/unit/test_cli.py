@@ -68,6 +68,31 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "180",
         ]
     )
+    acknowledge = parser.parse_args(
+        [
+            "acknowledge-incident",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--incident",
+            "22222222-2222-4222-8222-222222222222",
+            "--actor",
+            "denis",
+        ]
+    )
+    resolve = parser.parse_args(
+        [
+            "resolve-incident",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--incident",
+            "22222222-2222-4222-8222-222222222222",
+            "--actor",
+            "denis",
+            "--resolution",
+            "transient venue timestamp skew reviewed against the next cycle",
+            "--confirm-reviewed",
+        ]
+    )
 
     assert prepare.output == Path("candidate.json")
     assert not prepare.force
@@ -83,9 +108,26 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert preflight.minimum_free_gb == 5
     assert health.maximum_lag_seconds == 180
     assert not health.allow_stopped
+    assert acknowledge.actor == "denis"
+    assert resolve.confirm_reviewed
+    assert resolve.resolution.startswith("transient venue timestamp")
 
     with pytest.raises(SystemExit):
         parser.parse_args(["mission-control", "--port", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "resolve-incident",
+                "--experiment",
+                "11111111-1111-4111-8111-111111111111",
+                "--incident",
+                "22222222-2222-4222-8222-222222222222",
+                "--actor",
+                "denis",
+                "--resolution",
+                "reviewed",
+            ]
+        )
 
 
 def test_verify_ledger_prints_machine_readable_result_and_returns_success(
@@ -127,6 +169,47 @@ def test_verify_ledger_returns_failure_when_consistency_errors_exist(
 
     assert main(["verify-ledger"]) == 1
     assert json.loads(capsys.readouterr().out)["error_count"] == 1
+
+
+def test_resolve_incident_prints_audited_machine_readable_result(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_action(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "incident_id": "22222222-2222-4222-8222-222222222222",
+            "status": "resolved",
+            "version": 3,
+            "event_type": "incident.resolved",
+            "content_hash": "a" * 64,
+        }
+
+    monkeypatch.setattr("maais.cli.apply_configured_incident_action", fake_action)
+
+    assert (
+        main(
+            [
+                "resolve-incident",
+                "--experiment",
+                "11111111-1111-4111-8111-111111111111",
+                "--incident",
+                "22222222-2222-4222-8222-222222222222",
+                "--actor",
+                "denis",
+                "--resolution",
+                "transient source skew reviewed against the next cycle",
+                "--confirm-reviewed",
+            ]
+        )
+        == 0
+    )
+
+    assert str(captured["action"]) == "resolve"
+    assert captured["operator_confirmed"] is True
+    assert json.loads(capsys.readouterr().out)["event_type"] == "incident.resolved"
 
 
 def test_manifest_file_loader_preserves_exact_identity(tmp_path: Path) -> None:

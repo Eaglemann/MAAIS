@@ -19,6 +19,10 @@ from maais.live import (
 )
 from maais.operations.backups import backup_configured_database
 from maais.operations.health import collect_configured_experiment_health
+from maais.operations.incident_management import (
+    IncidentAction,
+    apply_configured_incident_action,
+)
 from maais.operations.preflight import run_candidate_preflight
 from maais.operations.reporting import (
     build_configured_daily_report,
@@ -47,6 +51,12 @@ def _positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be positive")
     return parsed
+
+
+def _nonempty(value: str) -> str:
+    if not value or value != value.strip():
+        raise argparse.ArgumentTypeError("value must be nonempty and trimmed")
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -111,6 +121,22 @@ def build_parser() -> argparse.ArgumentParser:
     health.add_argument("--maximum-lag-seconds", type=_positive_int, default=180)
     health.add_argument("--allow-stopped", action="store_true")
     health.add_argument("--alert", action="store_true")
+    acknowledge = commands.add_parser(
+        "acknowledge-incident",
+        help="append an audited operator acknowledgement to an incident",
+    )
+    acknowledge.add_argument("--experiment", type=UUID, required=True)
+    acknowledge.add_argument("--incident", type=UUID, required=True)
+    acknowledge.add_argument("--actor", type=_nonempty, required=True)
+    resolve = commands.add_parser(
+        "resolve-incident",
+        help="append an explicitly reviewed incident resolution",
+    )
+    resolve.add_argument("--experiment", type=UUID, required=True)
+    resolve.add_argument("--incident", type=UUID, required=True)
+    resolve.add_argument("--actor", type=_nonempty, required=True)
+    resolve.add_argument("--resolution", type=_nonempty, required=True)
+    resolve.add_argument("--confirm-reviewed", action="store_true", required=True)
     return parser
 
 
@@ -224,6 +250,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(report, sort_keys=True))
         return 0 if report["healthy"] is True else 1
+    if arguments.command in {"acknowledge-incident", "resolve-incident"}:
+        resolving = arguments.command == "resolve-incident"
+        result = asyncio.run(
+            apply_configured_incident_action(
+                experiment_id=arguments.experiment,
+                incident_id=arguments.incident,
+                action=(IncidentAction.RESOLVE if resolving else IncidentAction.ACKNOWLEDGE),
+                actor=arguments.actor,
+                resolution=arguments.resolution if resolving else None,
+                operator_confirmed=arguments.confirm_reviewed if resolving else False,
+            )
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0
     manifest = load_manifest_file(arguments.manifest)
     asyncio.run(run_live_paper_manifest(manifest, settings=settings))
     return 0

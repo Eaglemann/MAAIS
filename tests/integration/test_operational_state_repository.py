@@ -31,6 +31,7 @@ from maais.market_data.integrity.state_machine import (
     MarketIntegrityStateMachine,
 )
 from maais.market_data.recovery import GapRange, MarketCursor, RecoveryState
+from maais.operations.incident_management import IncidentAction, apply_incident_action
 from maais.operations.incidents import IncidentSeverity, IncidentState
 from maais.orchestration.checkpoints import (
     WorkerCheckpoint,
@@ -299,6 +300,56 @@ async def test_operational_transitions_are_contiguous_idempotent_and_conflict_ch
     with pytest.raises(OperationalStateConflict, match="version has different content"):
         async with uow_factory.begin() as uow:
             await uow.incidents.record(alternate_history)
+
+
+async def test_operator_incident_actions_are_experiment_scoped_and_audited(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest = await _manifest_in_database(uow_factory)
+    incident = _incident(manifest.experiment_id)
+    async with uow_factory.begin() as uow:
+        await uow.incidents.record(incident)
+
+    with pytest.raises(LookupError, match="does not belong"):
+        await apply_incident_action(
+            uow_factory,
+            experiment_id=UUID(int=999),
+            incident_id=incident.incident_id,
+            action=IncidentAction.ACKNOWLEDGE,
+            actor="denis",
+            occurred_at=NOW + timedelta(seconds=2),
+        )
+
+    acknowledged = await apply_incident_action(
+        uow_factory,
+        experiment_id=manifest.experiment_id,
+        incident_id=incident.incident_id,
+        action=IncidentAction.ACKNOWLEDGE,
+        actor="denis",
+        occurred_at=NOW + timedelta(seconds=2),
+    )
+    resolved = await apply_incident_action(
+        uow_factory,
+        experiment_id=manifest.experiment_id,
+        incident_id=incident.incident_id,
+        action=IncidentAction.RESOLVE,
+        actor="denis",
+        resolution="transient venue timestamp skew reviewed against the next cycle",
+        operator_confirmed=True,
+        occurred_at=NOW + timedelta(seconds=3),
+    )
+
+    assert acknowledged["status"] == "acknowledged"
+    assert acknowledged["version"] == 2
+    assert acknowledged["event_type"] == "incident.acknowledged"
+    assert resolved["status"] == "resolved"
+    assert resolved["version"] == 3
+    assert resolved["event_type"] == "incident.resolved"
+    assert resolved["operator_confirmed"] is True
+    async with uow_factory.begin() as uow:
+        restored = await uow.incidents.get(incident.incident_id)
+    assert restored.status.value == "resolved"
+    assert [event.sequence for event in restored.events] == [1, 2, 3]
 
 
 async def test_worker_checkpoint_uses_optimistic_versions_and_restores(
