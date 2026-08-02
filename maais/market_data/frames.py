@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from types import MappingProxyType
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -24,6 +25,11 @@ from maais.market_data.events import (
 
 class FrameIdentityConflict(RuntimeError):
     pass
+
+
+class TimestampBasis(StrEnum):
+    VENUE_EVENT = "venue_event"
+    LOCAL_OBSERVATION = "local_observation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,9 +78,17 @@ class SourceObservation:
     venue_event_at: datetime
     observed_at: datetime
     sequence: int | None
+    timestamp_basis: TimestampBasis
 
     @classmethod
     def from_event(cls, event: ObservedMarketEvent) -> SourceObservation:
+        timestamp_basis = TimestampBasis.VENUE_EVENT
+        if (
+            isinstance(event.payload, ReferencePricePayload)
+            and event.payload.source_published_at is None
+            and event.venue_event_at == event.observed_at
+        ):
+            timestamp_basis = TimestampBasis.LOCAL_OBSERVATION
         return cls(
             venue=event.venue,
             stream=event.stream,
@@ -83,6 +97,7 @@ class SourceObservation:
             venue_event_at=event.venue_event_at,
             observed_at=event.observed_at,
             sequence=event.sequence,
+            timestamp_basis=timestamp_basis,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -94,6 +109,7 @@ class SourceObservation:
             "venue_event_at": self.venue_event_at,
             "observed_at": self.observed_at,
             "sequence": self.sequence,
+            "timestamp_basis": self.timestamp_basis,
         }
 
 

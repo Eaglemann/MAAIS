@@ -215,13 +215,48 @@ def test_rest_reference_uses_source_specific_skew_and_records_measured_evidence(
 
     assert result.status is QualityStatus.PASSED
     assert result.details["observations"] == {
-        "closed_bar": {"limit_seconds": "1", "skew_seconds": "0.001"},
-        "mark_funding": {"limit_seconds": "1", "skew_seconds": "0.001"},
-        "order_book": {"limit_seconds": "1", "skew_seconds": "0.001"},
-        "primary_spot": {"limit_seconds": "5", "skew_seconds": "2.5"},
-        "secondary_venue": {"limit_seconds": "2", "skew_seconds": "0.001"},
-        "symbol_state": {"limit_seconds": "1", "skew_seconds": "0.001"},
-        "venue_clock": {"limit_seconds": "1", "skew_seconds": "0.001"},
+        "closed_bar": {
+            "comparable": True,
+            "limit_seconds": "1",
+            "skew_seconds": "0.001",
+            "timestamp_basis": "venue_event",
+        },
+        "mark_funding": {
+            "comparable": True,
+            "limit_seconds": "1",
+            "skew_seconds": "0.001",
+            "timestamp_basis": "venue_event",
+        },
+        "order_book": {
+            "comparable": True,
+            "limit_seconds": "1",
+            "skew_seconds": "0.001",
+            "timestamp_basis": "venue_event",
+        },
+        "primary_spot": {
+            "comparable": True,
+            "limit_seconds": "5",
+            "skew_seconds": "2.5",
+            "timestamp_basis": "venue_event",
+        },
+        "secondary_venue": {
+            "comparable": True,
+            "limit_seconds": "2",
+            "skew_seconds": "0.001",
+            "timestamp_basis": "venue_event",
+        },
+        "symbol_state": {
+            "comparable": True,
+            "limit_seconds": "1",
+            "skew_seconds": "0.001",
+            "timestamp_basis": "venue_event",
+        },
+        "venue_clock": {
+            "comparable": True,
+            "limit_seconds": "1",
+            "skew_seconds": "0.001",
+            "timestamp_basis": "venue_event",
+        },
     }
 
     events[spot_index] = replace(
@@ -235,3 +270,24 @@ def test_rest_reference_uses_source_specific_skew_and_records_measured_evidence(
     failed = _result(over_limit, IntegrityCheck.VENUE_TIMESTAMP)
     assert failed.status is QualityStatus.FAILED
     assert failed.details["sources"] == ("primary_spot",)
+
+
+def test_observation_timed_source_is_explicit_and_not_compared_to_itself() -> None:
+    events = list(_inputs())
+    spot_index = next(index for index, item in enumerate(events) if item.venue == "binance_spot")
+    spot = events[spot_index]
+    events[spot_index] = replace(spot, venue_event_at=spot.observed_at)
+
+    assessment = MarketIntegrityStateMachine(IntegrityPolicy.official()).evaluate(
+        _context(_frame(events))
+    )
+    result = _result(assessment, IntegrityCheck.VENUE_TIMESTAMP)
+
+    assert result.status is QualityStatus.PASSED
+    assert result.reason_code == "venue_timestamps_within_skew_or_observation_based"
+    assert result.details["observations"]["primary_spot"] == {
+        "comparable": False,
+        "limit_seconds": "5",
+        "skew_seconds": "0",
+        "timestamp_basis": "local_observation",
+    }

@@ -9,11 +9,12 @@ from maais.market_data.connectors.binance_spot import (
     PUBLIC_BINANCE_SPOT_API_BASE_URL,
     BinanceSpotConnector,
     BinanceSpotContractError,
+    parse_binance_spot_book_tickers,
     parse_binance_spot_exchange_info,
-    parse_binance_spot_reference_tickers,
     parse_binance_spot_server_time,
 )
 from maais.market_data.events import ReferenceKind, ReferencePricePayload
+from maais.market_data.frames import SourceObservation, TimestampBasis
 
 OBSERVED_AT = datetime(2026, 8, 2, 12, 0, 0, 100_000, tzinfo=timezone.utc)
 SERVER_MS = 1785672000000
@@ -59,29 +60,13 @@ def _exchange_info() -> dict[str, object]:
     }
 
 
-def _ticker(symbol: str, *, offset: int = 0) -> dict[str, object]:
+def _book_ticker(symbol: str) -> dict[str, object]:
     return {
         "symbol": symbol,
-        "priceChange": "1.00000000",
-        "priceChangePercent": "1.000",
-        "weightedAvgPrice": "100.00000000",
-        "prevClosePrice": "99.00000000",
-        "lastPrice": "100.25000000",
-        "lastQty": "0.50000000",
         "bidPrice": "100.00000000",
         "bidQty": "2.00000000",
         "askPrice": "100.50000000",
         "askQty": "3.00000000",
-        "openPrice": "99.25000000",
-        "highPrice": "102.00000000",
-        "lowPrice": "98.00000000",
-        "volume": "1000.00000000",
-        "quoteVolume": "100000.00000000",
-        "openTime": SERVER_MS - 86_400_000 + offset,
-        "closeTime": SERVER_MS + offset,
-        "firstId": 100 + offset,
-        "lastId": 200 + offset,
-        "count": 101,
     }
 
 
@@ -137,7 +122,7 @@ def test_spot_preflight_fails_closed_on_mapping_drift(
         )
 
 
-def test_reference_ticker_retains_exact_quote_and_venue_time() -> None:
+def test_book_ticker_retains_exact_quote_and_explicit_observation_time_basis() -> None:
     mappings = parse_binance_spot_exchange_info(
         _exchange_info(),
         required_symbols=("BTCUSDT", "ETHUSDT"),
@@ -145,28 +130,29 @@ def test_reference_ticker_retains_exact_quote_and_venue_time() -> None:
         observed_at=OBSERVED_AT,
     ).mappings
 
-    events = parse_binance_spot_reference_tickers(
-        [_ticker("BTCUSDT"), _ticker("ETHUSDT", offset=1)],
+    events = parse_binance_spot_book_tickers(
+        [_book_ticker("BTCUSDT"), _book_ticker("ETHUSDT")],
         mappings=mappings,
         observed_at=OBSERVED_AT,
     )
 
     event = events[0]
     assert event.venue == "binance_spot"
-    assert event.stream == "rest:/api/v3/ticker/24hr"
+    assert event.stream == "rest:/api/v3/ticker/bookTicker"
     assert event.sequence is None
-    assert event.sequence_not_applicable_reason == "binance_spot_ticker_has_no_book_sequence"
-    assert event.venue_event_at == datetime.fromtimestamp(SERVER_MS / 1000, tz=timezone.utc)
+    assert event.sequence_not_applicable_reason == "binance_spot_book_ticker_has_no_sequence"
+    assert event.venue_event_at == OBSERVED_AT
+    assert SourceObservation.from_event(event).timestamp_basis is TimestampBasis.LOCAL_OBSERVATION
     assert isinstance(event.payload, ReferencePricePayload)
     assert event.payload.reference_kind is ReferenceKind.PRIMARY_SPOT
     assert event.payload.price == Decimal("100.25")
     assert event.payload.source_bid == Decimal("100")
     assert event.payload.source_ask == Decimal("100.5")
-    assert event.payload.source_published_at == event.venue_event_at
+    assert event.payload.source_published_at is None
     assert event.payload.source_quantity is None
     assert event.payload.source_side is None
     assert event.payload.source_event_id == (
-        "1785672000000:100:200:101:100.00000000:100.50000000:1785672000100000"
+        "100.00000000:2.00000000:100.50000000:3.00000000:1785672000100000"
     )
 
 
@@ -177,13 +163,13 @@ def test_repeated_rest_snapshot_has_distinct_observation_identity() -> None:
         server_time=parse_binance_spot_server_time({"serverTime": SERVER_MS}),
         observed_at=OBSERVED_AT,
     ).mappings
-    first = parse_binance_spot_reference_tickers(
-        [_ticker("BTCUSDT"), _ticker("ETHUSDT", offset=1)],
+    first = parse_binance_spot_book_tickers(
+        [_book_ticker("BTCUSDT"), _book_ticker("ETHUSDT")],
         mappings=mappings,
         observed_at=OBSERVED_AT,
     )[0]
-    second = parse_binance_spot_reference_tickers(
-        [_ticker("BTCUSDT"), _ticker("ETHUSDT", offset=1)],
+    second = parse_binance_spot_book_tickers(
+        [_book_ticker("BTCUSDT"), _book_ticker("ETHUSDT")],
         mappings=mappings,
         observed_at=OBSERVED_AT.replace(microsecond=200_000),
     )[0]
@@ -197,20 +183,14 @@ def test_repeated_rest_snapshot_has_distinct_observation_identity() -> None:
     "field",
     (
         "symbol",
-        "lastPrice",
         "bidPrice",
         "bidQty",
         "askPrice",
         "askQty",
-        "openTime",
-        "closeTime",
-        "firstId",
-        "lastId",
-        "count",
     ),
 )
-def test_reference_ticker_has_no_missing_field_defaults(field: str) -> None:
-    row = _ticker("BTCUSDT")
+def test_book_ticker_has_no_missing_field_defaults(field: str) -> None:
+    row = _book_ticker("BTCUSDT")
     row.pop(field)
     mappings = parse_binance_spot_exchange_info(
         _exchange_info(),
@@ -220,14 +200,14 @@ def test_reference_ticker_has_no_missing_field_defaults(field: str) -> None:
     ).mappings
 
     with pytest.raises(BinanceSpotContractError, match=field):
-        parse_binance_spot_reference_tickers(
-            [row, _ticker("ETHUSDT", offset=1)],
+        parse_binance_spot_book_tickers(
+            [row, _book_ticker("ETHUSDT")],
             mappings=mappings,
             observed_at=OBSERVED_AT,
         )
 
 
-def test_reference_ticker_rejects_missing_duplicate_and_crossed_quotes() -> None:
+def test_book_ticker_rejects_missing_duplicate_and_crossed_quotes() -> None:
     mappings = parse_binance_spot_exchange_info(
         _exchange_info(),
         required_symbols=("BTCUSDT", "ETHUSDT"),
@@ -236,22 +216,22 @@ def test_reference_ticker_rejects_missing_duplicate_and_crossed_quotes() -> None
     ).mappings
 
     with pytest.raises(BinanceSpotContractError, match="missing"):
-        parse_binance_spot_reference_tickers(
-            [_ticker("BTCUSDT")],
+        parse_binance_spot_book_tickers(
+            [_book_ticker("BTCUSDT")],
             mappings=mappings,
             observed_at=OBSERVED_AT,
         )
     with pytest.raises(BinanceSpotContractError, match="duplicate"):
-        parse_binance_spot_reference_tickers(
-            [_ticker("BTCUSDT"), _ticker("BTCUSDT", offset=1)],
+        parse_binance_spot_book_tickers(
+            [_book_ticker("BTCUSDT"), _book_ticker("BTCUSDT")],
             mappings=mappings,
             observed_at=OBSERVED_AT,
         )
-    crossed = _ticker("BTCUSDT")
+    crossed = _book_ticker("BTCUSDT")
     crossed["askPrice"] = crossed["bidPrice"]
     with pytest.raises(BinanceSpotContractError, match="crossed or locked"):
-        parse_binance_spot_reference_tickers(
-            [crossed, _ticker("ETHUSDT", offset=1)],
+        parse_binance_spot_book_tickers(
+            [crossed, _book_ticker("ETHUSDT")],
             mappings=mappings,
             observed_at=OBSERVED_AT,
         )
@@ -274,13 +254,12 @@ async def test_keyless_connector_gates_one_batch_poll_on_preflight() -> None:
         if request.url.path == "/api/v3/exchangeInfo":
             assert json.loads(request.url.params["symbols"]) == ["BTCUSDT", "ETHUSDT"]
             return httpx.Response(200, json=_exchange_info())
-        if request.url.path == "/api/v3/ticker/24hr":
+        if request.url.path == "/api/v3/ticker/bookTicker":
             assert json.loads(request.url.params["symbols"]) == ["BTCUSDT", "ETHUSDT"]
-            assert request.url.params["type"] == "FULL"
             assert request.url.params["symbolStatus"] == "TRADING"
             return httpx.Response(
                 200,
-                json=[_ticker("BTCUSDT"), _ticker("ETHUSDT", offset=1)],
+                json=[_book_ticker("BTCUSDT"), _book_ticker("ETHUSDT")],
             )
         raise AssertionError(f"unexpected request: {request.url}")
 
@@ -305,7 +284,7 @@ async def test_keyless_connector_gates_one_batch_poll_on_preflight() -> None:
     assert [request.url.path for request in requests] == [
         "/api/v3/time",
         "/api/v3/exchangeInfo",
-        "/api/v3/ticker/24hr",
+        "/api/v3/ticker/bookTicker",
     ]
     assert not client.is_closed
     await client.aclose()

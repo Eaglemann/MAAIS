@@ -25,7 +25,7 @@ PUBLIC_BINANCE_SPOT_API_BASE_URL = "https://api.binance.com"
 BINANCE_SPOT_VENUE = "binance_spot"
 _PROVISIONAL_WEIGHT_LIMIT_PER_MINUTE = 1200
 _EXCHANGE_INFO_WEIGHT = 20
-_TICKER_BATCH_WEIGHT = 2
+_BOOK_TICKER_BATCH_WEIGHT = 4
 Sleep = Callable[[float], Awaitable[None]]
 
 
@@ -151,7 +151,7 @@ def parse_binance_spot_exchange_info(
     )
 
 
-def parse_binance_spot_reference_tickers(
+def parse_binance_spot_book_tickers(
     raw: object,
     *,
     mappings: Sequence[BinanceSpotSymbolMapping],
@@ -160,85 +160,54 @@ def parse_binance_spot_reference_tickers(
     require_utc(observed_at, "observed_at")
     admitted = tuple(mappings)
     if not admitted:
-        raise BinanceSpotContractError("Binance Spot ticker mappings cannot be empty")
+        raise BinanceSpotContractError("Binance Spot book-ticker mappings cannot be empty")
     required = tuple(item.spot_symbol for item in admitted)
     if len(set(required)) != len(required):
-        raise BinanceSpotContractError("Binance Spot ticker mappings must be unique")
-    rows = _mapping_array(raw, "Binance Spot ticker response")
+        raise BinanceSpotContractError("Binance Spot book-ticker mappings must be unique")
+    rows = _mapping_array(raw, "Binance Spot book-ticker response")
     indexed: dict[str, Mapping[str, object]] = {}
     for row in rows:
         symbol = _string(row, "symbol")
         if symbol in indexed:
-            raise BinanceSpotContractError(f"duplicate Binance Spot ticker: {symbol}")
+            raise BinanceSpotContractError(f"duplicate Binance Spot book ticker: {symbol}")
         indexed[symbol] = row
     unexpected = sorted(indexed.keys() - set(required))
     if unexpected:
-        raise BinanceSpotContractError(f"unexpected Binance Spot tickers: {unexpected}")
+        raise BinanceSpotContractError(f"unexpected Binance Spot book tickers: {unexpected}")
     missing = sorted(set(required) - indexed.keys())
     if missing:
-        raise BinanceSpotContractError(f"missing Binance Spot tickers: {missing}")
+        raise BinanceSpotContractError(f"missing Binance Spot book tickers: {missing}")
 
     events: list[ObservedMarketEvent] = []
     for mapping in admitted:
         row = indexed[mapping.spot_symbol]
-        last_price = _decimal(row, "lastPrice", positive=True)
-        _decimal(row, "priceChange")
-        _decimal(row, "priceChangePercent")
-        _decimal(row, "weightedAvgPrice", positive=True)
-        _decimal(row, "prevClosePrice", positive=True)
-        _decimal(row, "lastQty", positive=True)
         bid = _decimal(row, "bidPrice", positive=True)
         _decimal(row, "bidQty", positive=True)
         ask = _decimal(row, "askPrice", positive=True)
         _decimal(row, "askQty", positive=True)
-        open_price = _decimal(row, "openPrice", positive=True)
-        high = _decimal(row, "highPrice", positive=True)
-        low = _decimal(row, "lowPrice", positive=True)
-        _decimal(row, "volume", nonnegative=True)
-        _decimal(row, "quoteVolume", nonnegative=True)
         if bid >= ask:
             raise BinanceSpotContractError(
                 f"Binance Spot reference quote is crossed or locked: {mapping.spot_symbol}"
             )
-        if high < max(low, open_price) or not low <= last_price <= high:
-            raise BinanceSpotContractError(
-                f"Binance Spot ticker price range is inconsistent: {mapping.spot_symbol}"
-            )
-        open_ms = _integer(row, "openTime")
-        close_ms = _integer(row, "closeTime")
-        if open_ms < 0 or close_ms <= open_ms:
-            raise BinanceSpotContractError(
-                f"Binance Spot ticker time window is invalid: {mapping.spot_symbol}"
-            )
-        first_id = _integer(row, "firstId")
-        last_id = _integer(row, "lastId")
-        count = _integer(row, "count")
-        if first_id < 0 or last_id < first_id or count <= 0:
-            raise BinanceSpotContractError(
-                f"Binance Spot ticker trade identity is invalid: {mapping.spot_symbol}"
-            )
-        if last_id - first_id + 1 != count:
-            raise BinanceSpotContractError(
-                f"Binance Spot ticker trade count is inconsistent: {mapping.spot_symbol}"
-            )
-        close_at = _milliseconds(close_ms)
         bid_raw = _string(row, "bidPrice")
+        bid_quantity_raw = _string(row, "bidQty")
         ask_raw = _string(row, "askPrice")
+        ask_quantity_raw = _string(row, "askQty")
         observed_us = _datetime_microseconds(observed_at)
-        source_event_id = (
-            f"{close_ms}:{first_id}:{last_id}:{count}:{bid_raw}:{ask_raw}:{observed_us}"
-        )
+        source_event_id = f"{bid_raw}:{bid_quantity_raw}:{ask_raw}:{ask_quantity_raw}:{observed_us}"
         events.append(
             ObservedMarketEvent(
                 venue=BINANCE_SPOT_VENUE,
-                stream="rest:/api/v3/ticker/24hr",
+                stream="rest:/api/v3/ticker/bookTicker",
                 symbol=mapping.primary_symbol,
-                event_id=(f"{BINANCE_SPOT_VENUE}:24hr:{mapping.spot_symbol}:{source_event_id}"),
+                event_id=(
+                    f"{BINANCE_SPOT_VENUE}:bookTicker:{mapping.spot_symbol}:{source_event_id}"
+                ),
                 kind=MarketEventKind.REFERENCE_PRICE,
-                venue_event_at=close_at,
+                venue_event_at=observed_at,
                 observed_at=observed_at,
                 sequence=None,
-                sequence_not_applicable_reason=("binance_spot_ticker_has_no_book_sequence"),
+                sequence_not_applicable_reason=("binance_spot_book_ticker_has_no_sequence"),
                 payload=ReferencePricePayload(
                     reference_kind=ReferenceKind.PRIMARY_SPOT,
                     instrument=mapping.spot_symbol,
@@ -248,7 +217,7 @@ def parse_binance_spot_reference_tickers(
                     source_side=None,
                     source_bid=bid,
                     source_ask=ask,
-                    source_published_at=close_at,
+                    source_published_at=None,
                 ),
             )
         )
@@ -258,11 +227,7 @@ def parse_binance_spot_reference_tickers(
 def _datetime_microseconds(value: datetime) -> int:
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
     elapsed = value - epoch
-    return (
-        elapsed.days * 86_400_000_000
-        + elapsed.seconds * 1_000_000
-        + elapsed.microseconds
-    )
+    return elapsed.days * 86_400_000_000 + elapsed.seconds * 1_000_000 + elapsed.microseconds
 
 
 class BinanceSpotConnector:
@@ -340,15 +305,14 @@ class BinanceSpotConnector:
     async def get_reference_events(self) -> tuple[ObservedMarketEvent, ...]:
         preflight = self.preflight_result
         raw, observed_at = await self._get_json(
-            "/api/v3/ticker/24hr",
+            "/api/v3/ticker/bookTicker",
             {
                 "symbols": _json_symbols(tuple(item.spot_symbol for item in preflight.mappings)),
-                "type": "FULL",
                 "symbolStatus": "TRADING",
             },
-            weight=_TICKER_BATCH_WEIGHT,
+            weight=_BOOK_TICKER_BATCH_WEIGHT,
         )
-        return parse_binance_spot_reference_tickers(
+        return parse_binance_spot_book_tickers(
             raw,
             mappings=preflight.mappings,
             observed_at=observed_at,

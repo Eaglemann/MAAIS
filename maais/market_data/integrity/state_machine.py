@@ -10,7 +10,7 @@ from uuid import UUID
 
 from maais.domain.enums import QualityStatus
 from maais.domain.json import JsonValue, content_hash, freeze_json
-from maais.market_data.frames import CausalMinuteFrame
+from maais.market_data.frames import CausalMinuteFrame, TimestampBasis
 
 
 class IntegrityCheck(StrEnum):
@@ -383,7 +383,8 @@ class MarketIntegrityStateMachine:
 
     def _venue_timestamp(self, context: IntegrityContext) -> IntegrityResult:
         bad: list[str] = []
-        observations: dict[str, dict[str, Decimal]] = {}
+        observations: dict[str, dict[str, object]] = {}
+        observation_based = False
         for name, source in sorted(context.frame.source_manifest.items()):
             limit = self._policy.venue_timestamp_skew_overrides.get(
                 name,
@@ -393,7 +394,12 @@ class MarketIntegrityStateMachine:
             observations[name] = {
                 "skew_seconds": Decimal(str(skew.total_seconds())),
                 "limit_seconds": Decimal(str(limit.total_seconds())),
+                "timestamp_basis": source.timestamp_basis,
+                "comparable": source.timestamp_basis is TimestampBasis.VENUE_EVENT,
             }
+            if source.timestamp_basis is TimestampBasis.LOCAL_OBSERVATION:
+                observation_based = True
+                continue
             if skew > limit:
                 bad.append(name)
         if bad:
@@ -407,7 +413,11 @@ class MarketIntegrityStateMachine:
         return _result(
             IntegrityCheck.VENUE_TIMESTAMP,
             QualityStatus.PASSED,
-            "venue_timestamps_within_skew",
+            (
+                "venue_timestamps_within_skew_or_observation_based"
+                if observation_based
+                else "venue_timestamps_within_skew"
+            ),
             observations=observations,
         )
 
