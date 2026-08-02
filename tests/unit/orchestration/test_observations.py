@@ -75,6 +75,20 @@ async def test_future_book_wait_uses_first_genuinely_later_observation() -> None
     assert books[0].bids[0].quantity == Decimal("3")
 
 
+async def test_causal_book_snapshot_excludes_future_observations() -> None:
+    buffer = MarketObservationBuffer(("BTCUSDT",))
+    await buffer.observe(_mark(100))
+    prior = _book("book-prior", 150, "100", "101", 150)
+    cutoff = NOW + timedelta(milliseconds=200)
+    future = _book("book-future", 201, "99", "102", 201)
+    await buffer.observe(prior)
+    await buffer.observe(future)
+
+    books = buffer.books_at_or_before("BTCUSDT", cutoff)
+
+    assert tuple(item.event_id for item in books) == ("book-prior",)
+
+
 async def test_book_requires_prior_mark_and_wait_timeout_is_visible() -> None:
     buffer = MarketObservationBuffer(("BTCUSDT",))
     assert not await buffer.observe(_book("book-no-mark", 100, "100", "101", 100))

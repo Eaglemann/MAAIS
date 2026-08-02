@@ -164,6 +164,15 @@ class MarketObservationBuffer:
                 f"no eligible {symbol} book observed after {eligible_after.isoformat()}"
             ) from exc
 
+    def books_at_or_before(
+        self,
+        symbol: str,
+        observed_at: datetime,
+    ) -> tuple[BookSnapshot, ...]:
+        self._require_symbol(symbol)
+        require_utc(observed_at, "book causal cutoff")
+        return tuple(item for item in self._books[symbol] if item.observed_at <= observed_at)
+
     def latest_primary_reference(
         self,
         symbol: str,
