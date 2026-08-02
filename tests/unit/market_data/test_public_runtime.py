@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 
 from maais.market_data.events import (
+    FundingSettlementPayload,
     MarketEventKind,
     ObservedMarketEvent,
     ReferenceKind,
@@ -63,6 +64,27 @@ def _event(kind: MarketEventKind, event_id: str) -> ObservedMarketEvent:
     )
 
 
+def _funding_event(event_id: str) -> ObservedMarketEvent:
+    funding_at = NOW - timedelta(hours=1)
+    return ObservedMarketEvent(
+        venue="binance_usdm",
+        stream="rest:/fapi/v1/fundingRate",
+        symbol="BTCUSDT",
+        event_id=event_id,
+        kind=MarketEventKind.FUNDING_SETTLEMENT,
+        venue_event_at=funding_at,
+        observed_at=NOW + timedelta(seconds=1),
+        sequence=None,
+        sequence_not_applicable_reason="binance_funding_history_has_no_sequence",
+        payload=FundingSettlementPayload(
+            funding_at=funding_at,
+            funding_rate=Decimal("0.0001"),
+            mark_price=Decimal("100.5"),
+            rate_type="Regular",
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class _FuturesPreflight:
     venue_clocks: tuple[ObservedMarketEvent, ...]
@@ -74,6 +96,8 @@ class _FuturesRest:
 
     def __init__(self) -> None:
         self.calls = 0
+        self.funding_calls: list[tuple[str, int, int]] = []
+        self.funding_events: tuple[ObservedMarketEvent, ...] = ()
 
     async def preflight(self, symbols: tuple[str, ...]) -> _FuturesPreflight:
         assert symbols == ("BTCUSDT",)
@@ -82,6 +106,16 @@ class _FuturesRest:
             (_event(MarketEventKind.VENUE_CLOCK, f"clock-{self.calls}"),),
             (_event(MarketEventKind.SYMBOL_STATE, f"state-{self.calls}"),),
         )
+
+    async def get_funding_events(
+        self,
+        symbol: str,
+        *,
+        start_ms: int,
+        end_ms: int,
+    ) -> tuple[ObservedMarketEvent, ...]:
+        self.funding_calls.append((symbol, start_ms, end_ms))
+        return self.funding_events
 
 
 class _Reference:
@@ -144,6 +178,7 @@ async def test_runtime_preflights_every_source_and_pumps_one_managed_queue() -> 
         websocket_factory=lambda symbols, supplied_rest: websocket,  # type: ignore[arg-type,return-value]
         observed_now=lambda: NOW + timedelta(seconds=1),
         sleep=_blocking_sleep,
+        funding_start_at=NOW - timedelta(hours=8),
     )
 
     await runtime.start()
@@ -174,6 +209,7 @@ async def test_runtime_queue_saturation_fails_startup_without_dropping() -> None
         websocket_factory=lambda symbols, rest: _WebSocket(),  # type: ignore[arg-type,return-value]
         observed_now=lambda: NOW + timedelta(seconds=1),
         sleep=_blocking_sleep,
+        funding_start_at=NOW - timedelta(hours=8),
         queue_size=1,
     )
 
@@ -208,6 +244,7 @@ async def test_periodic_preflight_revalidates_every_public_source() -> None:
         websocket_factory=lambda symbols, supplied_rest: websocket,  # type: ignore[arg-type,return-value]
         observed_now=lambda: NOW + timedelta(seconds=1),
         sleep=release_one_refresh,
+        funding_start_at=NOW - timedelta(hours=8),
         reference_poll_seconds=999,
         preflight_refresh_seconds=30,
     )
@@ -221,4 +258,35 @@ async def test_periodic_preflight_revalidates_every_public_source() -> None:
     assert rest.calls == 2
     assert primary.preflight_calls == 2
     assert secondary.preflight_calls == 2
+    await runtime.stop()
+
+
+async def test_runtime_polls_observed_funding_from_explicit_restart_cutoff() -> None:
+    rest = _FuturesRest()
+    funding = _funding_event("funding-observed-1")
+    rest.funding_events = (funding,)
+    runtime = PublicMarketDataRuntime(
+        ("BTCUSDT",),
+        futures_rest=rest,  # type: ignore[arg-type]
+        primary_spot=_Reference("primary"),  # type: ignore[arg-type]
+        secondary_spot=_Reference("secondary"),  # type: ignore[arg-type]
+        websocket_factory=lambda symbols, supplied_rest: _WebSocket(),  # type: ignore[arg-type,return-value]
+        observed_now=lambda: NOW + timedelta(seconds=1),
+        sleep=_blocking_sleep,
+        funding_start_at=NOW - timedelta(hours=8),
+        funding_poll_seconds=60,
+    )
+
+    await runtime.start()
+    events = runtime.events()
+    observed = [await anext(events) for _ in range(5)]
+
+    assert funding.event_id in {event.event_id for event in observed}
+    assert rest.funding_calls == [
+        (
+            "BTCUSDT",
+            int((NOW - timedelta(hours=8)).timestamp() * 1000),
+            int((NOW + timedelta(seconds=1)).timestamp() * 1000),
+        )
+    ]
     await runtime.stop()

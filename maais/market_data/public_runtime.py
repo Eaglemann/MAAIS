@@ -69,10 +69,12 @@ class PublicMarketDataRuntime:
         futures_rest: BinanceRestConnector,
         primary_spot: BinanceSpotConnector,
         secondary_spot: BybitSpotConnector,
+        funding_start_at: datetime,
         websocket_factory: WebSocketFactory | None = None,
         observed_now: Callable[[], datetime] | None = None,
         sleep: Sleep = asyncio.sleep,
         reference_poll_seconds: float = 1.0,
+        funding_poll_seconds: float = 60.0,
         preflight_refresh_seconds: float = 30.0,
         queue_size: int = 10_000,
     ) -> None:
@@ -83,8 +85,16 @@ class PublicMarketDataRuntime:
             not symbol or symbol != symbol.upper() or not symbol.isalnum() for symbol in normalized
         ):
             raise ValueError("public runtime symbols must be uppercase alphanumeric")
-        if min(reference_poll_seconds, preflight_refresh_seconds) <= 0 or queue_size <= 0:
+        if (
+            min(reference_poll_seconds, funding_poll_seconds, preflight_refresh_seconds) <= 0
+            or queue_size <= 0
+        ):
             raise ValueError("public runtime intervals and queue capacity must be positive")
+        require_utc(funding_start_at, "public funding_start_at")
+        initial_now = observed_now() if observed_now is not None else datetime.now(timezone.utc)
+        require_utc(initial_now, "public runtime observed_now")
+        if funding_start_at > initial_now:
+            raise ValueError("public funding_start_at cannot be in the future")
         self._symbols = normalized
         self._futures_rest = futures_rest
         self._primary_spot = primary_spot
@@ -95,6 +105,8 @@ class PublicMarketDataRuntime:
         self._observed_now = observed_now or (lambda: datetime.now(timezone.utc))
         self._sleep = sleep
         self._reference_poll_seconds = reference_poll_seconds
+        self._funding_poll_seconds = funding_poll_seconds
+        self._funding_start_at = funding_start_at
         self._preflight_refresh_seconds = preflight_refresh_seconds
         self._queue: asyncio.Queue[ObservedMarketEvent] = asyncio.Queue(maxsize=queue_size)
         self._state = PublicDataRuntimeState.STOPPED
@@ -131,6 +143,7 @@ class PublicMarketDataRuntime:
                 self._secondary_spot.preflight(self._symbols),
             )
             self._emit_futures_preflight(futures)
+            await self._poll_funding_once()
             primary, secondary = await asyncio.gather(
                 self._primary_spot.get_reference_events(),
                 self._secondary_spot.get_reference_events(),
@@ -191,6 +204,7 @@ class PublicMarketDataRuntime:
         tasks = (
             asyncio.create_task(self._pump_websocket(), name="public_futures_pump"),
             asyncio.create_task(self._poll_references(), name="public_reference_poll"),
+            asyncio.create_task(self._poll_funding(), name="public_funding_poll"),
             asyncio.create_task(self._refresh_preflight(), name="public_preflight_refresh"),
         )
         try:
@@ -236,6 +250,38 @@ class PublicMarketDataRuntime:
                 self._secondary_spot.get_reference_events(),
             )
             self._emit_many((*primary, *secondary))
+
+    async def _poll_funding(self) -> None:
+        while self._running:
+            await self._sleep(self._funding_poll_seconds)
+            if not self._running:
+                return
+            await self._poll_funding_once()
+
+    async def _poll_funding_once(self) -> None:
+        observed_at = self._observed_now()
+        require_utc(observed_at, "public funding observed_at")
+        if observed_at < self._funding_start_at:
+            raise PublicDataHalt(
+                "public_funding_clock_regressed",
+                "observed time precedes the explicit funding restart cutoff",
+            )
+        if observed_at == self._funding_start_at:
+            return
+        start_ms = int(self._funding_start_at.timestamp() * 1000)
+        end_ms = int(observed_at.timestamp() * 1000)
+        batches = await asyncio.gather(
+            *(
+                self._futures_rest.get_funding_events(
+                    symbol,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                )
+                for symbol in self._symbols
+            )
+        )
+        for batch in batches:
+            self._emit_many(batch)
 
     async def _refresh_preflight(self) -> None:
         while self._running:

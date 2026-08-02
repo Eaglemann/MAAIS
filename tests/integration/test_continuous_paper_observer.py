@@ -307,6 +307,50 @@ async def test_observed_funding_settlement_is_applied_exactly_once_after_restart
     assert account.version == entry.execution.account.version + 2
 
 
+async def test_funding_before_position_open_is_not_applied_retroactively(
+    uow_factory: UnitOfWork,
+) -> None:
+    command, entry, _, observer = await _runtime_with_open_position(uow_factory)
+    assert entry.execution is not None
+    assert entry.execution.account is not None
+    position = entry.execution.account.position("BTCUSDT")
+    assert position.opened_at is not None
+    funding_at = position.opened_at - timedelta(hours=1)
+    event = ObservedMarketEvent(
+        venue="binance_usdm",
+        stream="rest:/fapi/v1/fundingRate",
+        symbol="BTCUSDT",
+        event_id="binance_usdm:funding:BTCUSDT:before-open:Regular",
+        kind=MarketEventKind.FUNDING_SETTLEMENT,
+        venue_event_at=funding_at,
+        observed_at=position.opened_at + timedelta(seconds=1),
+        sequence=None,
+        sequence_not_applicable_reason="binance_funding_history_has_no_sequence",
+        payload=FundingSettlementPayload(
+            funding_at=funding_at,
+            funding_rate=Decimal("0.001"),
+            mark_price=Decimal("101"),
+            rate_type="Regular",
+        ),
+    )
+
+    await observer.observe(event, context_events=(event,))
+    await observer.observe(event, context_events=(event,))
+
+    async with uow_factory.begin() as uow:
+        account = await uow.paper_execution.load_account(command.manifest.experiment_id)
+        funding_rows = (
+            await uow.session.scalars(
+                select(FundingEntryModel).where(
+                    FundingEntryModel.experiment_id == command.manifest.experiment_id
+                )
+            )
+        ).all()
+
+    assert account == entry.execution.account
+    assert funding_rows == []
+
+
 async def test_first_eligible_book_opens_counterfactual_without_touching_official_account(
     uow_factory: UnitOfWork,
 ) -> None:

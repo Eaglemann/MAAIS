@@ -151,6 +151,8 @@ class FundingSettlementCommand:
         position = self.account.position(self.symbol)
         if position.is_flat:
             raise ValueError("funding settlement requires an open position")
+        if position.opened_at is None or self.funding_at < position.opened_at:
+            raise ValueError("funding settlement predates the open position")
 
 
 @dataclass(frozen=True, slots=True)

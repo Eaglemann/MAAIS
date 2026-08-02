@@ -163,7 +163,13 @@ class ContinuousPaperObserver:
                     )
             account = await transaction.paper_execution.load_account(self._manifest.experiment_id)
             position = account.positions.get(event.symbol)
-            if existing is None and position is not None and not position.is_flat:
+            if (
+                existing is None
+                and position is not None
+                and not position.is_flat
+                and position.opened_at is not None
+                and payload.funding_at >= position.opened_at
+            ):
                 outcome = self._protection.apply_funding(
                     FundingSettlementCommand(
                         experiment_id=self._manifest.experiment_id,
@@ -180,7 +186,12 @@ class ContinuousPaperObserver:
                 await transaction.orchestration.record_funding_outcome(outcome)
             states = await transaction.counterfactuals.get_unresolved(self._manifest.experiment_id)
             for state in states:
-                if state.symbol == event.symbol and state.status is CounterfactualStatus.OPEN:
+                if (
+                    state.symbol == event.symbol
+                    and state.status is CounterfactualStatus.OPEN
+                    and state.entry_fill is not None
+                    and payload.funding_at >= state.entry_fill.fill_at
+                ):
                     updated = state.apply_funding(
                         payload.funding_rate,
                         payload.mark_price,
