@@ -17,6 +17,7 @@
 - 2026-08-02: Atomic outcome persistence and restart loaders are complete. Revision `0010` persists restartable stop/target trigger reason, venue/local timing, trigger price, executable price, and `Regular`/`Special` funding lineage. Protective marks continue while entries are halted; successful exits and funding reconcile through restart, while unfillable exits atomically persist the triggered plan, critical incident, and terminal experiment halt. Public adapters and worker lifecycle remain pending.
 - 2026-08-02: Strict, keyless public adapters now cover Binance USD-M REST/WebSocket, Binance Spot primary references, and Bybit Spot secondary references for all ten admitted symbols. They retain venue identity, time, sequence availability, executable quote metadata, and fail closed on schema drift, gaps, queue saturation, or unreconciled depth. Binance Spot uses the standard official public origin because a live check found the market-data-only origin too stale for the five-second admission limit. REST closed-bar recovery coordination and the worker lifecycle remain pending.
 - 2026-08-02: Closed-bar gap recovery now persists detection before public REST I/O, fetches and validates the exact missing range, records bounded retry attempts with exponential backoff, and terminally fails after exhaustion. Completion locks PostgreSQL and requires the exact candidate cursor already be durable; the worker still must dispatch recovered bars through normal frame/cycle transactions before calling completion.
+- 2026-08-02: The managed keyless public runtime now composes all three official sources, periodically revalidates every symbol mapping, and uses Binance's current split public-depth and market-kline/mark WebSocket paths. Readiness requires a reconstructed depth book and mark/funding coverage for all ten symbols. Live all-symbol checks observed every required source and one closed one-minute bar per symbol with zero reconnects; persistent worker dispatch and recovery handoff remain pending.
 
 ## Current defects this phase must retire
 
@@ -73,6 +74,7 @@
 - `maais/market_data/connectors/binance_websocket.py` - bounded public Futures stream adapter.
 - `maais/market_data/connectors/binance_spot.py` - verified primary Spot reference adapter.
 - `maais/market_data/connectors/bybit_spot.py` - verified secondary-venue reference adapter.
+- `maais/market_data/public_runtime.py` - retained lifecycle for all keyless public sources.
 
 ### Decision, risk, and orchestration
 

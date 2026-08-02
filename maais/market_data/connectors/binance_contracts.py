@@ -135,16 +135,12 @@ class BinanceDepthBook:
         if delta.final_update_id <= self._current_sequence:
             return None
 
-        expected = self._current_sequence + 1
-        covers_next = delta.first_update_id <= expected <= delta.final_update_id
         overlaps_current = delta.first_update_id <= self._current_sequence <= delta.final_update_id
-        if not covers_next and not overlaps_current:
-            raise BinanceSequenceGap(
-                "depth first/final update range does not cover the next official update"
-            )
         if self._started and delta.previous_final_update_id != self._current_sequence:
             raise BinanceSequenceGap(
-                "depth previous final update does not match the current official book"
+                f"depth previous final update gap for {self._symbol}: "
+                f"current={self._current_sequence} pu={delta.previous_final_update_id} "
+                f"U={delta.first_update_id} u={delta.final_update_id}"
             )
         if (
             not self._started
@@ -152,7 +148,9 @@ class BinanceDepthBook:
             and delta.previous_final_update_id != self._current_sequence
         ):
             raise BinanceSequenceGap(
-                "first depth previous final update does not match the REST snapshot"
+                f"first depth update does not link to snapshot for {self._symbol}: "
+                f"snapshot={self._current_sequence} pu={delta.previous_final_update_id} "
+                f"U={delta.first_update_id} u={delta.final_update_id}"
             )
 
         _apply_changes(self._bids, delta.bids)

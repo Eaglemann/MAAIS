@@ -236,6 +236,52 @@ def test_depth_book_rejects_gap_in_previous_update_chain() -> None:
         )
 
 
+def test_first_futures_depth_event_can_have_sparse_range_when_pu_links_snapshot() -> None:
+    snapshot = BinanceDepthSnapshot(
+        symbol="BTCUSDT",
+        last_update_id=100,
+        published_at=datetime(2026, 8, 2, 12, tzinfo=timezone.utc),
+        venue_event_at=datetime(2026, 8, 2, 12, tzinfo=timezone.utc),
+        observed_at=OBSERVED_AT - timedelta(seconds=1),
+        bids=((Decimal("100"), Decimal("1")),),
+        asks=((Decimal("101"), Decimal("1")),),
+    )
+    book = BinanceDepthBook.from_snapshot(snapshot, depth=1)
+
+    event = book.apply(
+        _depth(
+            first=150,
+            final=200,
+            previous=100,
+        )
+    )
+
+    assert event is not None
+    assert event.sequence == 200
+
+
+def test_first_futures_depth_event_must_overlap_or_link_snapshot() -> None:
+    snapshot = BinanceDepthSnapshot(
+        symbol="BTCUSDT",
+        last_update_id=100,
+        published_at=datetime(2026, 8, 2, 12, tzinfo=timezone.utc),
+        venue_event_at=datetime(2026, 8, 2, 12, tzinfo=timezone.utc),
+        observed_at=OBSERVED_AT - timedelta(seconds=1),
+        bids=((Decimal("100"), Decimal("1")),),
+        asks=((Decimal("101"), Decimal("1")),),
+    )
+    book = BinanceDepthBook.from_snapshot(snapshot, depth=1)
+
+    with pytest.raises(BinanceSequenceGap, match="does not link"):
+        book.apply(
+            _depth(
+                first=150,
+                final=200,
+                previous=99,
+            )
+        )
+
+
 @pytest.mark.parametrize(
     "mutation",
     (

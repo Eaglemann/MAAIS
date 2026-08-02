@@ -22,9 +22,10 @@ from maais.market_data.connectors.binance_contracts import (
     BinanceSequenceGap,
     parse_websocket_message,
 )
-from maais.market_data.events import ObservedMarketEvent
+from maais.market_data.events import MarketEventKind, ObservedMarketEvent
 
-PUBLIC_FSTREAM_BASE_URL = "wss://fstream.binance.com/stream"
+PUBLIC_FSTREAM_BASE_URL = "wss://fstream.binance.com/public/stream"
+MARKET_FSTREAM_BASE_URL = "wss://fstream.binance.com/market/stream"
 _BACKOFF_BASE = 1.0
 _BACKOFF_MAX = 60.0
 _STABLE_CONNECTION_SECONDS = 30.0
@@ -86,19 +87,22 @@ class _RecoverableDisconnect(ConnectionError):
         super().__init__(detail)
 
 
-def _build_stream_url(symbols: tuple[str, ...] | list[str]) -> str:
+def _build_public_stream_url(symbols: tuple[str, ...] | list[str]) -> str:
+    streams = [f"{symbol.lower()}@depth@500ms" for symbol in symbols]
+    return f"{PUBLIC_FSTREAM_BASE_URL}?streams={'/'.join(streams)}"
+
+
+def _build_market_stream_url(symbols: tuple[str, ...] | list[str]) -> str:
     streams: list[str] = []
     for symbol in symbols:
         stream_symbol = symbol.lower()
         streams.extend(
             (
                 f"{stream_symbol}@kline_1m",
-                f"{stream_symbol}@depth@500ms",
-                f"{stream_symbol}@aggTrade",
                 f"{stream_symbol}@markPrice@1s",
             )
         )
-    return f"{PUBLIC_FSTREAM_BASE_URL}?streams={'/'.join(streams)}"
+    return f"{MARKET_FSTREAM_BASE_URL}?streams={'/'.join(streams)}"
 
 
 def _default_connect(url: str):
@@ -132,24 +136,21 @@ class BinanceWebSocketConnector:
         if not normalized or len(set(normalized)) != len(normalized):
             raise ValueError("connector symbols must be nonempty and unique")
         if any(
-            not symbol or symbol != symbol.upper() or not symbol.isalnum()
-            for symbol in normalized
+            not symbol or symbol != symbol.upper() or not symbol.isalnum() for symbol in normalized
         ):
             raise ValueError("connector symbols must be uppercase alphanumeric")
         if min(queue_size, depth_buffer_size, published_depth) <= 0 or ready_timeout <= 0:
             raise ValueError("connector capacities and ready timeout must be positive")
         if not rest.preflight_complete:
             raise RuntimeError("Binance REST preflight must complete before WebSocket setup")
-        admitted = {
-            item.symbol
-            for item in getattr(rest.preflight_result, "exchange_filters", ())
-        }
+        admitted = {item.symbol for item in getattr(rest.preflight_result, "exchange_filters", ())}
         missing = sorted(set(normalized) - admitted)
         if missing:
             raise RuntimeError(f"WebSocket symbols were not admitted by preflight: {missing}")
 
         self._symbols = normalized
-        self._url = _build_stream_url(normalized)
+        self._public_url = _build_public_stream_url(normalized)
+        self._market_url = _build_market_stream_url(normalized)
         self._rest = rest
         self._connect = connect
         self._observed_now = observed_now or (lambda: datetime.now(timezone.utc))
@@ -162,10 +163,12 @@ class BinanceWebSocketConnector:
         self._state = ConnectorState.STOPPED
         self._running = False
         self._task: asyncio.Task[None] | None = None
-        self._socket: _Socket | None = None
+        self._sockets: tuple[_Socket, ...] = ()
         self._ready = asyncio.Event()
         self._books: dict[str, BinanceDepthBook] = {}
         self._depth_buffers: dict[str, list[BinanceDepthDelta]] = {}
+        self._depth_ready = False
+        self._market_ready_symbols: set[str] = set()
         self._book_lock = asyncio.Lock()
         self._failure: ConnectorFailure | None = None
         self._recovery_count = 0
@@ -228,8 +231,7 @@ class BinanceWebSocketConnector:
         self._running = False
         if not halted:
             self._state = ConnectorState.STOPPING
-        if self._socket is not None:
-            await self._socket.close()
+        await self._close_sockets()
         if self._task is not None and not self._task.done():
             await self._task
         if not halted:
@@ -251,9 +253,7 @@ class BinanceWebSocketConnector:
             if self._state is ConnectorState.HALTED:
                 assert self._failure is not None
                 raise ConnectorHalt(self._failure.reason_code, self._failure.detail)
-            if self._state is ConnectorState.STOPPED and (
-                self._task is None or self._task.done()
-            ):
+            if self._state is ConnectorState.STOPPED and (self._task is None or self._task.done()):
                 return
             try:
                 yield await asyncio.wait_for(self._queue.get(), timeout=0.25)
@@ -266,9 +266,10 @@ class BinanceWebSocketConnector:
             while self._running:
                 connected_at = asyncio.get_running_loop().time()
                 try:
-                    async with self._connect(self._url) as socket:
-                        self._socket = socket
-                        await self._run_session(socket)
+                    async with self._connect(self._public_url) as public_socket:
+                        async with self._connect(self._market_url) as market_socket:
+                            self._sockets = (public_socket, market_socket)
+                            await self._run_session(public_socket, market_socket)
                 except ConnectorHalt as exc:
                     self._set_halt(exc)
                     return
@@ -290,7 +291,7 @@ class BinanceWebSocketConnector:
                     reason = "websocket_connection_error"
                     detail = f"{type(exc).__name__}: {exc}"
                 finally:
-                    self._socket = None
+                    self._sockets = ()
 
                 if not self._running:
                     break
@@ -307,34 +308,57 @@ class BinanceWebSocketConnector:
             if self._state is not ConnectorState.HALTED:
                 self._state = ConnectorState.STOPPED
 
-    async def _run_session(self, socket: _Socket) -> None:
+    async def _run_session(
+        self,
+        public_socket: _Socket,
+        market_socket: _Socket,
+    ) -> None:
         async with self._book_lock:
             self._books = {}
             self._depth_buffers = {symbol: [] for symbol in self._symbols}
+            self._depth_ready = False
+            self._market_ready_symbols = set()
         initializer = asyncio.create_task(self._initialize_books(), name="binance_depth_snapshot")
-        reader = asyncio.create_task(self._read_messages(socket), name="binance_stream_reader")
+        public_reader = asyncio.create_task(
+            self._read_messages(public_socket, depth_stream=True),
+            name="binance_public_stream_reader",
+        )
+        market_reader = asyncio.create_task(
+            self._read_messages(market_socket, depth_stream=False),
+            name="binance_market_stream_reader",
+        )
+        tasks = {initializer, public_reader, market_reader}
         try:
-            done, _ = await asyncio.wait(
-                {initializer, reader},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if reader in done:
-                await reader
+            while tasks:
+                done, _ = await asyncio.wait(
+                    tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    if not task.cancelled() and task.exception() is not None:
+                        await task
+                if public_reader in done or market_reader in done:
+                    ended = "public" if public_reader in done else "market"
+                    raise _RecoverableDisconnect(
+                        "websocket_stream_ended",
+                        f"{ended} websocket stream ended before stop",
+                    )
+                tasks.difference_update(done)
+            if self._running:
                 raise _RecoverableDisconnect(
                     "websocket_stream_ended",
-                    "public websocket stream ended before stop",
+                    "websocket session ended before stop",
                 )
-            await initializer
-            await reader
-            raise _RecoverableDisconnect(
-                "websocket_stream_ended",
-                "public websocket stream ended before stop",
-            )
         finally:
-            for task in (initializer, reader):
+            for task in (initializer, public_reader, market_reader):
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(initializer, reader, return_exceptions=True)
+            await asyncio.gather(
+                initializer,
+                public_reader,
+                market_reader,
+                return_exceptions=True,
+            )
 
     async def _initialize_books(self) -> None:
         snapshots = await asyncio.gather(
@@ -352,17 +376,26 @@ class BinanceWebSocketConnector:
                     if event is not None:
                         self._emit(event)
                 self._depth_buffers[snapshot.symbol] = []
-            self._state = ConnectorState.READY
-            self._ready.set()
+            self._depth_ready = True
+            self._update_readiness()
 
-    async def _read_messages(self, socket: _Socket) -> None:
+    async def _read_messages(self, socket: _Socket, *, depth_stream: bool) -> None:
         async for raw in socket:
             observed_at = self._observed_now()
             require_utc(observed_at, "observed_now")
             parsed = parse_websocket_message(raw, observed_at=observed_at)
             if parsed is None:
                 continue
+            if parsed.symbol not in self._symbols:
+                raise BinanceContractError(
+                    f"WebSocket emitted unconfigured symbol: {parsed.symbol}"
+                )
             if isinstance(parsed, BinanceDepthDelta):
+                if not depth_stream:
+                    raise ConnectorHalt(
+                        "stream_category_violation",
+                        f"market stream emitted depth event for {parsed.symbol}",
+                    )
                 async with self._book_lock:
                     book = self._books.get(parsed.symbol)
                     if book is None:
@@ -378,7 +411,22 @@ class BinanceWebSocketConnector:
                     if event is not None:
                         self._emit(event)
                 continue
+            if depth_stream:
+                raise ConnectorHalt(
+                    "stream_category_violation",
+                    f"public stream emitted {parsed.kind.value} for {parsed.symbol}",
+                )
             self._emit(parsed)
+            if parsed.kind is MarketEventKind.MARK_FUNDING:
+                async with self._book_lock:
+                    self._market_ready_symbols.add(parsed.symbol)
+                    self._update_readiness()
+
+    def _update_readiness(self) -> None:
+        if not self._depth_ready or self._market_ready_symbols != set(self._symbols):
+            return
+        self._state = ConnectorState.READY
+        self._ready.set()
 
     def _emit(self, event: ObservedMarketEvent) -> None:
         try:
@@ -404,8 +452,11 @@ class BinanceWebSocketConnector:
 
     async def _halt_from_outside(self, halt: ConnectorHalt) -> None:
         self._set_halt(halt)
-        if self._socket is not None:
-            await self._socket.close()
+        await self._close_sockets()
         if self._task is not None and not self._task.done():
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
+
+    async def _close_sockets(self) -> None:
+        if self._sockets:
+            await asyncio.gather(*(socket.close() for socket in self._sockets))

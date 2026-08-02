@@ -94,9 +94,7 @@ def parse_binance_spot_exchange_info(
     require_utc(observed_at, "observed_at")
     required = tuple(required_symbols)
     if not required or len(set(required)) != len(required):
-        raise BinanceSpotContractError(
-            "required Binance Spot symbols must be nonempty and unique"
-        )
+        raise BinanceSpotContractError("required Binance Spot symbols must be nonempty and unique")
     for symbol in required:
         _uppercase_symbol(symbol)
 
@@ -111,15 +109,11 @@ def parse_binance_spot_exchange_info(
     for row in _mapping_rows(data, "symbols"):
         symbol = _string(row, "symbol")
         if symbol in indexed:
-            raise BinanceSpotContractError(
-                f"duplicate Binance Spot instrument: {symbol}"
-            )
+            raise BinanceSpotContractError(f"duplicate Binance Spot instrument: {symbol}")
         indexed[symbol] = row
     missing = sorted(set(required) - indexed.keys())
     if missing:
-        raise BinanceSpotContractError(
-            f"missing required Binance Spot instruments: {missing}"
-        )
+        raise BinanceSpotContractError(f"missing required Binance Spot instruments: {missing}")
 
     mappings: list[BinanceSpotSymbolMapping] = []
     for symbol in required:
@@ -128,17 +122,11 @@ def parse_binance_spot_exchange_info(
         quote_asset = _string(row, "quoteAsset")
         status = _string(row, "status")
         if quote_asset != "USDT" or base_asset != symbol.removesuffix("USDT"):
-            raise BinanceSpotContractError(
-                f"Binance Spot base/quote mapping differs for {symbol}"
-            )
+            raise BinanceSpotContractError(f"Binance Spot base/quote mapping differs for {symbol}")
         if status != "TRADING":
-            raise BinanceSpotContractError(
-                f"Binance Spot instrument is not TRADING: {symbol}"
-            )
+            raise BinanceSpotContractError(f"Binance Spot instrument is not TRADING: {symbol}")
         if _boolean(row, "isSpotTradingAllowed") is not True:
-            raise BinanceSpotContractError(
-                f"Binance Spot trading is not enabled for {symbol}"
-            )
+            raise BinanceSpotContractError(f"Binance Spot trading is not enabled for {symbol}")
         order_types = _strings(row, "orderTypes")
         if "MARKET" not in order_types:
             raise BinanceSpotContractError(
@@ -185,9 +173,7 @@ def parse_binance_spot_reference_tickers(
         indexed[symbol] = row
     unexpected = sorted(indexed.keys() - set(required))
     if unexpected:
-        raise BinanceSpotContractError(
-            f"unexpected Binance Spot tickers: {unexpected}"
-        )
+        raise BinanceSpotContractError(f"unexpected Binance Spot tickers: {unexpected}")
     missing = sorted(set(required) - indexed.keys())
     if missing:
         raise BinanceSpotContractError(f"missing Binance Spot tickers: {missing}")
@@ -238,25 +224,18 @@ def parse_binance_spot_reference_tickers(
         close_at = _milliseconds(close_ms)
         bid_raw = _string(row, "bidPrice")
         ask_raw = _string(row, "askPrice")
-        source_event_id = (
-            f"{close_ms}:{first_id}:{last_id}:{count}:{bid_raw}:{ask_raw}"
-        )
+        source_event_id = f"{close_ms}:{first_id}:{last_id}:{count}:{bid_raw}:{ask_raw}"
         events.append(
             ObservedMarketEvent(
                 venue=BINANCE_SPOT_VENUE,
                 stream="rest:/api/v3/ticker/24hr",
                 symbol=mapping.primary_symbol,
-                event_id=(
-                    f"{BINANCE_SPOT_VENUE}:24hr:{mapping.spot_symbol}:"
-                    f"{source_event_id}"
-                ),
+                event_id=(f"{BINANCE_SPOT_VENUE}:24hr:{mapping.spot_symbol}:{source_event_id}"),
                 kind=MarketEventKind.REFERENCE_PRICE,
                 venue_event_at=close_at,
                 observed_at=observed_at,
                 sequence=None,
-                sequence_not_applicable_reason=(
-                    "binance_spot_ticker_has_no_book_sequence"
-                ),
+                sequence_not_applicable_reason=("binance_spot_ticker_has_no_book_sequence"),
                 payload=ReferencePricePayload(
                     reference_kind=ReferenceKind.PRIMARY_SPOT,
                     instrument=mapping.spot_symbol,
@@ -350,9 +329,7 @@ class BinanceSpotConnector:
         raw, observed_at = await self._get_json(
             "/api/v3/ticker/24hr",
             {
-                "symbols": _json_symbols(
-                    tuple(item.spot_symbol for item in preflight.mappings)
-                ),
+                "symbols": _json_symbols(tuple(item.spot_symbol for item in preflight.mappings)),
                 "type": "FULL",
                 "symbolStatus": "TRADING",
             },
@@ -372,9 +349,7 @@ class BinanceSpotConnector:
         weight: int,
     ) -> tuple[object, datetime]:
         if self._client is None:
-            raise RuntimeError(
-                "BinanceSpotConnector must be used as an async context manager"
-            )
+            raise RuntimeError("BinanceSpotConnector must be used as an async context manager")
         await self._weight.acquire(weight)
         response = await self._client.get(path, params=params)
         response.raise_for_status()
@@ -383,9 +358,7 @@ class BinanceSpotConnector:
         try:
             return response.json(), observed_at
         except ValueError as exc:
-            raise BinanceSpotContractError(
-                f"{path} did not return valid JSON"
-            ) from exc
+            raise BinanceSpotContractError(f"{path} did not return valid JSON") from exc
 
 
 def _request_weight_limit(data: Mapping[str, object]) -> int:
@@ -446,8 +419,10 @@ def _string(data: Mapping[str, object], name: str) -> str:
 
 def _strings(data: Mapping[str, object], name: str) -> tuple[str, ...]:
     value = _required(data, name)
-    if not isinstance(value, list) or not value or not all(
-        isinstance(item, str) and item for item in value
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) and item for item in value)
     ):
         raise BinanceSpotContractError(f"{name} must be a nonempty string array")
     return tuple(value)
@@ -499,6 +474,4 @@ def _milliseconds(value: int) -> datetime:
     try:
         return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
     except (OverflowError, OSError, ValueError) as exc:
-        raise BinanceSpotContractError(
-            "timestamp milliseconds are out of range"
-        ) from exc
+        raise BinanceSpotContractError("timestamp milliseconds are out of range") from exc
