@@ -35,6 +35,12 @@ class MarketFrameModel(Base):
         CheckConstraint(
             "low <= open AND low <= close AND high >= open AND high >= close", name="ck_frame_ohlc"
         ),
+        CheckConstraint(
+            "(index_price IS NULL OR index_price > 0) AND "
+            "(primary_spot_price IS NULL OR primary_spot_price > 0) AND "
+            "(secondary_venue_price IS NULL OR secondary_venue_price > 0)",
+            name="ck_frame_reference_prices_positive",
+        ),
         CheckConstraint("bar_open_at < bar_close_at", name="ck_frame_bar_time_order"),
         CheckConstraint("bar_close_at <= observed_at", name="ck_frame_observed_time_order"),
         CheckConstraint(
@@ -64,10 +70,15 @@ class MarketFrameModel(Base):
     best_bid: Mapped[Decimal | None] = mapped_column(MONEY)
     best_ask: Mapped[Decimal | None] = mapped_column(MONEY)
     mark_price: Mapped[Decimal | None] = mapped_column(MONEY)
+    index_price: Mapped[Decimal | None] = mapped_column(MONEY)
     funding_rate: Mapped[Decimal | None] = mapped_column(MONEY)
+    primary_spot_price: Mapped[Decimal | None] = mapped_column(MONEY)
+    secondary_venue_price: Mapped[Decimal | None] = mapped_column(MONEY)
+    bar_snapshot_json: Mapped[dict[str, MutableJsonValue]] = mapped_column(JSONB, nullable=False)
     orderbook_snapshot_json: Mapped[dict[str, MutableJsonValue]] = mapped_column(
         JSONB, nullable=False
     )
+    source_manifest_json: Mapped[dict[str, MutableJsonValue]] = mapped_column(JSONB, nullable=False)
     source_sequence_json: Mapped[dict[str, MutableJsonValue]] = mapped_column(JSONB, nullable=False)
     quality_status: Mapped[str] = mapped_column(String(32), nullable=False)
     quality_results_json: Mapped[dict[str, MutableJsonValue]] = mapped_column(JSONB, nullable=False)

@@ -250,6 +250,12 @@ async def test_quarantine_creates_complete_visible_outcome_without_running_featu
     assert first.bundle.cycle.disposition is Disposition.NEUTRAL
     assert first.bundle.cycle.direction is Direction.NEUTRAL
     assert first.bundle.proposal is None
+    assert first.bundle.market_frame.index_price == command.frame.index_price
+    assert first.bundle.market_frame.primary_spot_price == command.frame.primary_spot_price
+    assert first.bundle.market_frame.secondary_venue_price == command.frame.secondary_venue_price
+    assert first.bundle.market_frame.bar_snapshot["trade_count"] == 50
+    assert set(first.bundle.market_frame.source_manifest) == set(command.frame.source_manifest)
+    assert first.bundle.market_frame.orderbook_snapshot["bids"]
     assert tuple(item.agent_name for item in first.bundle.agents) == ALL_AGENTS
     assert all(item.direction is Direction.NEUTRAL for item in first.bundle.agents)
     assert all(ReasonCode.DATA_QUALITY_FAILED in item.reason_codes for item in first.bundle.agents)

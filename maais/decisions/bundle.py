@@ -68,8 +68,13 @@ class MarketFrameRecord:
     best_bid: Decimal | None
     best_ask: Decimal | None
     mark_price: Decimal | None
+    index_price: Decimal | None
     funding_rate: Decimal | None
+    primary_spot_price: Decimal | None
+    secondary_venue_price: Decimal | None
+    bar_snapshot: Mapping[str, JsonValue]
     orderbook_snapshot: Mapping[str, JsonValue]
+    source_manifest: Mapping[str, JsonValue]
     source_sequence: Mapping[str, JsonValue]
     quality_status: QualityStatus
     quality_results: Mapping[str, JsonValue]
@@ -94,13 +99,29 @@ class MarketFrameRecord:
         _validate_decimal("volume", self.volume, nonnegative=True)
         if self.low > min(self.open, self.close) or self.high < max(self.open, self.close):
             raise ValueError("OHLC values are inconsistent")
-        for name in ("best_bid", "best_ask", "mark_price", "funding_rate"):
+        for name in (
+            "best_bid",
+            "best_ask",
+            "mark_price",
+            "index_price",
+            "funding_rate",
+            "primary_spot_price",
+            "secondary_venue_price",
+        ):
             value = getattr(self, name)
             if value is not None:
                 _validate_decimal(name, value)
+                if name != "funding_rate" and value <= 0:
+                    raise ValueError(f"{name} must be positive")
         if len(self.content_hash) != 64:
             raise ValueError("market frame content_hash must be SHA-256")
-        for name in ("orderbook_snapshot", "source_sequence", "quality_results"):
+        for name in (
+            "bar_snapshot",
+            "orderbook_snapshot",
+            "source_manifest",
+            "source_sequence",
+            "quality_results",
+        ):
             object.__setattr__(self, name, _freeze_mapping(getattr(self, name)))
 
 

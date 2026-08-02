@@ -275,27 +275,69 @@ class MarketDataRepository:
                 sequence = raw.get("sequence")
                 if isinstance(sequence, int) and not isinstance(sequence, bool):
                     sequences[name] = sequence
+            bar_snapshot = row.bar_snapshot_json
+            has_complete_bar = all(
+                name in bar_snapshot
+                for name in (
+                    "timeframe",
+                    "bar_open_at",
+                    "bar_close_at",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "quote_volume",
+                    "trade_count",
+                    "taker_buy_volume",
+                    "taker_buy_quote_volume",
+                    "closed",
+                )
+            )
+            if has_complete_bar:
+                raw_trade_count = bar_snapshot["trade_count"]
+                if isinstance(raw_trade_count, bool) or not isinstance(raw_trade_count, (str, int)):
+                    raise OperationalStateConflict("persisted bar trade_count is invalid")
+                if bar_snapshot["closed"] is not True:
+                    raise OperationalStateConflict("persisted feature history bar is not closed")
+                bar = ClosedBarPayload(
+                    timeframe=str(bar_snapshot["timeframe"]),
+                    bar_open_at=_parse_datetime(bar_snapshot["bar_open_at"]),
+                    bar_close_at=_parse_datetime(bar_snapshot["bar_close_at"]),
+                    open=Decimal(str(bar_snapshot["open"])),
+                    high=Decimal(str(bar_snapshot["high"])),
+                    low=Decimal(str(bar_snapshot["low"])),
+                    close=Decimal(str(bar_snapshot["close"])),
+                    volume=Decimal(str(bar_snapshot["volume"])),
+                    quote_volume=Decimal(str(bar_snapshot["quote_volume"])),
+                    trade_count=int(raw_trade_count),
+                    taker_buy_volume=Decimal(str(bar_snapshot["taker_buy_volume"])),
+                    taker_buy_quote_volume=Decimal(str(bar_snapshot["taker_buy_quote_volume"])),
+                    closed=True,
+                )
+            else:
+                bar = ClosedBarPayload(
+                    timeframe=row.timeframe,
+                    bar_open_at=row.bar_open_at,
+                    bar_close_at=row.bar_close_at,
+                    open=Decimal(row.open),
+                    high=Decimal(row.high),
+                    low=Decimal(row.low),
+                    close=Decimal(row.close),
+                    volume=Decimal(row.volume),
+                    quote_volume=Decimal("0"),
+                    trade_count=0,
+                    taker_buy_volume=Decimal("0"),
+                    taker_buy_quote_volume=Decimal("0"),
+                    closed=True,
+                )
             snapshots.append(
                 CommittedFrameSnapshot(
                     experiment_id=row.experiment_id,
                     frame_id=row.id,
                     symbol=row.symbol,
                     timeframe=row.timeframe,
-                    bar=ClosedBarPayload(
-                        timeframe=row.timeframe,
-                        bar_open_at=row.bar_open_at,
-                        bar_close_at=row.bar_close_at,
-                        open=Decimal(row.open),
-                        high=Decimal(row.high),
-                        low=Decimal(row.low),
-                        close=Decimal(row.close),
-                        volume=Decimal(row.volume),
-                        quote_volume=Decimal("0"),
-                        trade_count=0,
-                        taker_buy_volume=Decimal("0"),
-                        taker_buy_quote_volume=Decimal("0"),
-                        closed=True,
-                    ),
+                    bar=bar,
                     source_sequences=sequences,
                     content_hash=row.content_hash,
                 )

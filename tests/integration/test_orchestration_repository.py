@@ -196,6 +196,9 @@ async def test_persisted_frame_restores_causal_feature_history(
     assert len(restored) == 1
     assert restored[0].frame_id == command.frame.frame_id
     assert restored[0].bar.close == command.frame.bar.close
+    assert restored[0].bar.quote_volume == command.frame.bar.quote_volume
+    assert restored[0].bar.trade_count == command.frame.bar.trade_count
+    assert restored[0].bar.taker_buy_volume == command.frame.bar.taker_buy_volume
     assert restored[0].source_sequences == {
         name: source.sequence
         for name, source in command.frame.source_manifest.items()

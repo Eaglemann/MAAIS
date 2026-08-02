@@ -1181,7 +1181,11 @@ class OfficialOrchestrationService:
             best_bid=frame.best_bid,
             best_ask=frame.best_ask,
             mark_price=frame.mark_price,
+            index_price=frame.index_price,
             funding_rate=frame.funding_rate,
+            primary_spot_price=frame.primary_spot_price,
+            secondary_venue_price=frame.secondary_venue_price,
+            bar_snapshot=_json_object(frame.bar.to_dict()),
             orderbook_snapshot=_json_object(
                 {
                     "bids": [level.to_dict() for level in frame.book_bids],
@@ -1193,6 +1197,9 @@ class OfficialOrchestrationService:
                         book_source.content_hash if book_source is not None else None
                     ),
                 }
+            ),
+            source_manifest=_json_object(
+                {name: source.to_dict() for name, source in sorted(frame.source_manifest.items())}
             ),
             source_sequence=_json_object(
                 {
