@@ -96,3 +96,23 @@ def test_released_worker_lease_requires_ordered_release_metadata() -> None:
             released_at=NOW + timedelta(seconds=1),
             epoch=1,
         )
+
+
+def test_checkpoint_restart_preserves_history_under_new_worker() -> None:
+    running = _checkpoint().transition(
+        WorkerStatus.RUNNING,
+        NOW + timedelta(seconds=1),
+        {"cursor_count": 1},
+    )
+
+    restarted = running.restart(
+        worker_id=UUID(int=3),
+        checkpoint_at=NOW + timedelta(seconds=31),
+        state={"cursor_count": 1, "lease_epoch": 2},
+    )
+
+    assert restarted.worker_id == UUID(int=3)
+    assert restarted.status is WorkerStatus.STARTING
+    assert restarted.version == 3
+    assert restarted.events[-1].payload["previous_worker_id"] == str(UUID(int=2))
+    assert restarted.state == {"cursor_count": 1, "lease_epoch": 2}

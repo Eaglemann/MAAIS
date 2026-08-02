@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from maais.db.models.operations import WorkerCheckpointModel
+from maais.db.models.operations import WorkerCheckpointModel, WorkerLeaseModel
 from maais.db.repositories.counterfactuals import (
     CounterfactualRecordResult,
     CounterfactualRepository,
@@ -259,8 +259,7 @@ class OrchestrationRepository:
             )
             if existing is None:
                 raise RuntimeError("worker checkpoint disappeared after conflict")
-            if existing.worker_id != checkpoint.worker_id:
-                raise OperationalStateConflict("worker checkpoint belongs to another worker")
+            owner_changed = existing.worker_id != checkpoint.worker_id
             previous_version = existing.version
             if checkpoint.version < previous_version:
                 raise StaleOperationalState("worker checkpoint is older than persisted state")
@@ -279,6 +278,28 @@ class OrchestrationRepository:
                 or new_transitions[0].sequence != previous_version + 1
             ):
                 raise StaleOperationalState("checkpoint transitions are not contiguous")
+            if owner_changed:
+                lease = await self._session.scalar(
+                    select(WorkerLeaseModel)
+                    .where(WorkerLeaseModel.experiment_id == checkpoint.experiment_id)
+                    .with_for_update()
+                )
+                if (
+                    lease is None
+                    or lease.status != "active"
+                    or lease.worker_id != checkpoint.worker_id
+                    or checkpoint.checkpoint_at >= lease.expires_at
+                ):
+                    raise OperationalStateConflict(
+                        "checkpoint ownership change requires the active worker lease"
+                    )
+                if (
+                    checkpoint.status is not WorkerStatus.STARTING
+                    or new_transitions[0].event_type != "worker_checkpoint.starting"
+                ):
+                    raise OperationalStateConflict(
+                        "checkpoint ownership change requires a starting transition"
+                    )
             for key, value in self._values(checkpoint, state, state_hash).items():
                 if key != "experiment_id":
                     setattr(existing, key, value)

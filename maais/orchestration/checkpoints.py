@@ -173,6 +173,39 @@ class WorkerCheckpoint:
             events=(*self.events, event),
         )
 
+    def restart(
+        self,
+        *,
+        worker_id: UUID,
+        checkpoint_at: datetime,
+        state: Mapping[str, object],
+    ) -> WorkerCheckpoint:
+        if worker_id.int == 0 or worker_id == self.worker_id:
+            raise ValueError("checkpoint restart requires a different non-nil worker")
+        _require_utc(checkpoint_at)
+        if checkpoint_at < self.checkpoint_at:
+            raise ValueError("checkpoint time cannot regress")
+        normalized = _payload(state)
+        event = CheckpointTransition(
+            sequence=self.version + 1,
+            event_type="worker_checkpoint.starting",
+            event_at=checkpoint_at,
+            payload={
+                **normalized,
+                "previous_worker_id": str(self.worker_id),
+                "previous_status": self.status.value,
+            },
+        )
+        return replace(
+            self,
+            worker_id=worker_id,
+            status=WorkerStatus.STARTING,
+            state=normalized,
+            checkpoint_at=checkpoint_at,
+            version=self.version + 1,
+            events=(*self.events, event),
+        )
+
 
 def _require_utc(value: datetime) -> None:
     if value.tzinfo is None or value.utcoffset() != timedelta(0):

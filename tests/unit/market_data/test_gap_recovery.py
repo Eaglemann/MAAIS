@@ -150,7 +150,16 @@ def test_recovery_state_blocks_entries_until_validated_batch_completes() -> None
     )
 
     running = state.begin(NOW + timedelta(minutes=3, milliseconds=1))
-    completed = running.complete(batch, NOW + timedelta(minutes=3, milliseconds=2))
+    with pytest.raises(RuntimeError, match="every event"):
+        running.complete(batch, NOW + timedelta(minutes=3, milliseconds=2))
+    cursor = _cursor()
+    for index, event in enumerate((*batch.events, _closed_bar(3, 103)), start=2):
+        cursor = cursor.advance_closed_bar(event)
+        running = running.record_dispatch(
+            cursor,
+            NOW + timedelta(minutes=3, milliseconds=index),
+        )
+    completed = running.complete(batch, NOW + timedelta(minutes=3, milliseconds=5))
 
     assert state.entries_blocked
     assert running.status is RecoveryStatus.BACKFILLING
@@ -158,7 +167,7 @@ def test_recovery_state_blocks_entries_until_validated_batch_completes() -> None
     assert completed.status is RecoveryStatus.COMPLETED
     assert not completed.entries_blocked
     assert completed.source_hash == batch.content_hash
-    assert [event.sequence for event in completed.events] == [1, 2, 3]
+    assert [event.sequence for event in completed.events] == [1, 2, 3, 4, 5, 6]
 
 
 def test_failed_recovery_remains_blocking_and_cannot_complete() -> None:

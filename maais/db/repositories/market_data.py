@@ -147,6 +147,8 @@ def _recovery_state(recovery: RecoveryState) -> dict[str, MutableJsonValue]:
             "changed_at": recovery.changed_at,
             "completed_at": recovery.completed_at,
             "version": recovery.version,
+            "dispatched_through_sequence": recovery.dispatched_through_sequence,
+            "dispatched_through_event_id": recovery.dispatched_through_event_id,
             "events": [
                 {
                     "sequence": event.sequence,
@@ -199,6 +201,16 @@ def _recovery_from_state(state: Mapping[str, object]) -> RecoveryState:
         ),
         version=int(cast(str | int, state["version"])),
         events=events,
+        dispatched_through_sequence=(
+            int(cast(str | int, state["dispatched_through_sequence"]))
+            if state.get("dispatched_through_sequence") is not None
+            else None
+        ),
+        dispatched_through_event_id=(
+            str(state["dispatched_through_event_id"])
+            if state.get("dispatched_through_event_id") is not None
+            else None
+        ),
     )
 
 

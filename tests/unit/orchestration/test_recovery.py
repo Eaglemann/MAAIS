@@ -63,6 +63,23 @@ class _Store:
             assert self.existing.recovery_id == recovery_id
         return self.existing
 
+    async def load_active(self, cursor: MarketCursor) -> RecoveryState | None:
+        if self.existing is None or self.existing.status not in {
+            RecoveryStatus.DETECTED,
+            RecoveryStatus.BACKFILLING,
+        }:
+            return None
+        gap = self.existing.gap
+        if (
+            self.existing.experiment_id == cursor.experiment_id
+            and gap.venue == cursor.venue
+            and gap.stream == cursor.stream
+            and gap.symbol == cursor.symbol
+            and gap.timeframe == cursor.timeframe
+        ):
+            return self.existing
+        return None
+
     async def save(self, recovery: RecoveryState) -> None:
         self.saved.append(recovery)
         self.existing = recovery
@@ -81,11 +98,15 @@ async def _no_sleep(_: float) -> None:
     return None
 
 
-def _caught_up(preparation: RecoveryPreparation) -> MarketCursor:
+def _caught_up(
+    manager: GapRecoveryManager,
+    preparation: RecoveryPreparation,
+) -> tuple[RecoveryPreparation, MarketCursor]:
     cursor = _cursor()
     for event in preparation.dispatch_events:
         cursor = cursor.advance_closed_bar(event)
-    return cursor
+        preparation = manager.progress(preparation, dispatched_cursor=cursor)
+    return preparation, cursor
 
 
 async def test_prepare_persists_detection_before_fetch_and_returns_exact_dispatch_order() -> None:
@@ -124,7 +145,7 @@ async def test_complete_requires_durable_cursor_at_candidate() -> None:
     with pytest.raises(GapRecoveryNotCaughtUp):
         await manager.complete(preparation, caught_up_cursor=_cursor())
 
-    caught_up = _caught_up(preparation)
+    preparation, caught_up = _caught_up(manager, preparation)
     completed = await manager.complete(preparation, caught_up_cursor=caught_up)
 
     assert completed.status is RecoveryStatus.COMPLETED
@@ -218,6 +239,29 @@ async def test_backfilling_recovery_resumes_without_duplicate_attempt_transition
     assert store.saved == []
 
 
+async def test_partial_dispatch_progress_resumes_original_recovery_without_duplicates() -> None:
+    store = _Store()
+    manager = GapRecoveryManager(
+        backfill=_Backfill(),
+        store=store,
+        now=_Clock(),
+        sleep=_no_sleep,
+    )
+    candidate = _closed_bar(3, 103)
+    preparation = await manager.prepare(_cursor(), candidate)
+    assert preparation is not None
+    partial_cursor = _cursor().advance_closed_bar(preparation.dispatch_events[0])
+    preparation = manager.progress(preparation, dispatched_cursor=partial_cursor)
+    await store.save(preparation.recovery)
+
+    resumed = await manager.prepare(partial_cursor, candidate)
+
+    assert resumed is not None
+    assert resumed.recovery == preparation.recovery
+    assert [event.sequence for event in resumed.dispatch_events] == [102, 103]
+    assert resumed.recovery.recovery_id == preparation.recovery.recovery_id
+
+
 async def test_contiguous_candidate_bypasses_recovery_store() -> None:
     store = _Store()
     manager = GapRecoveryManager(
@@ -248,13 +292,14 @@ async def test_completion_rejects_same_sequence_with_different_event_identity() 
         started_at=NOW + timedelta(minutes=5),
     ).begin(NOW + timedelta(minutes=5, milliseconds=1))
     preparation = RecoveryPreparation(state, batch, candidate)
-    wrong = replace(_caught_up(preparation), event_id="conflicting-candidate")
     manager = GapRecoveryManager(
         backfill=_Backfill(),
         store=_Store(state),
         now=_Clock(),
         sleep=_no_sleep,
     )
+    preparation, caught_up = _caught_up(manager, preparation)
+    wrong = replace(caught_up, event_id="conflicting-candidate")
 
     with pytest.raises(GapRecoveryNotCaughtUp):
         await manager.complete(preparation, caught_up_cursor=wrong)

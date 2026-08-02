@@ -249,8 +249,12 @@ async def test_worker_checkpoint_uses_optimistic_versions_and_restores(
         assert not (await uow.orchestration.record_checkpoint(running)).created
         assert await uow.orchestration.get_checkpoint(manifest.experiment_id) == running
 
-    wrong_worker = replace(running, worker_id=UUID(int=902))
-    with pytest.raises(OperationalStateConflict, match="another worker"):
+    wrong_worker = running.restart(
+        worker_id=UUID(int=902),
+        checkpoint_at=NOW + timedelta(seconds=2),
+        state={"cursor_count": 1},
+    )
+    with pytest.raises(OperationalStateConflict, match="active worker lease"):
         async with uow_factory.begin() as uow:
             await uow.orchestration.record_checkpoint(wrong_worker)
 
@@ -336,6 +340,50 @@ async def test_worker_lease_blocks_competitors_and_audits_expiry_takeover(
         "worker_lease.taken_over",
         "worker_lease.released",
     )
+
+
+async def test_expired_lease_takeover_can_restart_existing_checkpoint(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest = await _manifest_in_database(uow_factory)
+    first_worker = UUID(int=921)
+    second_worker = UUID(int=922)
+    checkpoint = WorkerCheckpoint.create(
+        experiment_id=manifest.experiment_id,
+        worker_id=first_worker,
+        checkpoint_at=NOW,
+        state={"cursor_count": 0, "lease_epoch": 1},
+    ).transition(
+        WorkerStatus.RUNNING,
+        NOW + timedelta(seconds=1),
+        {"cursor_count": 1, "lease_epoch": 1},
+    )
+    async with uow_factory.begin() as uow:
+        await uow.workers.acquire(
+            experiment_id=manifest.experiment_id,
+            worker_id=first_worker,
+            acquired_at=NOW,
+            ttl=timedelta(seconds=30),
+        )
+        await uow.orchestration.record_checkpoint(checkpoint)
+
+    restarted = checkpoint.restart(
+        worker_id=second_worker,
+        checkpoint_at=NOW + timedelta(seconds=30),
+        state={"cursor_count": 1, "lease_epoch": 2},
+    )
+    async with uow_factory.begin() as uow:
+        await uow.workers.acquire(
+            experiment_id=manifest.experiment_id,
+            worker_id=second_worker,
+            acquired_at=NOW + timedelta(seconds=30),
+            ttl=timedelta(seconds=30),
+        )
+        await uow.orchestration.record_checkpoint(restarted)
+
+    async with uow_factory.begin() as uow:
+        assert await uow.orchestration.get_checkpoint(manifest.experiment_id) == restarted
+        assert (await verify_ledger_consistency(uow.session)).ok
 
 
 async def test_quality_rows_are_complete_idempotent_and_event_backed(

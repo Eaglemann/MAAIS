@@ -311,6 +311,8 @@ class RecoveryState:
     completed_at: datetime | None
     version: int
     events: tuple[RecoveryTransition, ...]
+    dispatched_through_sequence: int | None = None
+    dispatched_through_event_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.recovery_id.int == 0 or self.experiment_id.int == 0:
@@ -336,6 +338,18 @@ class RecoveryState:
             raise ValueError("failed recovery requires a reason")
         if self.status is not RecoveryStatus.FAILED and self.failure_reason is not None:
             raise ValueError("only a failed recovery can have a failure reason")
+        if (self.dispatched_through_sequence is None) != (self.dispatched_through_event_id is None):
+            raise ValueError("recovery dispatch progress identity must be complete")
+        if self.dispatched_through_sequence is not None and (
+            self.dispatched_through_sequence < self.gap.start_sequence
+            or self.dispatched_through_sequence > self.gap.end_sequence_exclusive
+            or not self.dispatched_through_event_id
+        ):
+            raise ValueError("recovery dispatch progress is outside the recovery range")
+        if self.status is RecoveryStatus.COMPLETED and (
+            self.dispatched_through_sequence != self.gap.end_sequence_exclusive
+        ):
+            raise ValueError("completed recovery requires dispatch through the candidate")
         if len(self.events) != self.version or tuple(
             event.sequence for event in self.events
         ) != tuple(range(1, self.version + 1)):
@@ -408,6 +422,8 @@ class RecoveryState:
         validated = validate_backfill(self.gap, batch.events)
         if validated.content_hash != batch.content_hash:
             raise ValueError("backfill batch content hash is invalid")
+        if self.dispatched_through_sequence != self.gap.end_sequence_exclusive:
+            raise RuntimeError("recovery cannot complete before every event is dispatched")
         return self._advance(
             status=RecoveryStatus.COMPLETED,
             event_type="market_recovery.completed",
@@ -415,6 +431,42 @@ class RecoveryState:
             payload={"source_hash": batch.content_hash, "events": len(batch.events)},
             source_hash=batch.content_hash,
             completed_at=completed_at,
+        )
+
+    def record_dispatch(
+        self,
+        cursor: MarketCursor,
+        changed_at: datetime,
+    ) -> RecoveryState:
+        if self.status is not RecoveryStatus.BACKFILLING:
+            raise RuntimeError("only a backfilling recovery can record dispatch progress")
+        gap = self.gap
+        if (
+            cursor.experiment_id != self.experiment_id
+            or cursor.venue != gap.venue
+            or cursor.stream != gap.stream
+            or cursor.symbol != gap.symbol
+            or cursor.timeframe != gap.timeframe
+        ):
+            raise ValueError("recovery dispatch cursor identity differs")
+        expected = (
+            gap.start_sequence
+            if self.dispatched_through_sequence is None
+            else self.dispatched_through_sequence + 1
+        )
+        if cursor.sequence != expected or cursor.sequence > gap.end_sequence_exclusive:
+            raise ValueError("recovery dispatch cursor is not the next expected event")
+        return self._advance(
+            status=RecoveryStatus.BACKFILLING,
+            event_type="market_recovery.dispatch_progressed",
+            event_at=changed_at,
+            payload={
+                "event_id": cursor.event_id,
+                "sequence": cursor.sequence,
+                "bar_close_at": cursor.bar_close_at,
+            },
+            dispatched_through_sequence=cursor.sequence,
+            dispatched_through_event_id=cursor.event_id,
         )
 
     def retry(self, reason: str, retry_at: datetime) -> RecoveryState:

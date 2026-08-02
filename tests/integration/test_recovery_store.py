@@ -33,7 +33,11 @@ async def test_postgres_recovery_completion_locks_and_verifies_caught_up_cursor(
     caught_up = initial
     for event in (*batch.events, candidate):
         caught_up = caught_up.advance_closed_bar(event)
-    completed = running.complete(batch, NOW + timedelta(minutes=5, milliseconds=2))
+        running = running.record_dispatch(
+            caught_up,
+            NOW + timedelta(minutes=5, milliseconds=running.version),
+        )
+    completed = running.complete(batch, NOW + timedelta(minutes=6))
     store = PostgresRecoveryStateStore(uow_factory)
 
     await store.save(detected)
@@ -49,3 +53,28 @@ async def test_postgres_recovery_completion_locks_and_verifies_caught_up_cursor(
     await store.complete(completed, expected_cursor=caught_up)
 
     assert await store.load(completed.recovery_id) == completed
+
+
+async def test_postgres_store_finds_active_recovery_for_partially_advanced_cursor(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest = await _manifest_in_database(uow_factory)
+    initial = replace(_cursor(), experiment_id=manifest.experiment_id)
+    candidate = _closed_bar(3, 103)
+    gap = detect_closed_bar_gap(initial, candidate)
+    assert gap is not None
+    running = RecoveryState.create(
+        recovery_id=recovery_id_for_gap(gap),
+        experiment_id=manifest.experiment_id,
+        gap=gap,
+        started_at=NOW + timedelta(minutes=5),
+    ).begin(NOW + timedelta(minutes=5, milliseconds=1))
+    partial_cursor = initial.advance_closed_bar(_closed_bar(1, 101))
+    running = running.record_dispatch(
+        partial_cursor,
+        NOW + timedelta(minutes=5, milliseconds=2),
+    )
+    store = PostgresRecoveryStateStore(uow_factory)
+    await store.save(running)
+
+    assert await store.load_active(partial_cursor) == running

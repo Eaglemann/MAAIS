@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -35,6 +35,8 @@ class ClosedBarBackfillPort(Protocol):
 
 class RecoveryStateStore(Protocol):
     async def load(self, recovery_id: UUID) -> RecoveryState | None: ...
+
+    async def load_active(self, cursor: MarketCursor) -> RecoveryState | None: ...
 
     async def save(self, recovery: RecoveryState) -> None: ...
 
@@ -94,7 +96,12 @@ class RecoveryPreparation:
 
     @property
     def dispatch_events(self) -> tuple[ObservedMarketEvent, ...]:
-        return (*self.batch.events, self.candidate)
+        after = self.recovery.dispatched_through_sequence
+        return tuple(
+            event
+            for event in (*self.batch.events, self.candidate)
+            if event.sequence is not None and (after is None or event.sequence > after)
+        )
 
 
 class GapRecoveryManager:
@@ -126,11 +133,17 @@ class GapRecoveryManager:
         cursor: MarketCursor,
         candidate: ObservedMarketEvent,
     ) -> RecoveryPreparation | None:
-        gap = detect_closed_bar_gap(cursor, candidate)
-        if gap is None:
-            return None
-        recovery_id = recovery_id_for_gap(gap)
-        state = await self._store.load(recovery_id)
+        state = await self._store.load_active(cursor)
+        if state is not None:
+            gap = state.gap
+            _require_active_cursor_matches(state, cursor)
+            recovery_id = state.recovery_id
+        else:
+            gap = detect_closed_bar_gap(cursor, candidate)
+            if gap is None:
+                return None
+            recovery_id = recovery_id_for_gap(gap)
+            state = await self._store.load(recovery_id)
         if state is None:
             detected_at = self._utc_now()
             state = RecoveryState.create(
@@ -182,6 +195,18 @@ class GapRecoveryManager:
                 candidate=candidate,
             )
 
+    def progress(
+        self,
+        preparation: RecoveryPreparation,
+        *,
+        dispatched_cursor: MarketCursor,
+    ) -> RecoveryPreparation:
+        progressed = preparation.recovery.record_dispatch(
+            dispatched_cursor,
+            self._utc_now(),
+        )
+        return replace(preparation, recovery=progressed)
+
     async def complete(
         self,
         preparation: RecoveryPreparation,
@@ -232,6 +257,37 @@ def _require_caught_up(
         raise GapRecoveryNotCaughtUp(
             "recovery cannot complete before the candidate cursor is durable"
         )
+    if (
+        preparation.recovery.dispatched_through_sequence != cursor.sequence
+        or preparation.recovery.dispatched_through_event_id != cursor.event_id
+    ):
+        raise GapRecoveryNotCaughtUp(
+            "recovery progress was not persisted through the candidate cursor"
+        )
+
+
+def _require_active_cursor_matches(
+    recovery: RecoveryState,
+    cursor: MarketCursor,
+) -> None:
+    gap = recovery.gap
+    if (
+        recovery.experiment_id != cursor.experiment_id
+        or gap.venue != cursor.venue
+        or gap.stream != cursor.stream
+        or gap.symbol != cursor.symbol
+        or gap.timeframe != cursor.timeframe
+    ):
+        raise GapRecoveryIdentityConflict("active recovery belongs to another cursor")
+    progressed = recovery.dispatched_through_sequence
+    if progressed is None:
+        if cursor.sequence != gap.start_sequence - 1:
+            raise GapRecoveryNotCaughtUp(
+                "cursor advanced without matching persisted recovery progress"
+            )
+        return
+    if cursor.sequence != progressed or cursor.event_id != recovery.dispatched_through_event_id:
+        raise GapRecoveryNotCaughtUp("cursor and persisted recovery dispatch progress differ")
 
 
 def _failure_reason(exc: Exception) -> str:

@@ -279,3 +279,48 @@ def test_frame_rejects_open_wrong_interval_and_key_mismatch() -> None:
             bar,
             inputs,
         )
+
+
+def test_recovered_bar_uses_explicit_historical_cutoff_without_current_lookahead() -> None:
+    inputs = _inputs()
+    recovered_bar = replace(
+        inputs[0],
+        observed_at=NOW + timedelta(minutes=5),
+    )
+    current_book = replace(
+        _book("book-current", 90, "200", "201", 200),
+        venue_event_at=NOW + timedelta(minutes=4),
+        observed_at=NOW + timedelta(minutes=4),
+    )
+
+    frame = CausalMinuteFrameBuilder().build(
+        _key(),
+        recovered_bar,
+        (recovered_bar, current_book),
+        decision_cutoff=NOW + timedelta(seconds=1),
+    )
+
+    assert frame.cutoff_at == NOW + timedelta(seconds=1)
+    assert "closed_bar" in frame.source_manifest
+    assert "order_book" not in frame.source_manifest
+    assert frame.best_bid is None
+
+
+def test_explicit_frame_cutoff_cannot_precede_close_or_follow_observation() -> None:
+    inputs = _inputs()
+    builder = CausalMinuteFrameBuilder()
+
+    with pytest.raises(ValueError, match="between bar close"):
+        builder.build(
+            _key(),
+            inputs[0],
+            inputs,
+            decision_cutoff=NOW - timedelta(microseconds=1),
+        )
+    with pytest.raises(ValueError, match="between bar close"):
+        builder.build(
+            _key(),
+            inputs[0],
+            inputs,
+            decision_cutoff=NOW + timedelta(seconds=1),
+        )

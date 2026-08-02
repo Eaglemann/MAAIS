@@ -148,6 +148,8 @@ class CausalMinuteFrameBuilder:
         key: FrameKey,
         closed_bar_event: ObservedMarketEvent,
         events: tuple[ObservedMarketEvent, ...],
+        *,
+        decision_cutoff: datetime | None = None,
     ) -> CausalMinuteFrame:
         if closed_bar_event.kind is not MarketEventKind.CLOSED_BAR or not isinstance(
             closed_bar_event.payload, ClosedBarPayload
@@ -164,13 +166,17 @@ class CausalMinuteFrameBuilder:
             or key.bar_close_at != bar.bar_close_at
         ):
             raise ValueError("frame key does not match the closed bar")
-        cutoff = closed_bar_event.observed_at
+        cutoff = decision_cutoff or closed_bar_event.observed_at
+        if cutoff.tzinfo is None or cutoff.utcoffset() != timedelta(0):
+            raise ValueError("frame decision cutoff must be UTC-aware")
+        if cutoff < bar.bar_close_at or cutoff > closed_bar_event.observed_at:
+            raise ValueError(
+                "frame decision cutoff must fall between bar close and bar observation"
+            )
         available = tuple(
-            event
-            for event in (*events, closed_bar_event)
-            if event.symbol == key.symbol and event.observed_at <= cutoff
+            event for event in events if event.symbol == key.symbol and event.observed_at <= cutoff
         )
-        deduplicated = self._deduplicate(available)
+        deduplicated = self._deduplicate((*available, closed_bar_event))
         canonical_bar = next(
             (
                 event
