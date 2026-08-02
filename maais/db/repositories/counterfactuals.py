@@ -252,6 +252,33 @@ class CounterfactualRepository:
             raise CounterfactualIdentityConflict("counterfactual projection hash differs")
         return state
 
+    async def get_unresolved(
+        self,
+        experiment_id: UUID,
+    ) -> tuple[CounterfactualState, ...]:
+        rows = (
+            await self._session.scalars(
+                select(CounterfactualModel)
+                .where(
+                    CounterfactualModel.experiment_id == experiment_id,
+                    CounterfactualModel.status.in_(
+                        (
+                            CounterfactualStatus.PENDING.value,
+                            CounterfactualStatus.OPEN.value,
+                        )
+                    ),
+                )
+                .order_by(CounterfactualModel.created_at, CounterfactualModel.id)
+            )
+        ).all()
+        states: list[CounterfactualState] = []
+        for row in rows:
+            state = _state_from_json(row.state_json)
+            if content_hash(state_to_dict(state)) != row.content_hash:
+                raise CounterfactualIdentityConflict("counterfactual projection hash differs")
+            states.append(state)
+        return tuple(states)
+
     @staticmethod
     def _values(
         state: CounterfactualState,

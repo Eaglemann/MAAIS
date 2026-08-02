@@ -554,8 +554,8 @@ class OfficialOrchestrationService:
             created_at=command.completed_at,
             expires_at=expires_at,
             taker_fee_rate=context.taker_fee_rate,
-            expected_loss_fraction=analysis.expected_loss,
-            expected_gain_fraction=analysis.expected_gain,
+            expected_loss_fraction=exit_loss,
+            expected_gain_fraction=exit_gain,
             capability=capability,
             exchange_filters=context.exchange_filters,
         )
@@ -1036,11 +1036,13 @@ class OfficialOrchestrationService:
 
     @staticmethod
     def _research_loss(analysis: OfficialDecisionAnalysis) -> Decimal:
-        return analysis.expected_loss if analysis.expected_loss > 0 else Decimal("0.01")
+        value = analysis.expected_loss if analysis.expected_loss > 0 else Decimal("0.01")
+        return value.quantize(Decimal("0.000000000000000001"))
 
     @staticmethod
     def _research_gain(analysis: OfficialDecisionAnalysis) -> Decimal:
-        return analysis.expected_gain if analysis.expected_gain > 0 else Decimal("0.01")
+        value = analysis.expected_gain if analysis.expected_gain > 0 else Decimal("0.01")
+        return value.quantize(Decimal("0.000000000000000001"))
 
     @staticmethod
     def _research_quantity(

@@ -257,6 +257,12 @@ async def test_pending_order_advances_through_two_partial_fills_exactly_once(
                 None,
             )
         )
+    async with uow_factory.begin() as uow:
+        pending_orders = await uow.paper_execution.load_pending_orders(accepted.experiment_id)
+
+    assert len(pending_orders) == 1
+    assert pending_orders[0].order == accepted
+    assert pending_orders[0].exchange_filters == final_record.exchange_filters
 
     first_order = accepted.apply_fill(Decimal("0.04"), NOW + timedelta(milliseconds=3))
     first_fill = replace(
@@ -340,6 +346,13 @@ async def test_pending_order_advances_through_two_partial_fills_exactly_once(
                 second_plan,
             )
         )
+    async with uow_factory.begin() as uow:
+        assert await uow.paper_execution.load_pending_orders(accepted.experiment_id) == ()
+        restored_account = await uow.paper_execution.load_account(accepted.experiment_id)
+        open_exit_plans = await uow.paper_execution.load_open_exit_plans(accepted.experiment_id)
+
+    assert restored_account == second_account
+    assert open_exit_plans == (second_plan,)
 
     factory = async_sessionmaker(db_engine)
     async with factory() as session:

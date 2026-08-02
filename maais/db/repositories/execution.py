@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -24,7 +25,13 @@ from maais.db.models.execution import (
 )
 from maais.db.models.experiments import ExperimentModel
 from maais.db.repositories.events import EventRepository
-from maais.domain.enums import Direction
+from maais.domain.enums import (
+    Direction,
+    PaperOrderSide,
+    PaperOrderStatus,
+    PaperOrderType,
+    PositionEffect,
+)
 from maais.domain.events import NewDomainEvent
 from maais.domain.json import JsonValue, MutableJsonValue, content_hash, freeze_json, to_json_data
 from maais.execution.paper.account import AccountState
@@ -56,6 +63,12 @@ class PaperExecutionResult:
     content_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class PendingPaperOrder:
+    order: PaperOrder
+    exchange_filters: ExchangeFilterSnapshot
+
+
 def _json_object(value: object) -> dict[str, MutableJsonValue]:
     result = to_json_data(value)
     if not isinstance(result, dict):
@@ -82,6 +95,28 @@ def _filters_dict(filters: ExchangeFilterSnapshot) -> dict[str, object]:
         "supported_order_types": filters.supported_order_types,
         "captured_at": filters.captured_at,
     }
+
+
+def _filters_from_json(value: Mapping[str, object]) -> ExchangeFilterSnapshot:
+    captured_at = value.get("captured_at")
+    supported_order_types = value.get("supported_order_types")
+    if not isinstance(captured_at, str):
+        raise TypeError("stored exchange-filter captured_at must be a string")
+    if not isinstance(supported_order_types, list):
+        raise TypeError("stored supported_order_types must be a list")
+    return ExchangeFilterSnapshot(
+        symbol=str(value["symbol"]),
+        status=str(value["status"]),
+        price_tick=Decimal(str(value["price_tick"])),
+        quantity_step=Decimal(str(value["quantity_step"])),
+        minimum_quantity=Decimal(str(value["minimum_quantity"])),
+        maximum_quantity=Decimal(str(value["maximum_quantity"])),
+        minimum_notional=Decimal(str(value["minimum_notional"])),
+        supported_order_types=tuple(
+            PaperOrderType(str(order_type)) for order_type in supported_order_types
+        ),
+        captured_at=datetime.fromisoformat(captured_at.replace("Z", "+00:00")),
+    )
 
 
 def _order_dict(order: PaperOrder) -> dict[str, object]:
@@ -309,6 +344,112 @@ class PaperExecutionRepository:
         if not account.reconcile().ok:
             raise ArithmeticError("restored account does not reconcile")
         return account
+
+    async def load_pending_orders(
+        self,
+        experiment_id: UUID,
+    ) -> tuple[PendingPaperOrder, ...]:
+        pending_statuses = (
+            PaperOrderStatus.CREATED.value,
+            PaperOrderStatus.AUTHORIZED.value,
+            PaperOrderStatus.ACCEPTED.value,
+            PaperOrderStatus.PARTIALLY_FILLED.value,
+        )
+        rows = (
+            await self._session.scalars(
+                select(OrderIntentModel)
+                .where(
+                    OrderIntentModel.experiment_id == experiment_id,
+                    OrderIntentModel.status.in_(pending_statuses),
+                )
+                .order_by(OrderIntentModel.created_at, OrderIntentModel.id)
+            )
+        ).all()
+        result: list[PendingPaperOrder] = []
+        for row in rows:
+            event_rows = (
+                await self._session.scalars(
+                    select(OrderEventModel)
+                    .where(OrderEventModel.order_intent_id == row.id)
+                    .order_by(OrderEventModel.sequence)
+                )
+            ).all()
+            events = tuple(
+                OrderTransition(
+                    sequence=event.sequence,
+                    event_type=event.event_type,
+                    event_at=event.event_at,
+                    payload=_event_object(event.payload_json),
+                )
+                for event in event_rows
+            )
+            if len(events) != row.version or tuple(item.sequence for item in events) != tuple(
+                range(1, row.version + 1)
+            ):
+                raise StaleExecutionState("pending order event stream is incomplete")
+            order = PaperOrder(
+                order_id=row.id,
+                experiment_id=row.experiment_id,
+                proposal_id=row.proposal_id,
+                client_order_id=row.client_order_id,
+                command_hash=row.command_hash,
+                symbol=row.symbol,
+                side=PaperOrderSide(row.side),
+                order_type=PaperOrderType(row.order_type),
+                position_effect=PositionEffect(row.position_effect),
+                quantity=row.quantity,
+                filled_quantity=row.filled_quantity,
+                limit_price=row.limit_price,
+                reduce_only=row.reduce_only,
+                status=PaperOrderStatus(row.status),
+                created_at=row.created_at,
+                expires_at=row.expires_at,
+                version=row.version,
+                events=events,
+            )
+            result.append(
+                PendingPaperOrder(
+                    order=order,
+                    exchange_filters=_filters_from_json(row.exchange_filter_snapshot_json),
+                )
+            )
+        return tuple(result)
+
+    async def load_open_exit_plans(self, experiment_id: UUID) -> tuple[ExitPlan, ...]:
+        rows = (
+            await self._session.scalars(
+                select(ExitPlanModel)
+                .join(PositionModel, PositionModel.id == ExitPlanModel.position_id)
+                .where(
+                    PositionModel.experiment_id == experiment_id,
+                    ExitPlanModel.status.in_(
+                        (ExitPlanStatus.ACTIVE.value, ExitPlanStatus.TRIGGERED.value)
+                    ),
+                )
+                .order_by(ExitPlanModel.created_at, ExitPlanModel.id)
+            )
+        ).all()
+        return tuple(
+            ExitPlan(
+                plan_id=row.id,
+                position_id=row.position_id,
+                side=Direction(row.side),
+                quantity=row.quantity,
+                average_entry=row.average_entry,
+                expected_loss_fraction=row.expected_loss_fraction,
+                expected_gain_fraction=row.expected_gain_fraction,
+                stop_price=row.stop_price,
+                target_price=row.target_price,
+                maximum_bars=row.maximum_bars,
+                bars_elapsed=row.bars_elapsed,
+                opposite_signal_streak=row.opposite_signal_streak,
+                status=ExitPlanStatus(row.status),
+                created_at=row.created_at,
+                changed_at=row.changed_at,
+                version=row.version,
+            )
+            for row in rows
+        )
 
     async def record_sensitivities(
         self,

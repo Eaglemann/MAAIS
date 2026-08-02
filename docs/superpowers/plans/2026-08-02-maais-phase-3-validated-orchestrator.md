@@ -176,7 +176,7 @@ Gate: red tests cover every historical permissive default and prove it now fails
 ## Task 7 - Pure ordered orchestration service
 
 - [x] Define one command from an admitted or quarantined frame plus manifest-pinned dependencies.
-- [ ] For quarantine, persist the frame, eight neutral/nonvoting agent rows, a quarantined decision, data-quality gate, and incident without running features.
+- [x] For quarantine, persist the frame, eight neutral/nonvoting agent rows, a quarantined decision, data-quality gate, and incident without running features.
 - [x] For admitted frames, compute features, eight evaluations, consensus, adversarial result, costs, EV, benchmark alpha, and all ordered gates.
 - [x] Produce neutral cycles without proposals.
 - [x] Produce rejected directional proposals plus isolated counterfactual state.
@@ -192,9 +192,9 @@ Gate: no public method can call the broker with a raw unapproved quantity or byp
 
 - [x] Add revision `0009` for market cursors, quality rows, recovery runs, incidents, and worker checkpoints.
 - [x] Add uniqueness/check constraints for cursor monotonicity, one frame/cycle key, active recovery, incident identity, and checkpoint versions.
-- [ ] Persist frame, quality results, eight evaluations, decision, gates, proposal, counterfactual/execution result, incident, cursor, and outbox atomically where applicable.
+- [x] Persist frame, quality results, eight evaluations, decision, gates, proposal, counterfactual/execution result, incident, cursor, and outbox atomically where applicable.
 - [x] Add optimistic concurrency for worker checkpoints and incident transitions.
-- [ ] Add restart loaders for cursors, active recoveries, pending orders, open positions, exit plans, and unresolved counterfactuals.
+- [x] Add restart loaders for cursors, active recoveries, pending orders, open positions, exit plans, and unresolved counterfactuals.
 - [x] Extend ledger consistency checks across new projections.
 
 Gate: rollback, concurrent duplicate, conflicting retry, and restart tests pass on PostgreSQL revision `0009`.
