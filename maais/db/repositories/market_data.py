@@ -394,16 +394,19 @@ class MarketDataRepository:
         stream: str,
         symbol: str,
         timeframe: str,
+        *,
+        for_update: bool = False,
     ) -> MarketCursor:
-        row = await self._session.scalar(
-            select(MarketCursorModel).where(
-                MarketCursorModel.experiment_id == experiment_id,
-                MarketCursorModel.venue == venue,
-                MarketCursorModel.stream == stream,
-                MarketCursorModel.symbol == symbol,
-                MarketCursorModel.timeframe == timeframe,
-            )
+        statement = select(MarketCursorModel).where(
+            MarketCursorModel.experiment_id == experiment_id,
+            MarketCursorModel.venue == venue,
+            MarketCursorModel.stream == stream,
+            MarketCursorModel.symbol == symbol,
+            MarketCursorModel.timeframe == timeframe,
         )
+        if for_update:
+            statement = statement.with_for_update()
+        row = await self._session.scalar(statement)
         if row is None:
             raise LookupError("market cursor does not exist")
         return _cursor_from_state(cast(Mapping[str, object], row.state_json))

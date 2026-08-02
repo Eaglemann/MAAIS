@@ -115,6 +115,29 @@ def test_backfill_requires_exact_ordered_closed_coverage() -> None:
         validate_backfill(gap, (recovered[0], replace(recovered[1], sequence=105)))
 
 
+def test_recovery_completion_revalidates_batch_hash_and_coverage() -> None:
+    gap = detect_closed_bar_gap(_cursor(), _closed_bar(3, 103))
+    assert gap is not None
+    batch = validate_backfill(gap, (_closed_bar(1, 101), _closed_bar(2, 102)))
+    running = RecoveryState.create(
+        recovery_id=UUID(int=10),
+        experiment_id=UUID(int=1),
+        gap=gap,
+        started_at=NOW + timedelta(minutes=3),
+    ).begin(NOW + timedelta(minutes=3, milliseconds=1))
+
+    with pytest.raises(ValueError, match="content hash"):
+        running.complete(
+            replace(batch, content_hash="0" * 64),
+            NOW + timedelta(minutes=3, milliseconds=2),
+        )
+    with pytest.raises(BackfillValidationError, match="coverage"):
+        running.complete(
+            replace(batch, events=batch.events[:1]),
+            NOW + timedelta(minutes=3, milliseconds=2),
+        )
+
+
 def test_recovery_state_blocks_entries_until_validated_batch_completes() -> None:
     gap = detect_closed_bar_gap(_cursor(), _closed_bar(3, 103))
     assert gap is not None
@@ -156,3 +179,28 @@ def test_failed_recovery_remains_blocking_and_cannot_complete() -> None:
             validate_backfill(gap, (_closed_bar(1, 101), _closed_bar(2, 102))),
             NOW + timedelta(minutes=5),
         )
+
+
+def test_backfill_retry_remains_blocking_and_increments_next_attempt() -> None:
+    gap = detect_closed_bar_gap(_cursor(), _closed_bar(3, 103))
+    assert gap is not None
+    first = RecoveryState.create(
+        recovery_id=UUID(int=10),
+        experiment_id=UUID(int=1),
+        gap=gap,
+        started_at=NOW + timedelta(minutes=3),
+    ).begin(NOW + timedelta(minutes=3, milliseconds=1))
+
+    waiting = first.retry(
+        "TimeoutError:public REST timeout",
+        NOW + timedelta(minutes=3, milliseconds=2),
+    )
+    second = waiting.begin(NOW + timedelta(minutes=3, milliseconds=3))
+
+    assert waiting.status is RecoveryStatus.DETECTED
+    assert waiting.attempt == 1
+    assert waiting.entries_blocked
+    assert waiting.events[-1].event_type == "market_recovery.retry_scheduled"
+    assert second.status is RecoveryStatus.BACKFILLING
+    assert second.attempt == 2
+    assert [event.sequence for event in second.events] == [1, 2, 3, 4]

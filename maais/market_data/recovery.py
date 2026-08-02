@@ -405,6 +405,9 @@ class RecoveryState:
             raise RuntimeError("only backfilling recovery can complete")
         if batch.gap != self.gap:
             raise ValueError("backfill batch belongs to another gap")
+        validated = validate_backfill(self.gap, batch.events)
+        if validated.content_hash != batch.content_hash:
+            raise ValueError("backfill batch content hash is invalid")
         return self._advance(
             status=RecoveryStatus.COMPLETED,
             event_type="market_recovery.completed",
@@ -412,6 +415,18 @@ class RecoveryState:
             payload={"source_hash": batch.content_hash, "events": len(batch.events)},
             source_hash=batch.content_hash,
             completed_at=completed_at,
+        )
+
+    def retry(self, reason: str, retry_at: datetime) -> RecoveryState:
+        if self.status is not RecoveryStatus.BACKFILLING:
+            raise RuntimeError("only a backfilling recovery can schedule a retry")
+        if not reason:
+            raise ValueError("recovery retry reason is required")
+        return self._advance(
+            status=RecoveryStatus.DETECTED,
+            event_type="market_recovery.retry_scheduled",
+            event_at=retry_at,
+            payload={"attempt": self.attempt, "reason": reason},
         )
 
     def fail(self, reason: str, failed_at: datetime) -> RecoveryState:

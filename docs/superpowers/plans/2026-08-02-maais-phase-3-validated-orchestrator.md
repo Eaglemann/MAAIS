@@ -16,6 +16,7 @@
 - 2026-08-02: The pure orchestrator now produces deterministic quarantine and mandatory-agent-failure bundles with incidents, plus admitted neutral, rejected-counterfactual, approved-executed, and approved-but-unfillable halt outcomes. Directional decisions use Decimal consensus, adversarial, cost, EV, benchmark, monitoring, risk, exchange, and broker-capacity gates; successful entries carry exact gate-hash authorization, paper fills, reconciled account/exit state, and sensitivity scenarios. Atomic outcome persistence, protective-exit driving, funding lifecycle, public adapters, and worker resume remain pending.
 - 2026-08-02: Atomic outcome persistence and restart loaders are complete. Revision `0010` persists restartable stop/target trigger reason, venue/local timing, trigger price, executable price, and `Regular`/`Special` funding lineage. Protective marks continue while entries are halted; successful exits and funding reconcile through restart, while unfillable exits atomically persist the triggered plan, critical incident, and terminal experiment halt. Public adapters and worker lifecycle remain pending.
 - 2026-08-02: Strict, keyless public adapters now cover Binance USD-M REST/WebSocket, Binance Spot primary references, and Bybit Spot secondary references for all ten admitted symbols. They retain venue identity, time, sequence availability, executable quote metadata, and fail closed on schema drift, gaps, queue saturation, or unreconciled depth. Binance Spot uses the standard official public origin because a live check found the market-data-only origin too stale for the five-second admission limit. REST closed-bar recovery coordination and the worker lifecycle remain pending.
+- 2026-08-02: Closed-bar gap recovery now persists detection before public REST I/O, fetches and validates the exact missing range, records bounded retry attempts with exponential backoff, and terminally fails after exhaustion. Completion locks PostgreSQL and requires the exact candidate cursor already be durable; the worker still must dispatch recovered bars through normal frame/cycle transactions before calling completion.
 
 ## Current defects this phase must retire
 
@@ -145,7 +146,7 @@ Gate: any failed or required-not-applicable check creates a quarantined cycle an
 
 - [x] Detect exact missing closed-bar intervals from persisted cursors.
 - [ ] Enter a recovery state that blocks new entries but continues protective exits.
-- [ ] Fetch exact REST ranges through an injected backfill port.
+- [x] Fetch exact REST ranges through an injected backfill port.
 - [x] Validate response bounds, duplicates, order, coverage, and closed status.
 - [ ] Rebuild affected derived frames from the earliest changed interval.
 - [x] Persist recovery start, attempts, source hashes, completion, failure, and cursor movement.
