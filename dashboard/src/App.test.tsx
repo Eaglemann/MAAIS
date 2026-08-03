@@ -1,13 +1,21 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "./api";
-import App, { ModelBoundary, OperatorConsole, ResearchLab, TradeTable } from "./App";
+import App, {
+  DecisionTable,
+  ModelBoundary,
+  OperatorConsole,
+  ResearchLab,
+  TradeTable,
+} from "./App";
 import type {
+  DecisionDetail,
+  DecisionPage,
   JsonRecord,
   ExperimentListItem,
   PaperModelAssumptions,
@@ -205,6 +213,7 @@ const PAGE: TradePage = {
       latest_activity_at: "2026-08-02T12:00:01Z",
       symbol: "BTCUSDT",
       direction: "long",
+      strategy_version_id: "99999999-9999-4999-8999-999999999999",
       proposal_status: "approved",
       proposal_reason_code: "accepted",
       approved_notional: "6000",
@@ -220,6 +229,7 @@ const PAGE: TradePage = {
       total_slippage: "0.07",
       counterfactual_status: null,
       counterfactual_pnl: null,
+      outcome: "filled",
     },
   ],
   limit: 100,
@@ -227,6 +237,142 @@ const PAGE: TradePage = {
   next_before_at: null,
   next_before_id: null,
 };
+
+const DECISION_PAGE: DecisionPage = {
+  items: [
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      experiment_id: "33333333-3333-4333-8333-333333333333",
+      market_frame_id: "44444444-4444-4444-8444-444444444444",
+      strategy_version_id: "99999999-9999-4999-8999-999999999999",
+      symbol: "BTCUSDT",
+      timeframe: "1m",
+      cycle_at: "2026-08-02T12:00:00Z",
+      regime: "trending",
+      status: "completed",
+      direction: "long",
+      disposition: "approved",
+      reason_code: "accepted",
+      quality_status: "passed",
+      consensus_direction: "long",
+      consensus_probability: "0.65",
+      consensus_confidence: "0.70",
+      proposal_status: "approved",
+      order_status: "filled",
+      counterfactual_status: null,
+      outcome: "filled",
+      created_at: "2026-08-02T12:00:00Z",
+      completed_at: "2026-08-02T12:00:01Z",
+    },
+  ],
+  limit: 200,
+  has_more: true,
+  next_before_at: "2026-08-02T12:00:00Z",
+  next_before_id: "22222222-2222-4222-8222-222222222222",
+};
+
+const DECISION = DECISION_PAGE.items[0]!;
+
+const DECISION_DETAIL: DecisionDetail = {
+  decision: DECISION,
+  cycle: { feature_snapshot_json: { ema_fast: "60020" } },
+  market_frame: { id: DECISION.market_frame_id },
+  quality_evaluations: [],
+  agents: [],
+  summary: null,
+  gates: [],
+  proposal: null,
+  orders: [],
+  counterfactual: null,
+  incident: null,
+  timeline: [],
+  lineage_hashes: {
+    experiment_manifest: "a".repeat(64),
+    market_frame: "b".repeat(64),
+    decision_cycle: "c".repeat(64),
+  },
+};
+
+describe("Audit Ledger history", () => {
+  it("shows final outcomes and exposes working newer and older navigation", () => {
+    const older = vi.fn();
+    const newer = vi.fn();
+    render(
+      <DecisionTable
+        page={DECISION_PAGE}
+        onOpen={() => undefined}
+        onOlder={older}
+        onNewer={newer}
+        canGoNewer
+      />,
+    );
+
+    expect(screen.getByText(/^filled$/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Older decisions/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Newer decisions/ }));
+    expect(older).toHaveBeenCalledOnce();
+    expect(newer).toHaveBeenCalledOnce();
+  });
+
+  it("wires the complete filters, exports, and keyset cursor through Mission Control", async () => {
+    vi.spyOn(api, "listExperiments").mockResolvedValue([EVENT_FEED_EXPERIMENT]);
+    vi.spyOn(api, "getOverview").mockResolvedValue({
+      ...EVENT_FEED_EXPERIMENT,
+      positions: [],
+      pending_orders: [],
+      incidents: [],
+    });
+    const decisions = vi.spyOn(api, "listDecisions").mockResolvedValue(DECISION_PAGE);
+    vi.spyOn(api, "getDecision").mockResolvedValue(DECISION_DETAIL);
+    vi.spyOn(api, "listTrades").mockResolvedValue({
+      items: [],
+      limit: 200,
+      has_more: false,
+      next_before_at: null,
+      next_before_id: null,
+    });
+    vi.spyOn(api, "listCommands").mockResolvedValue({ items: [], limit: 100 });
+    vi.spyOn(api, "getResearch").mockResolvedValue({
+      official_account_inclusion: "excluded",
+      counterfactuals: [],
+      execution_sensitivities: [],
+      limit_per_kind: 500,
+    });
+    vi.spyOn(api, "startResumableEventFeed").mockReturnValue(() => undefined);
+
+    render(<App />);
+
+    const filters = await screen.findByRole("group", { name: "Audit Ledger filters" });
+    expect(within(filters).getByLabelText("Direction")).toBeInTheDocument();
+    expect(within(filters).getByLabelText("Gate type")).toBeInTheDocument();
+    expect(within(filters).getByLabelText("Agent name")).toBeInTheDocument();
+    expect(within(filters).getByLabelText("Strategy version ID")).toBeInTheDocument();
+    expect(within(filters).getByLabelText("Order status")).toBeInTheDocument();
+    expect(within(filters).getByLabelText("Outcome")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download filtered decisions CSV" }))
+      .toHaveAttribute("href", expect.stringContaining("/decisions/export.csv"));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Older decisions/ }));
+    await waitFor(() => {
+      expect(decisions).toHaveBeenLastCalledWith(
+        EVENT_FEED_EXPERIMENT.experiment.id,
+        expect.any(Object),
+        {
+          beforeAt: DECISION_PAGE.next_before_at,
+          beforeId: DECISION_PAGE.next_before_id,
+        },
+        expect.any(AbortSignal),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Audit/ }));
+    expect(await screen.findByRole("link", { name: "Download complete JSON" }))
+      .toHaveAttribute(
+        "href",
+        `/api/v1/decisions/${DECISION.id}/export.json`,
+      );
+  });
+});
 
 function Harness() {
   const [selected, setSelected] = useState("none");

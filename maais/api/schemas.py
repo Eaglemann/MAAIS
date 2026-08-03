@@ -132,6 +132,7 @@ class DecisionListItem(ReadModel):
     id: UUID
     experiment_id: UUID
     market_frame_id: UUID
+    strategy_version_id: UUID
     symbol: str
     timeframe: str
     cycle_at: datetime
@@ -147,6 +148,7 @@ class DecisionListItem(ReadModel):
     proposal_status: str | None
     order_status: str | None
     counterfactual_status: str | None
+    outcome: str
     created_at: datetime
     completed_at: datetime
 
@@ -166,6 +168,7 @@ class TradeListItem(ReadModel):
     latest_activity_at: datetime
     symbol: str
     direction: str
+    strategy_version_id: UUID
     proposal_status: str
     proposal_reason_code: str
     approved_notional: Decimal | None
@@ -181,6 +184,7 @@ class TradeListItem(ReadModel):
     total_slippage: Decimal
     counterfactual_status: str | None
     counterfactual_pnl: Decimal | None
+    outcome: str
 
 
 class TradePage(ReadModel):

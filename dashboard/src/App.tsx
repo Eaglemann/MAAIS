@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  decisionCsvUrl,
+  decisionJsonUrl,
   getDecision,
   getOverview,
   getResearch,
@@ -10,6 +12,7 @@ import {
   listTrades,
   requestOperatorCommand,
   startResumableEventFeed,
+  tradeCsvUrl,
 } from "./api";
 import {
   formatCompact,
@@ -32,9 +35,11 @@ import type {
   JsonRecord,
   OperatorActionDraft,
   OperatorCommandPage,
+  PageCursor,
   PaperModelAssumptions,
   ResearchLabView,
   TradePage,
+  TradeFilters,
 } from "./types";
 import { OperatorConsole } from "./OperatorConsole";
 import { ResearchLab } from "./ResearchLab";
@@ -44,8 +49,34 @@ export { OperatorConsole, ResearchLab };
 const EMPTY_FILTERS: DecisionFilters = {
   symbol: "",
   status: "",
+  direction: "",
   disposition: "",
   reasonCode: "",
+  fromAt: "",
+  toAt: "",
+  regime: "",
+  strategyVersionId: "",
+  gateType: "",
+  gatePassed: "",
+  agentName: "",
+  agentDirection: "",
+  proposalStatus: "",
+  orderStatus: "",
+  outcome: "",
+};
+
+const EMPTY_TRADE_FILTERS: TradeFilters = {
+  symbol: "",
+  fromAt: "",
+  toAt: "",
+  direction: "",
+  regime: "",
+  strategyVersionId: "",
+  proposalStatus: "",
+  decisionDisposition: "",
+  orderStatus: "",
+  counterfactualStatus: "",
+  outcome: "",
 };
 
 function recordValue(record: JsonRecord, key: string): unknown {
@@ -176,9 +207,20 @@ function DecisionDrawer({
               </div>
             )}
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="Close audit">
-            ×
-          </button>
+          <div className="audit-drawer__actions">
+            {decision && (
+              <a
+                className="export-link"
+                href={decisionJsonUrl(decision.id)}
+                download
+              >
+                Download complete JSON
+              </a>
+            )}
+            <button className="icon-button" type="button" onClick={onClose} aria-label="Close audit">
+              ×
+            </button>
+          </div>
         </header>
 
         {loading && <div className="drawer-state">Loading the authoritative audit bundle…</div>}
@@ -348,12 +390,18 @@ function DecisionDrawer({
   );
 }
 
-function DecisionTable({
+export function DecisionTable({
   page,
   onOpen,
+  onOlder,
+  onNewer,
+  canGoNewer,
 }: {
   page: DecisionPage | null;
   onOpen: (decision: DecisionListItem) => void;
+  onOlder: () => void;
+  onNewer: () => void;
+  canGoNewer: boolean;
 }) {
   if (!page?.items.length) {
     return <div className="empty-state">No decisions match the current filters.</div>;
@@ -379,7 +427,7 @@ function DecisionTable({
               <td><time>{formatTime(decision.cycle_at)}</time></td>
               <td><strong>{decision.symbol}</strong><span>{decision.timeframe}</span></td>
               <td>{label(decision.regime)}</td>
-              <td><Badge value={decision.disposition} /></td>
+              <td><Badge value={decision.outcome} /></td>
               <td>{label(decision.reason_code)}</td>
               <td>
                 <strong>{label(decision.consensus_direction)}</strong>
@@ -391,9 +439,11 @@ function DecisionTable({
           ))}
         </tbody>
       </table>
-      {page.has_more && (
-        <div className="table-footnote">Showing the latest {page.limit} cycles. Older cycles remain available through the API cursor.</div>
-      )}
+      <div className="table-pagination" aria-label="Decision history navigation">
+        <button type="button" onClick={onNewer} disabled={!canGoNewer}>← Newer decisions</button>
+        <span>Up to {page.limit} decisions per page</span>
+        <button type="button" onClick={onOlder} disabled={!page.has_more}>Older decisions →</button>
+      </div>
     </div>
   );
 }
@@ -402,13 +452,28 @@ export function TradeTable({
   page,
   currency,
   onOpen,
+  onOlder,
+  onNewer,
+  canGoNewer,
 }: {
   page: TradePage | null;
   currency: string;
   onOpen: (decisionId: string) => void;
+  onOlder?: () => void;
+  onNewer?: () => void;
+  canGoNewer?: boolean;
 }) {
   if (!page || page.items.length === 0) {
-    return <div className="empty-state">No directional trade proposals exist yet.</div>;
+    return (
+      <div className="empty-state">
+        No directional trade proposals match the current filters.
+        {canGoNewer && (
+          <button type="button" className="clear-button" onClick={onNewer}>
+            ← Newer proposals
+          </button>
+        )}
+      </div>
+    );
   }
   return (
     <div className="table-shell">
@@ -449,7 +514,11 @@ export function TradeTable({
           ))}
         </tbody>
       </table>
-      {page.has_more && <div className="table-footnote">Showing the latest {page.limit} proposals. Older proposals remain available through the API cursor.</div>}
+      <div className="table-pagination" aria-label="Trade history navigation">
+        <button type="button" onClick={onNewer} disabled={!canGoNewer}>← Newer proposals</button>
+        <span>Up to {page.limit} proposals per page</span>
+        <button type="button" onClick={onOlder} disabled={!page.has_more}>Older proposals →</button>
+      </div>
     </div>
   );
 }
@@ -463,6 +532,9 @@ export default function App() {
   const [commands, setCommands] = useState<OperatorCommandPage | null>(null);
   const [research, setResearch] = useState<ResearchLabView | null>(null);
   const [filters, setFilters] = useState<DecisionFilters>(EMPTY_FILTERS);
+  const [tradeFilters, setTradeFilters] = useState<TradeFilters>(EMPTY_TRADE_FILTERS);
+  const [decisionCursors, setDecisionCursors] = useState<PageCursor[]>([]);
+  const [tradeCursors, setTradeCursors] = useState<PageCursor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
@@ -480,6 +552,8 @@ export default function App() {
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<EventFeedStatus>("catching_up");
+  const decisionCursor = decisionCursors.at(-1) ?? null;
+  const tradeCursor = tradeCursors.at(-1) ?? null;
 
   useEffect(() => {
     try {
@@ -519,8 +593,8 @@ export default function App() {
         nextResearch,
       ] = await Promise.all([
         getOverview(selectedId, signal),
-        listDecisions(selectedId, filters, signal),
-        listTrades(selectedId, filters.symbol, signal),
+        listDecisions(selectedId, filters, decisionCursor, signal),
+        listTrades(selectedId, tradeFilters, tradeCursor, signal),
         listExperiments(signal),
         listCommands(selectedId, signal),
         getResearch(selectedId, signal),
@@ -538,7 +612,7 @@ export default function App() {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [filters, selectedId]);
+  }, [decisionCursor, filters, selectedId, tradeCursor, tradeFilters]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -599,6 +673,46 @@ export default function App() {
     } finally {
       setDetailLoading(false);
     }
+  }
+
+  function updateDecisionFilters(next: Partial<DecisionFilters>) {
+    setFilters((current) => ({ ...current, ...next }));
+    setDecisionCursors([]);
+  }
+
+  function updateTradeFilters(next: Partial<TradeFilters>) {
+    setTradeFilters((current) => ({ ...current, ...next }));
+    setTradeCursors([]);
+  }
+
+  function showOlderDecisions() {
+    if (!decisionPage?.has_more || !decisionPage.next_before_at || !decisionPage.next_before_id) {
+      return;
+    }
+    const next = {
+      beforeAt: decisionPage.next_before_at,
+      beforeId: decisionPage.next_before_id,
+    };
+    setDecisionCursors((current) => {
+      const latest = current.at(-1);
+      return latest?.beforeAt === next.beforeAt && latest.beforeId === next.beforeId
+        ? current
+        : [...current, next];
+    });
+  }
+
+  function showOlderTrades() {
+    if (!tradePage?.has_more || !tradePage.next_before_at || !tradePage.next_before_id) return;
+    const next = {
+      beforeAt: tradePage.next_before_at,
+      beforeId: tradePage.next_before_id,
+    };
+    setTradeCursors((current) => {
+      const latest = current.at(-1);
+      return latest?.beforeAt === next.beforeAt && latest.beforeId === next.beforeId
+        ? current
+        : [...current, next];
+    });
   }
 
   async function submitOperatorCommand(draft: OperatorActionDraft, token: string) {
@@ -671,7 +785,16 @@ export default function App() {
           <div className="topbar__actions">
             <label className="experiment-picker">
               <span>Experiment</span>
-              <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+              <select
+                value={selectedId}
+                onChange={(event) => {
+                  setSelectedId(event.target.value);
+                  setDecisionCursors([]);
+                  setTradeCursors([]);
+                  setDecisionPage(null);
+                  setTradePage(null);
+                }}
+              >
                 {experiments.map((item) => (
                   <option key={item.experiment.id} value={item.experiment.id}>{item.experiment.name}</option>
                 ))}
@@ -788,9 +911,47 @@ export default function App() {
           <SectionHeader
             title="Trade Ledger"
             subtitle="Every directional proposal with linked official fills, costs, and isolated research outcome"
-            aside={<span className="freshness-label">Click a symbol for the complete decision bundle</span>}
+            aside={selectedId ? (
+              <a
+                className="export-link"
+                href={tradeCsvUrl(selectedId, tradeFilters)}
+                download
+              >
+                Download filtered trades CSV
+              </a>
+            ) : undefined}
           />
-          {loading && !tradePage ? <div className="table-loading">Loading proposed trades…</div> : <TradeTable page={tradePage} currency={currency} onOpen={(decisionId) => void openDecisionId(decisionId)} />}
+          <div className="filter-bar filter-bar--compact" role="group" aria-label="Trade Ledger filters">
+            <label><span>Trade symbol</span><input value={tradeFilters.symbol} onChange={(event) => updateTradeFilters({ symbol: event.target.value })} placeholder="All symbols" /></label>
+            <label><span>Trade direction</span><select value={tradeFilters.direction} onChange={(event) => updateTradeFilters({ direction: event.target.value })}><option value="">All directions</option><option value="long">Long</option><option value="short">Short</option></select></label>
+            <label><span>Proposal status</span><select value={tradeFilters.proposalStatus} onChange={(event) => updateTradeFilters({ proposalStatus: event.target.value })}><option value="">All proposals</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="expired">Expired</option></select></label>
+            <label><span>Trade outcome</span><select value={tradeFilters.outcome} onChange={(event) => updateTradeFilters({ outcome: event.target.value })}><option value="">All outcomes</option><option value="filled">Filled</option><option value="counterfactual">Counterfactual</option><option value="approved">Approved, unfilled</option><option value="rejected">Rejected</option><option value="expired">Expired</option></select></label>
+            <details className="filter-advanced">
+              <summary>More trade filters</summary>
+              <div className="filter-advanced__grid">
+                <label><span>Trade from</span><input type="datetime-local" value={tradeFilters.fromAt} onChange={(event) => updateTradeFilters({ fromAt: event.target.value })} /></label>
+                <label><span>Trade to</span><input type="datetime-local" value={tradeFilters.toAt} onChange={(event) => updateTradeFilters({ toAt: event.target.value })} /></label>
+                <label><span>Trade regime</span><input value={tradeFilters.regime} onChange={(event) => updateTradeFilters({ regime: event.target.value })} placeholder="All regimes" /></label>
+                <label><span>Trade strategy version ID</span><input value={tradeFilters.strategyVersionId} onChange={(event) => updateTradeFilters({ strategyVersionId: event.target.value })} placeholder="All strategies" /></label>
+                <label><span>Decision disposition</span><select value={tradeFilters.decisionDisposition} onChange={(event) => updateTradeFilters({ decisionDisposition: event.target.value })}><option value="">All dispositions</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label>
+                <label><span>Trade order status</span><input value={tradeFilters.orderStatus} onChange={(event) => updateTradeFilters({ orderStatus: event.target.value })} placeholder="e.g. filled" /></label>
+                <label><span>Counterfactual status</span><input value={tradeFilters.counterfactualStatus} onChange={(event) => updateTradeFilters({ counterfactualStatus: event.target.value })} placeholder="All research states" /></label>
+              </div>
+            </details>
+            <button type="button" className="clear-button" onClick={() => { setTradeFilters(EMPTY_TRADE_FILTERS); setTradeCursors([]); }}>Clear trade filters</button>
+          </div>
+          {loading && !tradePage ? (
+            <div className="table-loading">Loading proposed trades…</div>
+          ) : (
+            <TradeTable
+              page={tradePage}
+              currency={currency}
+              onOpen={(decisionId) => void openDecisionId(decisionId)}
+              onOlder={showOlderTrades}
+              onNewer={() => setTradeCursors((current) => current.slice(0, -1))}
+              canGoNewer={tradeCursors.length > 0}
+            />
+          )}
         </section>
 
         <ResearchLab
@@ -803,16 +964,56 @@ export default function App() {
           <SectionHeader
             title="Audit Ledger"
             subtitle="Every neutral, rejected, quarantined, approved, and filled decision"
-            aside={<span className="freshness-label">Updated {formatTime(lastUpdated)}</span>}
+            aside={(
+              <div className="section-actions">
+                <span className="freshness-label">Updated {formatTime(lastUpdated)}</span>
+                {selectedId && (
+                  <a
+                    className="export-link"
+                    href={decisionCsvUrl(selectedId, filters)}
+                    download
+                  >
+                    Download filtered decisions CSV
+                  </a>
+                )}
+              </div>
+            )}
           />
-          <div className="filter-bar">
-            <label><span>Symbol</span><input value={filters.symbol} onChange={(event) => setFilters((current) => ({ ...current, symbol: event.target.value }))} placeholder="All symbols" /></label>
-            <label><span>Status</span><select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}><option value="">All statuses</option><option value="completed">Completed</option><option value="rejected">Rejected</option><option value="quarantined">Quarantined</option></select></label>
-            <label><span>Disposition</span><select value={filters.disposition} onChange={(event) => setFilters((current) => ({ ...current, disposition: event.target.value }))}><option value="">All outcomes</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="neutral">Neutral</option></select></label>
-            <label className="filter-reason"><span>Reason code</span><input value={filters.reasonCode} onChange={(event) => setFilters((current) => ({ ...current, reasonCode: event.target.value }))} placeholder="e.g. data_quality_failed" /></label>
-            <button type="button" className="clear-button" onClick={() => setFilters(EMPTY_FILTERS)}>Clear</button>
+          <div className="filter-bar" role="group" aria-label="Audit Ledger filters">
+            <label><span>Symbol</span><input value={filters.symbol} onChange={(event) => updateDecisionFilters({ symbol: event.target.value })} placeholder="All symbols" /></label>
+            <label><span>Direction</span><select value={filters.direction} onChange={(event) => updateDecisionFilters({ direction: event.target.value })}><option value="">All directions</option><option value="long">Long</option><option value="short">Short</option><option value="neutral">Neutral</option></select></label>
+            <label><span>Disposition</span><select value={filters.disposition} onChange={(event) => updateDecisionFilters({ disposition: event.target.value })}><option value="">All dispositions</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="neutral">Neutral</option></select></label>
+            <label><span>Outcome</span><select value={filters.outcome} onChange={(event) => updateDecisionFilters({ outcome: event.target.value })}><option value="">All outcomes</option><option value="neutral">Neutral</option><option value="rejected">Rejected</option><option value="counterfactual">Counterfactual</option><option value="approved">Approved</option><option value="filled">Filled</option></select></label>
+            <label><span>Status</span><select value={filters.status} onChange={(event) => updateDecisionFilters({ status: event.target.value })}><option value="">All statuses</option><option value="completed">Completed</option><option value="rejected">Rejected</option><option value="quarantined">Quarantined</option></select></label>
+            <label><span>Regime</span><input value={filters.regime} onChange={(event) => updateDecisionFilters({ regime: event.target.value })} placeholder="All regimes" /></label>
+            <label><span>Gate type</span><input value={filters.gateType} onChange={(event) => updateDecisionFilters({ gateType: event.target.value })} placeholder="e.g. monitoring" /></label>
+            <label><span>Agent name</span><input value={filters.agentName} onChange={(event) => updateDecisionFilters({ agentName: event.target.value })} placeholder="All agents" /></label>
+            <details className="filter-advanced">
+              <summary>More audit filters</summary>
+              <div className="filter-advanced__grid">
+                <label><span>From</span><input type="datetime-local" value={filters.fromAt} onChange={(event) => updateDecisionFilters({ fromAt: event.target.value })} /></label>
+                <label><span>To</span><input type="datetime-local" value={filters.toAt} onChange={(event) => updateDecisionFilters({ toAt: event.target.value })} /></label>
+                <label><span>Strategy version ID</span><input value={filters.strategyVersionId} onChange={(event) => updateDecisionFilters({ strategyVersionId: event.target.value })} placeholder="All strategies" /></label>
+                <label><span>Gate result</span><select value={filters.gatePassed} onChange={(event) => updateDecisionFilters({ gatePassed: event.target.value as DecisionFilters["gatePassed"] })}><option value="">Passed or failed</option><option value="true">Passed</option><option value="false">Failed</option></select></label>
+                <label><span>Agent direction</span><select value={filters.agentDirection} onChange={(event) => updateDecisionFilters({ agentDirection: event.target.value })}><option value="">Any agent vote</option><option value="long">Long</option><option value="short">Short</option><option value="neutral">Neutral</option></select></label>
+                <label><span>Proposal status</span><select value={filters.proposalStatus} onChange={(event) => updateDecisionFilters({ proposalStatus: event.target.value })}><option value="">All proposals</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="expired">Expired</option></select></label>
+                <label><span>Order status</span><input value={filters.orderStatus} onChange={(event) => updateDecisionFilters({ orderStatus: event.target.value })} placeholder="e.g. filled" /></label>
+                <label className="filter-reason"><span>Reason code</span><input value={filters.reasonCode} onChange={(event) => updateDecisionFilters({ reasonCode: event.target.value })} placeholder="e.g. data_quality_failed" /></label>
+              </div>
+            </details>
+            <button type="button" className="clear-button" onClick={() => { setFilters(EMPTY_FILTERS); setDecisionCursors([]); }}>Clear audit filters</button>
           </div>
-          {loading && !decisionPage ? <div className="table-loading">Loading decision ledger…</div> : <DecisionTable page={decisionPage} onOpen={(decision) => void openDecision(decision)} />}
+          {loading && !decisionPage ? (
+            <div className="table-loading">Loading decision ledger…</div>
+          ) : (
+            <DecisionTable
+              page={decisionPage}
+              onOpen={(decision) => void openDecision(decision)}
+              onOlder={showOlderDecisions}
+              onNewer={() => setDecisionCursors((current) => current.slice(0, -1))}
+              canGoNewer={decisionCursors.length > 0}
+            />
+          )}
         </section>
 
         <footer>

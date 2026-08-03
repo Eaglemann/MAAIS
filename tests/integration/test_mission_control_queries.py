@@ -1,12 +1,16 @@
 from dataclasses import replace
+from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
 
 from maais.api.queries import MissionControlQueryService
+from maais.db.repositories.execution import PaperExecutionRecord
 from maais.db.unit_of_work import UnitOfWork
 from maais.decisions.bundle import DecisionBundle
+from maais.domain.enums import PaperOrderSide, PaperOrderType, PositionEffect
+from maais.execution.paper.orders import PaperOrder
 from tests.integration.test_decision_lineage import _prepare_bundle
 from tests.integration.test_paper_execution_repository import _record
 from tests.unit.experiments.test_manifest import _manifest
@@ -195,3 +199,50 @@ async def test_trade_ledger_surfaces_proposal_order_fill_cost_and_decision_linea
     assert trade.fees == execution.fills[0].fee
     assert trade.total_slippage == execution.fills[0].total_slippage
     assert trade.counterfactual_status is None
+
+
+async def test_decision_outcome_remains_filled_after_a_later_canceled_order(
+    uow_factory: UnitOfWork,
+) -> None:
+    execution = await _record(uow_factory)
+    assert execution.account is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(execution)
+    created_at = execution.order.created_at + timedelta(seconds=1)
+    canceled = PaperOrder.create(
+        order_id=UUID(int=402),
+        experiment_id=execution.order.experiment_id,
+        proposal_id=execution.order.proposal_id,
+        client_order_id="paper-btc-canceled-exit",
+        command_hash="d" * 64,
+        symbol=execution.order.symbol,
+        side=PaperOrderSide.SELL,
+        order_type=PaperOrderType.MARKET,
+        position_effect=PositionEffect.REDUCE,
+        quantity=Decimal("0.1"),
+        limit_price=None,
+        reduce_only=True,
+        open_quantity=Decimal("0.1"),
+        created_at=created_at,
+        expires_at=created_at + timedelta(seconds=30),
+    ).cancel(created_at + timedelta(milliseconds=1))
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(
+            PaperExecutionRecord(
+                canceled,
+                execution.exchange_filters,
+                (),
+                None,
+                None,
+            )
+        )
+
+    async with uow_factory.begin() as uow:
+        page = await MissionControlQueryService(uow.session).list_decisions(
+            execution.order.experiment_id,
+            outcome="filled",
+        )
+
+    assert len(page.items) == 1
+    assert page.items[0].order_status == "canceled"
+    assert page.items[0].outcome == "filled"

@@ -1,3 +1,7 @@
+import csv
+import io
+from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -10,7 +14,9 @@ from maais.domain.enums import Direction
 from maais.market_data.integrity.state_machine import IntegrityPolicy
 from maais.orchestration.results import OrchestrationDisposition
 from tests.integration.test_decision_lineage import _prepare_bundle
+from tests.integration.test_mission_control_queries import _reidentify_bundle
 from tests.integration.test_orchestration_repository import _command_in_database
+from tests.integration.test_paper_execution_repository import _record
 from tests.unit.orchestration.test_service import (
     _execution_service,
     _FeatureComputer,
@@ -100,6 +106,308 @@ async def test_api_rejects_partial_decision_cursor(uow_factory: UnitOfWork) -> N
         )
 
     assert response.status_code == 422
+
+
+async def test_decision_feed_filters_by_direction(uow_factory: UnitOfWork) -> None:
+    manifest, bundle = await _prepare_bundle(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.decisions.record_bundle(bundle)
+    application = create_app(uow_factory._session_factory)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        matching = await client.get(
+            f"/api/v1/experiments/{manifest.experiment_id}/decisions",
+            params={"direction": "long"},
+        )
+        excluded = await client.get(
+            f"/api/v1/experiments/{manifest.experiment_id}/decisions",
+            params={"direction": "short"},
+        )
+
+    assert matching.status_code == 200
+    assert [item["id"] for item in matching.json()["items"]] == [str(bundle.cycle.id)]
+    assert excluded.status_code == 200
+    assert excluded.json()["items"] == []
+
+
+async def test_decision_feed_enforces_complete_audit_filters(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest, bundle = await _prepare_bundle(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.decisions.record_bundle(bundle)
+    application = create_app(uow_factory._session_factory)
+    base_url = f"/api/v1/experiments/{manifest.experiment_id}/decisions"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        matching = await client.get(
+            base_url,
+            params={
+                "from_at": (bundle.cycle.cycle_at - timedelta(seconds=1)).isoformat(),
+                "to_at": (bundle.cycle.cycle_at + timedelta(seconds=1)).isoformat(),
+                "regime": bundle.cycle.regime,
+                "strategy_version_id": str(bundle.cycle.strategy_version_id),
+                "gate_type": "ev",
+                "gate_passed": "true",
+                "agent_name": bundle.agents[0].agent_name,
+                "agent_direction": "long",
+                "proposal_status": "approved",
+                "outcome": "approved",
+            },
+        )
+        exclusions = {
+            "from_at": {"from_at": (bundle.cycle.cycle_at + timedelta(seconds=1)).isoformat()},
+            "to_at": {"to_at": (bundle.cycle.cycle_at - timedelta(seconds=1)).isoformat()},
+            "regime": {"regime": "ranging"},
+            "strategy": {"strategy_version_id": str(UUID(int=999))},
+            "gate_type": {"gate_type": "monitoring"},
+            "gate_passed": {"gate_type": "ev", "gate_passed": "false"},
+            "agent_name": {"agent_name": "not-a-registered-agent"},
+            "agent_direction": {
+                "agent_name": bundle.agents[0].agent_name,
+                "agent_direction": "short",
+            },
+            "proposal_status": {"proposal_status": "rejected"},
+            "order_status": {"order_status": "filled"},
+            "outcome": {"outcome": "neutral"},
+        }
+        excluded = {
+            name: await client.get(base_url, params=params) for name, params in exclusions.items()
+        }
+
+    assert matching.status_code == 200
+    assert [item["id"] for item in matching.json()["items"]] == [str(bundle.cycle.id)]
+    assert matching.json()["items"][0]["outcome"] == "approved"
+    assert matching.json()["items"][0]["strategy_version_id"] == str(
+        bundle.cycle.strategy_version_id
+    )
+    for name, response in excluded.items():
+        assert response.status_code == 200, name
+        assert response.json()["items"] == [], name
+
+
+async def test_decision_feed_rejects_inverted_time_window(uow_factory: UnitOfWork) -> None:
+    manifest, bundle = await _prepare_bundle(uow_factory)
+    application = create_app(uow_factory._session_factory)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            f"/api/v1/experiments/{manifest.experiment_id}/decisions",
+            params={
+                "from_at": (bundle.cycle.cycle_at + timedelta(seconds=1)).isoformat(),
+                "to_at": bundle.cycle.cycle_at.isoformat(),
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "decision from_at must not be after to_at"
+
+
+async def test_decision_exports_preserve_filters_and_complete_lineage(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest, bundle = await _prepare_bundle(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.decisions.record_bundle(bundle)
+    application = create_app(uow_factory._session_factory)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        matching_csv = await client.get(
+            f"/api/v1/experiments/{manifest.experiment_id}/decisions/export.csv",
+            params={"direction": "long"},
+        )
+        excluded_csv = await client.get(
+            f"/api/v1/experiments/{manifest.experiment_id}/decisions/export.csv",
+            params={"direction": "short"},
+        )
+        bundle_json = await client.get(f"/api/v1/decisions/{bundle.cycle.id}/export.json")
+
+    assert matching_csv.status_code == 200
+    assert matching_csv.headers["content-type"].startswith("text/csv")
+    assert matching_csv.headers["content-disposition"].startswith("attachment;")
+    matching_rows = list(csv.DictReader(io.StringIO(matching_csv.text)))
+    assert len(matching_rows) == 1
+    assert matching_rows[0]["decision_id"] == str(bundle.cycle.id)
+    assert matching_rows[0]["strategy_version_id"] == str(bundle.cycle.strategy_version_id)
+    assert matching_rows[0]["outcome"] == "approved"
+    assert list(csv.DictReader(io.StringIO(excluded_csv.text))) == []
+
+    assert bundle_json.status_code == 200
+    assert bundle_json.headers["content-type"] == "application/json"
+    assert bundle_json.headers["content-disposition"].startswith("attachment;")
+    payload = bundle_json.json()
+    assert payload["decision"]["id"] == str(bundle.cycle.id)
+    assert len(payload["agents"]) == 8
+    assert len(payload["gates"]) == len(bundle.gates)
+    assert payload["lineage_hashes"]["decision_cycle"] == bundle.bundle_hash
+    assert payload["timeline"]
+
+
+async def test_trade_ledger_enforces_execution_filters(uow_factory: UnitOfWork) -> None:
+    execution = await _record(uow_factory)
+    assert execution.account is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(execution)
+    application = create_app(uow_factory._session_factory)
+    experiment_id = execution.account.experiment_id
+    base_url = f"/api/v1/experiments/{experiment_id}/trades"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        matching = await client.get(
+            base_url,
+            params={
+                "from_at": (execution.order.created_at - timedelta(seconds=1)).isoformat(),
+                "to_at": (execution.order.created_at + timedelta(seconds=1)).isoformat(),
+                "direction": "long",
+                "regime": "trending",
+                "proposal_status": "approved",
+                "decision_disposition": "approved",
+                "order_status": "filled",
+                "outcome": "filled",
+            },
+        )
+        exclusions = {
+            "from_at": {"from_at": (execution.order.created_at + timedelta(seconds=1)).isoformat()},
+            "to_at": {"to_at": (execution.order.created_at - timedelta(seconds=1)).isoformat()},
+            "direction": {"direction": "short"},
+            "regime": {"regime": "ranging"},
+            "proposal_status": {"proposal_status": "rejected"},
+            "decision_disposition": {"decision_disposition": "rejected"},
+            "order_status": {"order_status": "accepted"},
+            "counterfactual_status": {"counterfactual_status": "closed"},
+            "outcome": {"outcome": "counterfactual"},
+        }
+        excluded = {
+            name: await client.get(base_url, params=params) for name, params in exclusions.items()
+        }
+
+    assert matching.status_code == 200
+    assert [item["proposal_id"] for item in matching.json()["items"]] == [
+        str(execution.order.proposal_id)
+    ]
+    assert matching.json()["items"][0]["outcome"] == "filled"
+    assert matching.json()["items"][0]["strategy_version_id"]
+    for name, response in excluded.items():
+        assert response.status_code == 200, name
+        assert response.json()["items"] == [], name
+
+
+async def test_trade_ledger_rejects_inverted_time_window(uow_factory: UnitOfWork) -> None:
+    manifest, bundle = await _prepare_bundle(uow_factory)
+    application = create_app(uow_factory._session_factory)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            f"/api/v1/experiments/{manifest.experiment_id}/trades",
+            params={
+                "from_at": (bundle.cycle.cycle_at + timedelta(seconds=1)).isoformat(),
+                "to_at": bundle.cycle.cycle_at.isoformat(),
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "trade from_at must not be after to_at"
+
+
+async def test_trade_export_preserves_filters_and_execution_costs(
+    uow_factory: UnitOfWork,
+) -> None:
+    execution = await _record(uow_factory)
+    assert execution.account is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(execution)
+    application = create_app(uow_factory._session_factory)
+    experiment_id = execution.account.experiment_id
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        matching = await client.get(
+            f"/api/v1/experiments/{experiment_id}/trades/export.csv",
+            params={"direction": "long", "outcome": "filled"},
+        )
+        excluded = await client.get(
+            f"/api/v1/experiments/{experiment_id}/trades/export.csv",
+            params={"direction": "short"},
+        )
+
+    assert matching.status_code == 200
+    assert matching.headers["content-type"].startswith("text/csv")
+    assert matching.headers["content-disposition"].startswith("attachment;")
+    rows = list(csv.DictReader(io.StringIO(matching.text)))
+    assert len(rows) == 1
+    assert rows[0]["proposal_id"] == str(execution.order.proposal_id)
+    assert rows[0]["outcome"] == "filled"
+    assert rows[0]["order_statuses"] == "filled"
+    assert rows[0]["fill_count"] == "1"
+    assert rows[0]["fees"] == "3.000000000000000000"
+    assert rows[0]["total_slippage"] == "0.070000000000000000"
+    assert list(csv.DictReader(io.StringIO(excluded.text))) == []
+
+
+async def test_decision_and_trade_csv_exports_cross_the_internal_page_boundary(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest, first = await _prepare_bundle(uow_factory)
+    bundles = [first]
+    for index in range(1, 501):
+        bundle = _reidentify_bundle(first, f"SYM{index:03d}USDT")
+        bundles.append(
+            replace(
+                bundle,
+                market_frame=replace(
+                    bundle.market_frame,
+                    content_hash=f"{index:064x}",
+                ),
+            )
+        )
+    async with uow_factory.begin() as uow:
+        for bundle in bundles:
+            await uow.decisions.record_bundle(bundle)
+    application = create_app(uow_factory._session_factory)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        decision_response = await client.get(
+            f"/api/v1/experiments/{manifest.experiment_id}/decisions/export.csv"
+        )
+        trade_response = await client.get(
+            f"/api/v1/experiments/{manifest.experiment_id}/trades/export.csv"
+        )
+
+    assert decision_response.status_code == 200
+    decision_rows = list(csv.DictReader(io.StringIO(decision_response.text)))
+    assert len(decision_rows) == 501
+    assert {row["decision_id"] for row in decision_rows} == {
+        str(bundle.cycle.id) for bundle in bundles
+    }
+    assert trade_response.status_code == 200
+    trade_rows = list(csv.DictReader(io.StringIO(trade_response.text)))
+    assert len(trade_rows) == 501
+    assert {row["decision_cycle_id"] for row in trade_rows} == {
+        str(bundle.cycle.id) for bundle in bundles
+    }
 
 
 async def test_api_serves_built_dashboard_without_weakening_api_transactions(

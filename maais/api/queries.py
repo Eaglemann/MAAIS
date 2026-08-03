@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from maais.api.schemas import (
@@ -60,6 +60,8 @@ from maais.db.models.operations import (
 _PENDING_ORDER_STATUSES = ("created", "authorized", "accepted", "partially_filled")
 _OPEN_COUNTERFACTUAL_STATUSES = ("pending", "open")
 _ACTIVE_RECOVERY_STATUSES = ("detected", "backfilling")
+_DECISION_OUTCOMES = ("neutral", "rejected", "counterfactual", "approved", "filled")
+_TRADE_OUTCOMES = ("rejected", "counterfactual", "approved", "filled", "expired")
 
 
 def _fields(model: object, names: Iterable[str]) -> dict[str, object]:
@@ -74,6 +76,36 @@ def _optional_decimal(value: object) -> Decimal | None:
     except (InvalidOperation, ValueError):
         return None
     return parsed if parsed.is_finite() else None
+
+
+def _decision_outcome(
+    *,
+    disposition: str,
+    has_fill: bool,
+    counterfactual_status: str | None,
+) -> str:
+    if has_fill:
+        return "filled"
+    if counterfactual_status is not None:
+        return "counterfactual"
+    if disposition == "approved":
+        return "approved"
+    if disposition == "rejected":
+        return "rejected"
+    return "neutral"
+
+
+def _trade_outcome(
+    *,
+    proposal_status: str,
+    fill_count: int,
+    counterfactual_status: str | None,
+) -> str:
+    if fill_count > 0:
+        return "filled"
+    if counterfactual_status is not None:
+        return "counterfactual"
+    return proposal_status
 
 
 def _paper_model_assumptions(model: ExperimentModel) -> PaperModelAssumptions:
@@ -172,8 +204,20 @@ class MissionControlQueryService:
         *,
         symbol: str | None = None,
         status: str | None = None,
+        direction: str | None = None,
         disposition: str | None = None,
         reason_code: str | None = None,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        regime: str | None = None,
+        strategy_version_id: UUID | None = None,
+        gate_type: str | None = None,
+        gate_passed: bool | None = None,
+        agent_name: str | None = None,
+        agent_direction: str | None = None,
+        proposal_status: str | None = None,
+        order_status: str | None = None,
+        outcome: str | None = None,
         before_at: datetime | None = None,
         before_id: UUID | None = None,
         limit: int = 100,
@@ -182,9 +226,26 @@ class MissionControlQueryService:
             raise ValueError("decision limit must be between 1 and 500")
         if symbol is not None:
             symbol = symbol.upper()
+        if from_at is not None and to_at is not None and from_at > to_at:
+            raise ValueError("decision from_at must not be after to_at")
+        if outcome is not None and outcome not in _DECISION_OUTCOMES:
+            raise ValueError("decision outcome must be one of " + ", ".join(_DECISION_OUTCOMES))
         if (before_at is None) != (before_id is None):
             raise ValueError("decision cursor requires both before_at and before_id")
         await self._experiment(experiment_id)
+        latest_order_status = (
+            select(OrderIntentModel.status)
+            .where(OrderIntentModel.proposal_id == TradeProposalModel.id)
+            .order_by(OrderIntentModel.created_at.desc(), OrderIntentModel.id.desc())
+            .limit(1)
+            .correlate(TradeProposalModel)
+            .scalar_subquery()
+        )
+        fill_exists = exists(
+            select(FillModel.id)
+            .join(OrderIntentModel, OrderIntentModel.id == FillModel.order_intent_id)
+            .where(OrderIntentModel.proposal_id == TradeProposalModel.id)
+        )
         statement = (
             select(
                 DecisionCycleModel,
@@ -193,8 +254,9 @@ class MissionControlQueryService:
                 DecisionSummaryModel.consensus_probability,
                 DecisionSummaryModel.consensus_confidence,
                 TradeProposalModel.status.label("proposal_status"),
-                OrderIntentModel.status.label("order_status"),
+                latest_order_status.label("order_status"),
                 CounterfactualModel.status.label("counterfactual_status"),
+                fill_exists.label("has_fill"),
             )
             .join(MarketFrameModel, MarketFrameModel.id == DecisionCycleModel.market_frame_id)
             .outerjoin(
@@ -205,7 +267,6 @@ class MissionControlQueryService:
                 TradeProposalModel,
                 TradeProposalModel.decision_cycle_id == DecisionCycleModel.id,
             )
-            .outerjoin(OrderIntentModel, OrderIntentModel.proposal_id == TradeProposalModel.id)
             .outerjoin(
                 CounterfactualModel,
                 CounterfactualModel.decision_cycle_id == DecisionCycleModel.id,
@@ -216,10 +277,69 @@ class MissionControlQueryService:
             statement = statement.where(DecisionCycleModel.symbol == symbol)
         if status is not None:
             statement = statement.where(DecisionCycleModel.status == status)
+        if direction is not None:
+            statement = statement.where(DecisionCycleModel.direction == direction)
         if disposition is not None:
             statement = statement.where(DecisionCycleModel.disposition == disposition)
         if reason_code is not None:
             statement = statement.where(DecisionCycleModel.reason_code == reason_code)
+        if from_at is not None:
+            statement = statement.where(DecisionCycleModel.cycle_at >= from_at)
+        if to_at is not None:
+            statement = statement.where(DecisionCycleModel.cycle_at <= to_at)
+        if regime is not None:
+            statement = statement.where(DecisionCycleModel.regime == regime)
+        if strategy_version_id is not None:
+            statement = statement.where(
+                DecisionCycleModel.strategy_version_id == strategy_version_id
+            )
+        if gate_type is not None or gate_passed is not None:
+            gate_query = select(GateEvaluationModel.id).where(
+                GateEvaluationModel.decision_cycle_id == DecisionCycleModel.id
+            )
+            if gate_type is not None:
+                gate_query = gate_query.where(GateEvaluationModel.gate_type == gate_type)
+            if gate_passed is not None:
+                gate_query = gate_query.where(GateEvaluationModel.passed.is_(gate_passed))
+            statement = statement.where(gate_query.exists())
+        if agent_name is not None or agent_direction is not None:
+            agent_query = (
+                select(AgentEvaluationModel.id)
+                .join(
+                    AgentVersionModel,
+                    AgentVersionModel.id == AgentEvaluationModel.agent_version_id,
+                )
+                .where(AgentEvaluationModel.decision_cycle_id == DecisionCycleModel.id)
+            )
+            if agent_name is not None:
+                agent_query = agent_query.where(AgentVersionModel.agent_name == agent_name)
+            if agent_direction is not None:
+                agent_query = agent_query.where(AgentEvaluationModel.direction == agent_direction)
+            statement = statement.where(agent_query.exists())
+        if proposal_status is not None:
+            statement = statement.where(TradeProposalModel.status == proposal_status)
+        if order_status is not None:
+            statement = statement.where(
+                exists(
+                    select(OrderIntentModel.id).where(
+                        OrderIntentModel.proposal_id == TradeProposalModel.id,
+                        OrderIntentModel.status == order_status,
+                    )
+                )
+            )
+        if outcome == "filled":
+            statement = statement.where(fill_exists)
+        elif outcome == "counterfactual":
+            statement = statement.where(
+                ~fill_exists,
+                CounterfactualModel.id.is_not(None),
+            )
+        elif outcome in ("approved", "rejected", "neutral"):
+            statement = statement.where(
+                ~fill_exists,
+                CounterfactualModel.id.is_(None),
+                DecisionCycleModel.disposition == outcome,
+            )
         if before_at is not None and before_id is not None:
             statement = statement.where(
                 or_(
@@ -253,8 +373,16 @@ class MissionControlQueryService:
         experiment_id: UUID,
         *,
         symbol: str | None = None,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        direction: str | None = None,
+        regime: str | None = None,
+        strategy_version_id: UUID | None = None,
         proposal_status: str | None = None,
         decision_disposition: str | None = None,
+        order_status: str | None = None,
+        counterfactual_status: str | None = None,
+        outcome: str | None = None,
         before_at: datetime | None = None,
         before_id: UUID | None = None,
         limit: int = 100,
@@ -264,9 +392,18 @@ class MissionControlQueryService:
             raise ValueError("trade limit must be between 1 and 500")
         if symbol is not None:
             symbol = symbol.upper()
+        if from_at is not None and to_at is not None and from_at > to_at:
+            raise ValueError("trade from_at must not be after to_at")
+        if outcome is not None and outcome not in _TRADE_OUTCOMES:
+            raise ValueError("trade outcome must be one of " + ", ".join(_TRADE_OUTCOMES))
         if (before_at is None) != (before_id is None):
             raise ValueError("trade cursor requires both before_at and before_id")
         await self._experiment(experiment_id)
+        fill_exists = exists(
+            select(FillModel.id)
+            .join(OrderIntentModel, OrderIntentModel.id == FillModel.order_intent_id)
+            .where(OrderIntentModel.proposal_id == TradeProposalModel.id)
+        )
         statement = (
             select(TradeProposalModel, DecisionCycleModel, CounterfactualModel)
             .join(
@@ -281,10 +418,46 @@ class MissionControlQueryService:
         )
         if symbol is not None:
             statement = statement.where(TradeProposalModel.symbol == symbol)
+        if from_at is not None:
+            statement = statement.where(TradeProposalModel.proposed_at >= from_at)
+        if to_at is not None:
+            statement = statement.where(TradeProposalModel.proposed_at <= to_at)
+        if direction is not None:
+            statement = statement.where(TradeProposalModel.direction == direction)
+        if regime is not None:
+            statement = statement.where(DecisionCycleModel.regime == regime)
+        if strategy_version_id is not None:
+            statement = statement.where(
+                DecisionCycleModel.strategy_version_id == strategy_version_id
+            )
         if proposal_status is not None:
             statement = statement.where(TradeProposalModel.status == proposal_status)
         if decision_disposition is not None:
             statement = statement.where(DecisionCycleModel.disposition == decision_disposition)
+        if order_status is not None:
+            statement = statement.where(
+                exists(
+                    select(OrderIntentModel.id).where(
+                        OrderIntentModel.proposal_id == TradeProposalModel.id,
+                        OrderIntentModel.status == order_status,
+                    )
+                )
+            )
+        if counterfactual_status is not None:
+            statement = statement.where(CounterfactualModel.status == counterfactual_status)
+        if outcome == "filled":
+            statement = statement.where(fill_exists)
+        elif outcome == "counterfactual":
+            statement = statement.where(
+                ~fill_exists,
+                CounterfactualModel.id.is_not(None),
+            )
+        elif outcome in ("approved", "rejected", "expired"):
+            statement = statement.where(
+                ~fill_exists,
+                CounterfactualModel.id.is_(None),
+                TradeProposalModel.status == outcome,
+            )
         if before_at is not None and before_id is not None:
             statement = statement.where(
                 or_(
@@ -578,6 +751,7 @@ class MissionControlQueryService:
             latest_activity_at=latest_activity_at,
             symbol=proposal.symbol,
             direction=proposal.direction,
+            strategy_version_id=decision.strategy_version_id,
             proposal_status=proposal.status,
             proposal_reason_code=proposal.reason_code,
             approved_notional=proposal.approved_notional,
@@ -600,6 +774,13 @@ class MissionControlQueryService:
             counterfactual_status=(counterfactual.status if counterfactual is not None else None),
             counterfactual_pnl=(
                 counterfactual.hypothetical_pnl if counterfactual is not None else None
+            ),
+            outcome=_trade_outcome(
+                proposal_status=proposal.status,
+                fill_count=len(fills),
+                counterfactual_status=(
+                    counterfactual.status if counterfactual is not None else None
+                ),
             ),
         )
 
@@ -802,12 +983,27 @@ class MissionControlQueryService:
         counterfactual: CounterfactualModel | None,
     ) -> DecisionListItem:
         order_status = None
+        has_fill = False
         if proposal is not None:
             order_status = await self._session.scalar(
                 select(OrderIntentModel.status)
                 .where(OrderIntentModel.proposal_id == proposal.id)
                 .order_by(OrderIntentModel.created_at.desc())
                 .limit(1)
+            )
+            has_fill = bool(
+                await self._session.scalar(
+                    select(
+                        exists(
+                            select(FillModel.id)
+                            .join(
+                                OrderIntentModel,
+                                OrderIntentModel.id == FillModel.order_intent_id,
+                            )
+                            .where(OrderIntentModel.proposal_id == proposal.id)
+                        )
+                    )
+                )
             )
         return self._decision_item(
             cycle,
@@ -818,6 +1014,7 @@ class MissionControlQueryService:
             proposal.status if proposal is not None else None,
             order_status,
             counterfactual.status if counterfactual is not None else None,
+            has_fill,
         )
 
     @staticmethod
@@ -830,6 +1027,7 @@ class MissionControlQueryService:
         proposal_status: str | None,
         order_status: str | None,
         counterfactual_status: str | None,
+        has_fill: bool,
     ) -> DecisionListItem:
         return DecisionListItem.model_validate(
             {
@@ -839,6 +1037,7 @@ class MissionControlQueryService:
                         "id",
                         "experiment_id",
                         "market_frame_id",
+                        "strategy_version_id",
                         "symbol",
                         "timeframe",
                         "cycle_at",
@@ -858,6 +1057,11 @@ class MissionControlQueryService:
                 "proposal_status": proposal_status,
                 "order_status": order_status,
                 "counterfactual_status": counterfactual_status,
+                "outcome": _decision_outcome(
+                    disposition=cycle.disposition,
+                    has_fill=has_fill,
+                    counterfactual_status=counterfactual_status,
+                ),
             }
         )
 

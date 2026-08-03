@@ -110,6 +110,7 @@ export interface DecisionListItem {
   id: string;
   experiment_id: string;
   market_frame_id: string;
+  strategy_version_id: string;
   symbol: string;
   timeframe: string;
   cycle_at: string;
@@ -125,6 +126,7 @@ export interface DecisionListItem {
   proposal_status: string | null;
   order_status: string | null;
   counterfactual_status: string | null;
+  outcome: string;
   created_at: string;
   completed_at: string;
 }
@@ -144,6 +146,7 @@ export interface TradeListItem {
   latest_activity_at: string;
   symbol: string;
   direction: string;
+  strategy_version_id: string;
   proposal_status: string;
   proposal_reason_code: string;
   approved_notional: string | null;
@@ -159,6 +162,7 @@ export interface TradeListItem {
   total_slippage: string;
   counterfactual_status: string | null;
   counterfactual_pnl: string | null;
+  outcome: string;
 }
 
 export interface TradePage {
@@ -302,6 +306,37 @@ export interface DecisionDetail {
 export interface DecisionFilters {
   symbol: string;
   status: string;
+  direction: string;
   disposition: string;
   reasonCode: string;
+  fromAt: string;
+  toAt: string;
+  regime: string;
+  strategyVersionId: string;
+  gateType: string;
+  gatePassed: "" | "true" | "false";
+  agentName: string;
+  agentDirection: string;
+  proposalStatus: string;
+  orderStatus: string;
+  outcome: string;
+}
+
+export interface TradeFilters {
+  symbol: string;
+  fromAt: string;
+  toAt: string;
+  direction: string;
+  regime: string;
+  strategyVersionId: string;
+  proposalStatus: string;
+  decisionDisposition: string;
+  orderStatus: string;
+  counterfactualStatus: string;
+  outcome: string;
+}
+
+export interface PageCursor {
+  beforeAt: string;
+  beforeId: string;
 }

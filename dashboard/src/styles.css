@@ -320,12 +320,21 @@ code { color: #b9d8cc; font-family: ui-monospace, SFMono-Regular, Menlo, monospa
 .research-card-list article > span { display: block; margin: 5px 0 10px; color: var(--muted); font-size: 9px; text-transform: capitalize; }
 .research-card-list article > small { display: block; margin-top: 9px; color: var(--faint); font-size: 8px; }
 
-.filter-bar { display: flex; align-items: end; gap: 8px; padding: 11px; border: 1px solid var(--line); border-bottom: 0; border-radius: 11px 11px 0 0; background: var(--surface); }
+.filter-bar { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 11px; border: 1px solid var(--line); border-bottom: 0; border-radius: 11px 11px 0 0; background: var(--surface); }
 .filter-bar label { display: flex; flex-direction: column; gap: 5px; }
 .filter-bar input, .filter-bar select { min-width: 135px; min-height: 34px; font-size: 11px; }
+.filter-bar--compact { margin-top: 2px; }
+.filter-advanced { flex: 1 0 100%; border-top: 1px solid var(--line); padding-top: 8px; }
+.filter-advanced summary { width: fit-content; color: var(--mint); cursor: pointer; font-size: 10px; user-select: none; }
+.filter-advanced__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 8px; padding-top: 10px; }
+.filter-advanced__grid input, .filter-advanced__grid select { width: 100%; min-width: 0; }
 .filter-reason { flex: 1; }
 .filter-reason input { width: 100%; }
 .clear-button { min-height: 34px; padding: 0 12px; font-size: 11px; }
+.section-actions, .audit-drawer__actions { display: flex; align-items: center; gap: 9px; }
+.section-actions { flex-wrap: wrap; justify-content: flex-end; }
+.export-link { display: inline-flex; align-items: center; min-height: 34px; padding: 0 11px; border: 1px solid rgb(112 225 179 / 0.3); border-radius: 7px; background: rgb(112 225 179 / 0.06); color: var(--mint-bright); font-size: 10px; text-decoration: none; white-space: nowrap; }
+.export-link:hover, .export-link:focus-visible { border-color: var(--mint); background: rgb(112 225 179 / 0.12); }
 
 .table-shell { border: 1px solid var(--line); border-radius: 0 0 11px 11px; overflow-x: auto; background: var(--surface); }
 .decision-table { width: 100%; border-collapse: collapse; min-width: 1030px; }
@@ -340,7 +349,11 @@ code { color: #b9d8cc; font-family: ui-monospace, SFMono-Regular, Menlo, monospa
 .row-link:hover, .row-link:focus-visible { color: var(--mint); text-decoration: underline; text-underline-offset: 3px; }
 .trade-table { min-width: 1120px; }
 .row-action { border: 0; color: var(--mint); background: transparent; font-size: 10px; padding: 4px; }
-.table-footnote { border-top: 1px solid var(--line); padding: 9px 12px; color: var(--faint); font-size: 9px; }
+.table-pagination { position: sticky; left: 0; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; min-width: min(100%, 650px); border-top: 1px solid var(--line); padding: 9px 12px; }
+.table-pagination span { color: var(--faint); font-size: 9px; text-align: center; }
+.table-pagination button { min-height: 31px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--text); cursor: pointer; font-size: 10px; }
+.table-pagination button:hover:not(:disabled), .table-pagination button:focus-visible:not(:disabled) { border-color: var(--mint); color: var(--mint-bright); }
+.table-pagination button:disabled { opacity: 0.35; cursor: not-allowed; }
 .empty-state, .table-loading, .drawer-state, .empty-inline { border: 1px dashed var(--line); border-radius: 9px; color: var(--muted); padding: 22px; text-align: center; font-size: 11px; }
 
 .json-details { margin-top: 6px; min-width: 0; }
@@ -351,6 +364,7 @@ code { color: #b9d8cc; font-family: ui-monospace, SFMono-Regular, Menlo, monospa
 .audit-drawer { width: min(900px, 92vw); height: 100vh; overflow-y: auto; background: #091310; border-left: 1px solid var(--line-strong); box-shadow: var(--shadow); }
 .audit-drawer__header { position: sticky; top: 0; z-index: 2; padding: 21px 24px; border-bottom: 1px solid var(--line); background: rgb(9 19 16 / 0.94); backdrop-filter: blur(18px); display: flex; justify-content: space-between; gap: 20px; }
 .audit-drawer__header h2 { font: 500 24px Georgia, serif; margin: 4px 0 0; }
+.audit-drawer__actions { align-self: flex-start; }
 .icon-button { width: 36px; height: 36px; font-size: 22px; }
 .audit-drawer__body { padding: 0 24px 50px; }
 .audit-section { padding: 24px 0; border-bottom: 1px solid var(--line); }

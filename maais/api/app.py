@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -20,7 +22,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -30,6 +32,7 @@ from maais.api.queries import MissionControlQueryService
 from maais.api.schemas import (
     ApiHealth,
     DecisionDetail,
+    DecisionListItem,
     DecisionPage,
     ExperimentListItem,
     ExperimentOverview,
@@ -39,6 +42,7 @@ from maais.api.schemas import (
     OutboxCursorEvent,
     OutboxCursorPage,
     ResearchLabView,
+    TradeListItem,
     TradePage,
 )
 from maais.config.settings import get_settings
@@ -55,6 +59,89 @@ from maais.operations.operator_commands import CommandStatus, OperatorCommand
 from maais.operations.verification import establish_read_only_snapshot
 
 SessionFactory = async_sessionmaker[AsyncSession]
+
+_DECISION_CSV_COLUMNS = (
+    "decision_id",
+    "experiment_id",
+    "cycle_at",
+    "symbol",
+    "timeframe",
+    "regime",
+    "strategy_version_id",
+    "status",
+    "direction",
+    "disposition",
+    "reason_code",
+    "outcome",
+    "quality_status",
+    "consensus_direction",
+    "consensus_probability",
+    "consensus_confidence",
+    "proposal_status",
+    "order_status",
+    "counterfactual_status",
+    "market_frame_id",
+    "created_at",
+    "completed_at",
+)
+
+_TRADE_CSV_COLUMNS = (
+    "proposal_id",
+    "decision_cycle_id",
+    "proposed_at",
+    "latest_activity_at",
+    "symbol",
+    "direction",
+    "regime",
+    "strategy_version_id",
+    "proposal_status",
+    "proposal_reason_code",
+    "decision_disposition",
+    "decision_reason_code",
+    "outcome",
+    "approved_notional",
+    "official_order_count",
+    "order_statuses",
+    "fill_count",
+    "filled_quantity",
+    "gross_fill_notional",
+    "fees",
+    "total_slippage",
+    "counterfactual_status",
+    "counterfactual_pnl",
+)
+
+
+def _decision_csv_chunk(
+    items: tuple[DecisionListItem, ...],
+    *,
+    include_header: bool,
+) -> str:
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=_DECISION_CSV_COLUMNS)
+    if include_header:
+        writer.writeheader()
+    for item in items:
+        row = item.model_dump(mode="json")
+        row["decision_id"] = row.pop("id")
+        writer.writerow({column: row.get(column) for column in _DECISION_CSV_COLUMNS})
+    return output.getvalue()
+
+
+def _trade_csv_chunk(
+    items: tuple[TradeListItem, ...],
+    *,
+    include_header: bool,
+) -> str:
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=_TRADE_CSV_COLUMNS)
+    if include_header:
+        writer.writeheader()
+    for item in items:
+        row = item.model_dump(mode="json")
+        row["order_statuses"] = "|".join(item.order_statuses)
+        writer.writerow({column: row.get(column) for column in _TRADE_CSV_COLUMNS})
+    return output.getvalue()
 
 
 def create_app(
@@ -190,8 +277,20 @@ def create_app(
         experiment_id: UUID,
         symbol: str | None = None,
         status: str | None = None,
+        direction: str | None = None,
         disposition: str | None = None,
         reason_code: str | None = None,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        regime: str | None = None,
+        strategy_version_id: UUID | None = None,
+        gate_type: str | None = None,
+        gate_passed: bool | None = None,
+        agent_name: str | None = None,
+        agent_direction: str | None = None,
+        proposal_status: str | None = None,
+        order_status: str | None = None,
+        outcome: str | None = None,
         before_at: datetime | None = None,
         before_id: UUID | None = None,
         limit: int = Query(100, ge=1, le=500),
@@ -201,11 +300,109 @@ def create_app(
             experiment_id,
             symbol=symbol,
             status=status,
+            direction=direction,
             disposition=disposition,
             reason_code=reason_code,
+            from_at=from_at,
+            to_at=to_at,
+            regime=regime,
+            strategy_version_id=strategy_version_id,
+            gate_type=gate_type,
+            gate_passed=gate_passed,
+            agent_name=agent_name,
+            agent_direction=agent_direction,
+            proposal_status=proposal_status,
+            order_status=order_status,
+            outcome=outcome,
             before_at=before_at,
             before_id=before_id,
             limit=limit,
+        )
+
+    @application.get("/api/v1/experiments/{experiment_id}/decisions/export.csv")
+    async def export_decisions_csv(
+        experiment_id: UUID,
+        symbol: str | None = None,
+        status: str | None = None,
+        direction: str | None = None,
+        disposition: str | None = None,
+        reason_code: str | None = None,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        regime: str | None = None,
+        strategy_version_id: UUID | None = None,
+        gate_type: str | None = None,
+        gate_passed: bool | None = None,
+        agent_name: str | None = None,
+        agent_direction: str | None = None,
+        proposal_status: str | None = None,
+        order_status: str | None = None,
+        outcome: str | None = None,
+        session: AsyncSession = Depends(read_session),
+    ) -> StreamingResponse:
+        filters = {
+            "symbol": symbol,
+            "status": status,
+            "direction": direction,
+            "disposition": disposition,
+            "reason_code": reason_code,
+            "from_at": from_at,
+            "to_at": to_at,
+            "regime": regime,
+            "strategy_version_id": strategy_version_id,
+            "gate_type": gate_type,
+            "gate_passed": gate_passed,
+            "agent_name": agent_name,
+            "agent_direction": agent_direction,
+            "proposal_status": proposal_status,
+            "order_status": order_status,
+            "outcome": outcome,
+        }
+        await MissionControlQueryService(session).list_decisions(
+            experiment_id,
+            **filters,
+            limit=1,
+        )
+        factory: SessionFactory | None = application.state.session_factory
+        if factory is None:
+            raise RuntimeError("Mission Control session factory is unavailable")
+
+        async def stream() -> AsyncIterator[str]:
+            before_at: datetime | None = None
+            before_id: UUID | None = None
+            include_header = True
+            async with factory() as export_session:
+                async with export_session.begin():
+                    await establish_read_only_snapshot(export_session)
+                    queries = MissionControlQueryService(export_session)
+                    while True:
+                        page = await queries.list_decisions(
+                            experiment_id,
+                            **filters,
+                            before_at=before_at,
+                            before_id=before_id,
+                            limit=500,
+                        )
+                        chunk = _decision_csv_chunk(
+                            page.items,
+                            include_header=include_header,
+                        )
+                        if chunk:
+                            yield chunk
+                        include_header = False
+                        if not page.has_more:
+                            break
+                        before_at = page.next_before_at
+                        before_id = page.next_before_id
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="maais-decisions-{experiment_id}.csv"'
+                )
+            },
         )
 
     @application.get(
@@ -215,8 +412,16 @@ def create_app(
     async def trades(
         experiment_id: UUID,
         symbol: str | None = None,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        direction: str | None = None,
+        regime: str | None = None,
+        strategy_version_id: UUID | None = None,
         proposal_status: str | None = None,
         decision_disposition: str | None = None,
+        order_status: str | None = None,
+        counterfactual_status: str | None = None,
+        outcome: str | None = None,
         before_at: datetime | None = None,
         before_id: UUID | None = None,
         limit: int = Query(100, ge=1, le=500),
@@ -225,11 +430,93 @@ def create_app(
         return await MissionControlQueryService(session).list_trades(
             experiment_id,
             symbol=symbol,
+            from_at=from_at,
+            to_at=to_at,
+            direction=direction,
+            regime=regime,
+            strategy_version_id=strategy_version_id,
             proposal_status=proposal_status,
             decision_disposition=decision_disposition,
+            order_status=order_status,
+            counterfactual_status=counterfactual_status,
+            outcome=outcome,
             before_at=before_at,
             before_id=before_id,
             limit=limit,
+        )
+
+    @application.get("/api/v1/experiments/{experiment_id}/trades/export.csv")
+    async def export_trades_csv(
+        experiment_id: UUID,
+        symbol: str | None = None,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        direction: str | None = None,
+        regime: str | None = None,
+        strategy_version_id: UUID | None = None,
+        proposal_status: str | None = None,
+        decision_disposition: str | None = None,
+        order_status: str | None = None,
+        counterfactual_status: str | None = None,
+        outcome: str | None = None,
+        session: AsyncSession = Depends(read_session),
+    ) -> StreamingResponse:
+        filters = {
+            "symbol": symbol,
+            "from_at": from_at,
+            "to_at": to_at,
+            "direction": direction,
+            "regime": regime,
+            "strategy_version_id": strategy_version_id,
+            "proposal_status": proposal_status,
+            "decision_disposition": decision_disposition,
+            "order_status": order_status,
+            "counterfactual_status": counterfactual_status,
+            "outcome": outcome,
+        }
+        await MissionControlQueryService(session).list_trades(
+            experiment_id,
+            **filters,
+            limit=1,
+        )
+        factory: SessionFactory | None = application.state.session_factory
+        if factory is None:
+            raise RuntimeError("Mission Control session factory is unavailable")
+
+        async def stream() -> AsyncIterator[str]:
+            before_at: datetime | None = None
+            before_id: UUID | None = None
+            include_header = True
+            async with factory() as export_session:
+                async with export_session.begin():
+                    await establish_read_only_snapshot(export_session)
+                    queries = MissionControlQueryService(export_session)
+                    while True:
+                        page = await queries.list_trades(
+                            experiment_id,
+                            **filters,
+                            before_at=before_at,
+                            before_id=before_id,
+                            limit=500,
+                        )
+                        chunk = _trade_csv_chunk(
+                            page.items,
+                            include_header=include_header,
+                        )
+                        if chunk:
+                            yield chunk
+                        include_header = False
+                        if not page.has_more:
+                            break
+                        before_at = page.next_before_at
+                        before_id = page.next_before_id
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": (f'attachment; filename="maais-trades-{experiment_id}.csv"')
+            },
         )
 
     @application.get("/api/v1/decisions/{decision_id}", response_model=DecisionDetail)
@@ -238,6 +525,19 @@ def create_app(
         session: AsyncSession = Depends(read_session),
     ) -> DecisionDetail:
         return await MissionControlQueryService(session).get_decision(decision_id)
+
+    @application.get("/api/v1/decisions/{decision_id}/export.json")
+    async def export_decision_json(
+        decision_id: UUID,
+        session: AsyncSession = Depends(read_session),
+    ) -> JSONResponse:
+        detail = await MissionControlQueryService(session).get_decision(decision_id)
+        return JSONResponse(
+            content=detail.model_dump(mode="json"),
+            headers={
+                "Content-Disposition": (f'attachment; filename="maais-decision-{decision_id}.json"')
+            },
+        )
 
     @application.get(
         "/api/v1/experiments/{experiment_id}/research",

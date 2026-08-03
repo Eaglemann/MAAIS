@@ -10,7 +10,9 @@ import type {
   OperatorCommandPage,
   OutboxCursorEvent,
   OutboxCursorPage,
+  PageCursor,
   ResearchLabView,
+  TradeFilters,
   TradePage,
 } from "./types";
 
@@ -79,13 +81,10 @@ export function getOverview(
 export function listDecisions(
   experimentId: string,
   filters: DecisionFilters,
+  cursor: PageCursor | null = null,
   signal?: AbortSignal,
 ): Promise<DecisionPage> {
-  const params = new URLSearchParams({ limit: "200" });
-  if (filters.symbol.trim()) params.set("symbol", filters.symbol.trim().toUpperCase());
-  if (filters.status) params.set("status", filters.status);
-  if (filters.disposition) params.set("disposition", filters.disposition);
-  if (filters.reasonCode.trim()) params.set("reason_code", filters.reasonCode.trim());
+  const params = decisionParams(filters, "200", cursor);
   return getJson<DecisionPage>(
     `/experiments/${experimentId}/decisions?${params.toString()}`,
     signal,
@@ -94,15 +93,102 @@ export function listDecisions(
 
 export function listTrades(
   experimentId: string,
-  symbol: string,
+  filters: TradeFilters,
+  cursor: PageCursor | null = null,
   signal?: AbortSignal,
 ): Promise<TradePage> {
-  const params = new URLSearchParams({ limit: "200" });
-  if (symbol.trim()) params.set("symbol", symbol.trim().toUpperCase());
+  const params = tradeParams(filters, "200", cursor);
   return getJson<TradePage>(
     `/experiments/${experimentId}/trades?${params.toString()}`,
     signal,
   );
+}
+
+function setTrimmed(
+  params: URLSearchParams,
+  key: string,
+  value: string,
+  transform?: (value: string) => string,
+) {
+  const trimmed = value.trim();
+  if (trimmed) params.set(key, transform ? transform(trimmed) : trimmed);
+}
+
+function normalizedDateTime(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value.trim() : parsed.toISOString();
+}
+
+function addCursor(params: URLSearchParams, cursor: PageCursor | null) {
+  if (cursor) {
+    params.set("before_at", cursor.beforeAt);
+    params.set("before_id", cursor.beforeId);
+  }
+}
+
+function decisionParams(
+  filters: DecisionFilters,
+  limit?: string,
+  cursor: PageCursor | null = null,
+): URLSearchParams {
+  const params = new URLSearchParams();
+  if (limit) params.set("limit", limit);
+  setTrimmed(params, "symbol", filters.symbol, (value) => value.toUpperCase());
+  setTrimmed(params, "status", filters.status);
+  setTrimmed(params, "direction", filters.direction);
+  setTrimmed(params, "disposition", filters.disposition);
+  setTrimmed(params, "reason_code", filters.reasonCode);
+  setTrimmed(params, "from_at", filters.fromAt, normalizedDateTime);
+  setTrimmed(params, "to_at", filters.toAt, normalizedDateTime);
+  setTrimmed(params, "regime", filters.regime);
+  setTrimmed(params, "strategy_version_id", filters.strategyVersionId);
+  setTrimmed(params, "gate_type", filters.gateType);
+  setTrimmed(params, "gate_passed", filters.gatePassed);
+  setTrimmed(params, "agent_name", filters.agentName);
+  setTrimmed(params, "agent_direction", filters.agentDirection);
+  setTrimmed(params, "proposal_status", filters.proposalStatus);
+  setTrimmed(params, "order_status", filters.orderStatus);
+  setTrimmed(params, "outcome", filters.outcome);
+  addCursor(params, cursor);
+  return params;
+}
+
+function tradeParams(
+  filters: TradeFilters,
+  limit?: string,
+  cursor: PageCursor | null = null,
+): URLSearchParams {
+  const params = new URLSearchParams();
+  if (limit) params.set("limit", limit);
+  setTrimmed(params, "symbol", filters.symbol, (value) => value.toUpperCase());
+  setTrimmed(params, "from_at", filters.fromAt, normalizedDateTime);
+  setTrimmed(params, "to_at", filters.toAt, normalizedDateTime);
+  setTrimmed(params, "direction", filters.direction);
+  setTrimmed(params, "regime", filters.regime);
+  setTrimmed(params, "strategy_version_id", filters.strategyVersionId);
+  setTrimmed(params, "proposal_status", filters.proposalStatus);
+  setTrimmed(params, "decision_disposition", filters.decisionDisposition);
+  setTrimmed(params, "order_status", filters.orderStatus);
+  setTrimmed(params, "counterfactual_status", filters.counterfactualStatus);
+  setTrimmed(params, "outcome", filters.outcome);
+  addCursor(params, cursor);
+  return params;
+}
+
+export function decisionCsvUrl(experimentId: string, filters: DecisionFilters): string {
+  const params = decisionParams(filters);
+  const query = params.toString();
+  return `${API_ROOT}/experiments/${experimentId}/decisions/export.csv${query ? `?${query}` : ""}`;
+}
+
+export function tradeCsvUrl(experimentId: string, filters: TradeFilters): string {
+  const params = tradeParams(filters);
+  const query = params.toString();
+  return `${API_ROOT}/experiments/${experimentId}/trades/export.csv${query ? `?${query}` : ""}`;
+}
+
+export function decisionJsonUrl(decisionId: string): string {
+  return `${API_ROOT}/decisions/${decisionId}/export.json`;
 }
 
 export function getDecision(
