@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -48,8 +49,20 @@ class CounterfactualModel(Base):
             "(status IN ('pending', 'open') AND closed_at IS NULL)",
             name="ck_counterfactual_terminal_time",
         ),
+        CheckConstraint(
+            "(status IN ('pending', 'no_fill') AND hypothetical_fill_at IS NULL) OR "
+            "(status IN ('open', 'resolved') AND hypothetical_fill_at IS NOT NULL)",
+            name="ck_counterfactual_fill_time",
+        ),
         Index("ix_counterfactuals_experiment_status", "experiment_id", "status", "created_at"),
         Index("ix_counterfactuals_gate_status", "rejection_gate", "status", "created_at"),
+        Index(
+            "ix_counterfactuals_research_tracking",
+            "experiment_id",
+            "symbol",
+            "hypothetical_fill_at",
+            postgresql_where=text("status = 'resolved' AND outcome_24h IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -74,6 +87,7 @@ class CounterfactualModel(Base):
     expected_loss_fraction: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     expected_gain_fraction: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     hypothetical_fill_json: Mapped[dict[str, MutableJsonValue] | None] = mapped_column(JSONB)
+    hypothetical_fill_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     exit_policy_json: Mapped[dict[str, MutableJsonValue] | None] = mapped_column(JSONB)
     maximum_favorable_excursion: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     maximum_adverse_excursion: Mapped[Decimal] = mapped_column(MONEY, nullable=False)

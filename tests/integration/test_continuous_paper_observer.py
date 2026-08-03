@@ -548,6 +548,100 @@ async def test_counterfactual_marks_and_funding_advance_once_without_official_po
     assert funding_count == 0
 
 
+async def test_resolved_counterfactual_keeps_horizon_and_funding_observation(
+    uow_factory: UnitOfWork,
+) -> None:
+    command, outcome, observations, observer = await _runtime_with_pending_counterfactual(
+        uow_factory
+    )
+    assert outcome.counterfactual is not None
+    eligible_after = outcome.counterfactual.eligible_after
+    entry_mark = _mark("resolved-entry-mark", Decimal("100"), eligible_after)
+    entry_book = _event_book(
+        "resolved-entry-book",
+        eligible_after + timedelta(milliseconds=1),
+        "100",
+        "101",
+        4_250,
+    )
+    await observations.observe(entry_mark)
+    await observations.observe(entry_book)
+    await observer.observe(entry_book, context_events=(entry_mark, entry_book))
+
+    async with uow_factory.begin() as uow:
+        opened = await uow.counterfactuals.get(outcome.counterfactual.counterfactual_id)
+    assert opened.entry_fill is not None
+    fill_at = opened.entry_fill.fill_at
+    standard_exit = _mark(
+        "resolved-standard-exit",
+        Decimal("1"),
+        fill_at + timedelta(minutes=1),
+    )
+    await observations.observe(standard_exit)
+    await observer.observe(standard_exit, context_events=(standard_exit,))
+
+    async with uow_factory.begin() as uow:
+        resolved = await uow.counterfactuals.get(outcome.counterfactual.counterfactual_id)
+    assert resolved.status is CounterfactualStatus.RESOLVED
+    standard_exit_snapshot = (
+        resolved.hypothetical_exit_reason,
+        resolved.hypothetical_pnl,
+        resolved.closed_at,
+        resolved.maximum_favorable_excursion,
+        resolved.maximum_adverse_excursion,
+    )
+
+    horizon_15m = _mark(
+        "resolved-runtime-15m",
+        Decimal("102"),
+        fill_at + timedelta(minutes=15),
+    )
+    await observations.observe(horizon_15m)
+    await observer.observe(horizon_15m, context_events=(horizon_15m,))
+    funding_at = fill_at + timedelta(hours=8)
+    funding_event = ObservedMarketEvent(
+        venue="binance_usdm",
+        stream="rest:/fapi/v1/fundingRate",
+        symbol="BTCUSDT",
+        event_id="binance_usdm:funding:BTCUSDT:resolved:Regular",
+        kind=MarketEventKind.FUNDING_SETTLEMENT,
+        venue_event_at=funding_at,
+        observed_at=funding_at + timedelta(milliseconds=50),
+        sequence=None,
+        sequence_not_applicable_reason="binance_funding_history_has_no_sequence",
+        payload=FundingSettlementPayload(
+            funding_at=funding_at,
+            funding_rate=Decimal("0.001"),
+            mark_price=Decimal("102"),
+            rate_type="Regular",
+        ),
+    )
+    await observer.observe(funding_event, context_events=(funding_event,))
+    horizon_24h = _mark(
+        "resolved-runtime-24h",
+        Decimal("103"),
+        fill_at + timedelta(hours=24),
+    )
+    await observations.observe(horizon_24h)
+    await observer.observe(horizon_24h, context_events=(horizon_24h,))
+
+    async with uow_factory.begin() as uow:
+        tracked = await uow.counterfactuals.get(outcome.counterfactual.counterfactual_id)
+        account = await uow.paper_execution.load_account(command.manifest.experiment_id)
+
+    assert {item.horizon for item in tracked.outcomes} == {"15m", "1h", "4h", "24h"}
+    assert tracked.funding != 0
+    assert (
+        tracked.hypothetical_exit_reason,
+        tracked.hypothetical_pnl,
+        tracked.closed_at,
+        tracked.maximum_favorable_excursion,
+        tracked.maximum_adverse_excursion,
+    ) == standard_exit_snapshot
+    assert account.version == 0
+    assert account.positions == {}
+
+
 async def test_redundant_counterfactual_marks_do_not_reopen_persistence(
     uow_factory: UnitOfWork,
     db_engine: AsyncEngine,

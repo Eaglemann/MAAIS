@@ -20,6 +20,7 @@ _HORIZONS = (
     ("4h", timedelta(hours=4)),
     ("24h", timedelta(hours=24)),
 )
+_RESEARCH_WINDOW = _HORIZONS[-1][1]
 
 
 class CounterfactualStatus(StrEnum):
@@ -209,7 +210,8 @@ class CounterfactualState:
         *,
         market_event_id: str,
     ) -> CounterfactualState:
-        self._require_open()
+        if self.status not in {CounterfactualStatus.OPEN, CounterfactualStatus.RESOLVED}:
+            raise RuntimeError("counterfactual is not research-observable")
         if not market_event_id:
             raise ValueError("counterfactual mark market_event_id is required")
         require_positive_decimal(mark_price, "mark_price")
@@ -224,8 +226,12 @@ class CounterfactualState:
         assert self.entry_fill is not None
         assert self.exit_plan is not None
         gross = self._gross_pnl(mark_price)
-        favorable = max(self.maximum_favorable_excursion, max(Decimal("0"), gross))
-        adverse = max(self.maximum_adverse_excursion, max(Decimal("0"), -gross))
+        if self.status is CounterfactualStatus.OPEN:
+            favorable = max(self.maximum_favorable_excursion, max(Decimal("0"), gross))
+            adverse = max(self.maximum_adverse_excursion, max(Decimal("0"), -gross))
+        else:
+            favorable = self.maximum_favorable_excursion
+            adverse = self.maximum_adverse_excursion
         outcomes = list(self.outcomes)
         resolved_horizons = {outcome.horizon for outcome in outcomes}
         for horizon, duration in _HORIZONS:
@@ -241,12 +247,16 @@ class CounterfactualState:
                         net_pnl=self._net_pnl(mark_price),
                     )
                 )
-        evaluation = self.exit_plan.evaluate_mark(mark_price, observed_at)
+        evaluation = (
+            self.exit_plan.evaluate_mark(mark_price, observed_at)
+            if self.status is CounterfactualStatus.OPEN
+            else None
+        )
         if (
             favorable == self.maximum_favorable_excursion
             and adverse == self.maximum_adverse_excursion
             and tuple(outcomes) == self.outcomes
-            and evaluation.intent is None
+            and (evaluation is None or evaluation.intent is None)
         ):
             return self
         updated = self._advance(
@@ -264,9 +274,9 @@ class CounterfactualState:
             maximum_favorable_excursion=favorable,
             maximum_adverse_excursion=adverse,
             outcomes=tuple(outcomes),
-            exit_plan=evaluation.plan,
+            exit_plan=evaluation.plan if evaluation is not None else self.exit_plan,
         )
-        if evaluation.intent is not None:
+        if evaluation is not None and evaluation.intent is not None:
             return updated._close(mark_price, evaluation.intent.reason.value, observed_at)
         return updated
 
@@ -332,13 +342,20 @@ class CounterfactualState:
         *,
         market_event_id: str,
     ) -> CounterfactualState:
-        self._require_open()
+        if self.status not in {CounterfactualStatus.OPEN, CounterfactualStatus.RESOLVED}:
+            raise RuntimeError("counterfactual is not research-observable")
         if not market_event_id:
             raise ValueError("counterfactual funding market_event_id is required")
         if not isinstance(rate, Decimal) or not rate.is_finite():
             raise ValueError("funding rate must be a finite Decimal")
         require_positive_decimal(mark_price, "mark_price")
         require_utc(observed_at, "observed_at")
+        assert self.entry_fill is not None
+        if (
+            self.status is CounterfactualStatus.RESOLVED
+            and observed_at > self.entry_fill.fill_at + _RESEARCH_WINDOW
+        ):
+            raise RuntimeError("counterfactual research window has ended")
         if self._source_event_exists(
             "counterfactual.funding_applied",
             market_event_id,

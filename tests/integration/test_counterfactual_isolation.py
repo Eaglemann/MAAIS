@@ -162,6 +162,99 @@ async def test_counterfactual_record_and_restore_cannot_mutate_official_account(
         assert outbox_count == state.version
 
 
+async def test_resolved_counterfactual_is_selected_only_when_research_observation_is_due(
+    uow_factory: UnitOfWork,
+) -> None:
+    pending = await _rejected_state(uow_factory, no_fill=False)
+    observed_at = pending.eligible_after + timedelta(milliseconds=1)
+    book = BookSnapshot(
+        event_id="resolved-research-depth",
+        symbol=pending.symbol,
+        venue_event_at=observed_at - timedelta(milliseconds=1),
+        observed_at=observed_at,
+        sequence=1,
+        bids=(BookLevel(Decimal("100"), Decimal("2")),),
+        asks=(BookLevel(Decimal("101.5"), Decimal("2")),),
+        mark_price=Decimal("100.75"),
+    )
+    side = PaperOrderSide.BUY if pending.direction is Direction.LONG else PaperOrderSide.SELL
+    fill = MarketFillEngine(timedelta(seconds=1)).fill(
+        MarketFillRequest(
+            symbol=pending.symbol,
+            side=side,
+            quantity=pending.quantity,
+            eligible_after=pending.eligible_after,
+            decision_executable_price=pending.decision_executable_price,
+            taker_fee_rate=pending.fee_rate,
+        ),
+        (book,),
+    )
+    opened = pending.enter(fill, plan_id=UUID(int=903))
+    terminal_mark = Decimal("100") if pending.direction is Direction.LONG else Decimal("103")
+    resolved = opened.observe_mark(
+        terminal_mark,
+        fill.fill_at + timedelta(minutes=1),
+        market_event_id="resolved-research-standard-exit",
+    )
+    async with uow_factory.begin() as uow:
+        await uow.counterfactuals.record(resolved)
+
+    async with uow_factory.begin() as uow:
+        before_due = await uow.counterfactuals.get_mark_observable(
+            resolved.experiment_id,
+            resolved.symbol,
+            fill.fill_at + timedelta(minutes=14, seconds=59),
+        )
+        due = await uow.counterfactuals.get_mark_observable(
+            resolved.experiment_id,
+            resolved.symbol,
+            fill.fill_at + timedelta(minutes=15),
+        )
+    assert before_due == ()
+    assert due == (resolved,)
+
+    at_15m = due[0].observe_mark(
+        Decimal("102"),
+        fill.fill_at + timedelta(minutes=15),
+        market_event_id="resolved-research-15m",
+    )
+    async with uow_factory.begin() as uow:
+        await uow.counterfactuals.record(at_15m)
+        between_horizons = await uow.counterfactuals.get_mark_observable(
+            resolved.experiment_id,
+            resolved.symbol,
+            fill.fill_at + timedelta(minutes=16),
+        )
+        funding_due = await uow.counterfactuals.get_funding_observable(
+            resolved.experiment_id,
+            resolved.symbol,
+            fill.fill_at + timedelta(hours=8),
+        )
+    assert between_horizons == ()
+    assert funding_due == (at_15m,)
+
+    at_24h = at_15m.observe_mark(
+        Decimal("103"),
+        fill.fill_at + timedelta(hours=24),
+        market_event_id="resolved-research-24h",
+    )
+    async with uow_factory.begin() as uow:
+        await uow.counterfactuals.record(at_24h)
+        complete = await uow.counterfactuals.get_mark_observable(
+            resolved.experiment_id,
+            resolved.symbol,
+            fill.fill_at + timedelta(hours=25),
+        )
+        late_funding = await uow.counterfactuals.get_funding_observable(
+            resolved.experiment_id,
+            resolved.symbol,
+            fill.fill_at + timedelta(hours=24, seconds=1),
+        )
+    assert {item.horizon for item in at_24h.outcomes} == {"15m", "1h", "4h", "24h"}
+    assert complete == ()
+    assert late_funding == ()
+
+
 async def test_open_counterfactual_updates_and_resolves_with_exact_restart_state(
     uow_factory: UnitOfWork,
     db_engine: AsyncEngine,

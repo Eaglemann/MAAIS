@@ -185,20 +185,19 @@ class ContinuousPaperObserver:
                     )
                 )
                 await transaction.orchestration.record_funding_outcome(outcome)
-            states = await transaction.counterfactuals.get_unresolved(self._manifest.experiment_id)
+            states = await transaction.counterfactuals.get_funding_observable(
+                self._manifest.experiment_id,
+                event.symbol,
+                payload.funding_at,
+            )
             for state in states:
-                if (
-                    state.symbol == event.symbol
-                    and state.status is CounterfactualStatus.OPEN
-                    and state.entry_fill is not None
-                    and payload.funding_at >= state.entry_fill.fill_at
-                ):
-                    updated = state.apply_funding(
-                        payload.funding_rate,
-                        payload.mark_price,
-                        event.observed_at,
-                        market_event_id=event.event_id,
-                    )
+                updated = state.apply_funding(
+                    payload.funding_rate,
+                    payload.mark_price,
+                    payload.funding_at,
+                    market_event_id=event.event_id,
+                )
+                if updated is not state:
                     await transaction.counterfactuals.record(updated)
 
     async def _observe_mark(self, event: ObservedMarketEvent) -> None:
@@ -211,7 +210,11 @@ class ContinuousPaperObserver:
         official_context = None
         async with self._uow.begin() as transaction:
             account = await transaction.paper_execution.load_account(self._manifest.experiment_id)
-            states = await transaction.counterfactuals.get_unresolved(self._manifest.experiment_id)
+            states = await transaction.counterfactuals.get_mark_observable(
+                self._manifest.experiment_id,
+                event.symbol,
+                event.observed_at,
+            )
             position = account.positions.get(event.symbol)
             if position is not None and not position.is_flat:
                 exit_plans = await transaction.paper_execution.load_open_exit_plans(
@@ -240,8 +243,6 @@ class ContinuousPaperObserver:
 
         counterfactual_updates = []
         for state in states:
-            if state.symbol != event.symbol or state.status is not CounterfactualStatus.OPEN:
-                continue
             updated = state.observe_mark(
                 payload.mark_price,
                 event.observed_at,

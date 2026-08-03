@@ -385,7 +385,7 @@ async def test_command_enabled_supervisor_waits_for_audited_start_before_market_
 ) -> None:
     manifest = _live_manifest(
         experiment_id=UUID(int=97),
-        schema_revision="0017",
+        schema_revision="0018",
     )
     worker_id = UUID(int=98)
     start = OperatorCommand.request(

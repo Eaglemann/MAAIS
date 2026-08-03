@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from maais.db.repositories.events import EventRepository
 from maais.domain.enums import Direction, GateType, PaperOrderSide
 from maais.domain.events import NewDomainEvent
 from maais.domain.json import JsonValue, MutableJsonValue, content_hash, freeze_json, to_json_data
+from maais.execution.paper.clock import require_utc
 from maais.execution.paper.exits import ExitPlan, ExitPlanStatus, ExitReason
 from maais.execution.paper.fills import FillSlice, PaperFill
 from maais.execution.paper.market import BookLevel, BookSnapshot
@@ -276,6 +277,96 @@ class CounterfactualRepository:
                 .order_by(CounterfactualModel.created_at, CounterfactualModel.id)
             )
         ).all()
+        return self._restore_rows(rows)
+
+    async def get_mark_observable(
+        self,
+        experiment_id: UUID,
+        symbol: str,
+        observed_at: datetime,
+    ) -> tuple[CounterfactualState, ...]:
+        """Return open trades plus resolved trades with a fixed horizon due now."""
+
+        if not symbol:
+            raise ValueError("counterfactual observation symbol is required")
+        require_utc(observed_at, "observed_at")
+        fill_at = CounterfactualModel.hypothetical_fill_at
+        due_horizon = or_(
+            and_(
+                CounterfactualModel.outcome_15m.is_(None),
+                fill_at <= observed_at - timedelta(minutes=15),
+            ),
+            and_(
+                CounterfactualModel.outcome_1h.is_(None),
+                fill_at <= observed_at - timedelta(hours=1),
+            ),
+            and_(
+                CounterfactualModel.outcome_4h.is_(None),
+                fill_at <= observed_at - timedelta(hours=4),
+            ),
+            and_(
+                CounterfactualModel.outcome_24h.is_(None),
+                fill_at <= observed_at - timedelta(hours=24),
+            ),
+        )
+        rows = (
+            await self._session.scalars(
+                select(CounterfactualModel)
+                .where(
+                    CounterfactualModel.experiment_id == experiment_id,
+                    CounterfactualModel.symbol == symbol,
+                    or_(
+                        CounterfactualModel.status == CounterfactualStatus.OPEN.value,
+                        and_(
+                            CounterfactualModel.status == CounterfactualStatus.RESOLVED.value,
+                            CounterfactualModel.outcome_24h.is_(None),
+                            due_horizon,
+                        ),
+                    ),
+                )
+                .order_by(fill_at, CounterfactualModel.id)
+            )
+        ).all()
+        return self._restore_rows(rows)
+
+    async def get_funding_observable(
+        self,
+        experiment_id: UUID,
+        symbol: str,
+        funding_at: datetime,
+    ) -> tuple[CounterfactualState, ...]:
+        """Return counterfactuals whose standard or 24-hour path includes funding."""
+
+        if not symbol:
+            raise ValueError("counterfactual funding symbol is required")
+        require_utc(funding_at, "funding_at")
+        fill_at = CounterfactualModel.hypothetical_fill_at
+        rows = (
+            await self._session.scalars(
+                select(CounterfactualModel)
+                .where(
+                    CounterfactualModel.experiment_id == experiment_id,
+                    CounterfactualModel.symbol == symbol,
+                    fill_at.is_not(None),
+                    fill_at <= funding_at,
+                    or_(
+                        CounterfactualModel.status == CounterfactualStatus.OPEN.value,
+                        and_(
+                            CounterfactualModel.status == CounterfactualStatus.RESOLVED.value,
+                            CounterfactualModel.outcome_24h.is_(None),
+                            fill_at >= funding_at - timedelta(hours=24),
+                        ),
+                    ),
+                )
+                .order_by(fill_at, CounterfactualModel.id)
+            )
+        ).all()
+        return self._restore_rows(rows)
+
+    @staticmethod
+    def _restore_rows(
+        rows: Sequence[CounterfactualModel],
+    ) -> tuple[CounterfactualState, ...]:
         states: list[CounterfactualState] = []
         for row in rows:
             state = _state_from_json(row.state_json)
@@ -308,6 +399,9 @@ class CounterfactualRepository:
             "expected_gain_fraction": state.expected_gain_fraction,
             "hypothetical_fill_json": (
                 _json_object(_fill_dict(state.entry_fill)) if state.entry_fill else None
+            ),
+            "hypothetical_fill_at": (
+                state.entry_fill.fill_at if state.entry_fill is not None else None
             ),
             "exit_policy_json": (
                 _json_object(_exit_dict(state.exit_plan)) if state.exit_plan else None

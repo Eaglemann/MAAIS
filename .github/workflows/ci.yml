@@ -100,4 +100,4 @@ jobs:
           --cov-fail-under=80
       - run: >-
           PGPASSWORD=maais psql -h localhost -U maais -d maais_test -Atc
-          'select version_num from alembic_version' | grep -Fx 0017
+          'select version_num from alembic_version' | grep -Fx 0018

@@ -86,6 +86,93 @@ def test_counterfactual_tracks_horizons_excursions_costs_and_standard_exit() -> 
     assert state.closed_at == fill.fill_at + timedelta(minutes=16)
 
 
+def test_resolved_counterfactual_keeps_fixed_horizons_without_reopening_exit() -> None:
+    fill = _fill()
+    opened = _state().enter(fill, plan_id=UUID(int=5))
+    resolved = opened.observe_mark(
+        Decimal("100"),
+        fill.fill_at + timedelta(minutes=1),
+        market_event_id="standard-exit-stop",
+    )
+    assert resolved.status is CounterfactualStatus.RESOLVED
+    exit_snapshot = (
+        resolved.hypothetical_exit_reason,
+        resolved.hypothetical_pnl,
+        resolved.closed_at,
+        resolved.maximum_favorable_excursion,
+        resolved.maximum_adverse_excursion,
+    )
+
+    tracked = resolved
+    for horizon, duration, price in (
+        ("15m", timedelta(minutes=15), Decimal("102")),
+        ("1h", timedelta(hours=1), Decimal("103")),
+        ("4h", timedelta(hours=4), Decimal("104")),
+        ("24h", timedelta(hours=24), Decimal("105")),
+    ):
+        tracked = tracked.observe_mark(
+            price,
+            fill.fill_at + duration,
+            market_event_id=f"resolved-horizon-{horizon}",
+        )
+        assert tracked.outcome(horizon) is not None
+
+    assert tracked.status is CounterfactualStatus.RESOLVED
+    assert (
+        tracked.hypothetical_exit_reason,
+        tracked.hypothetical_pnl,
+        tracked.closed_at,
+        tracked.maximum_favorable_excursion,
+        tracked.maximum_adverse_excursion,
+    ) == exit_snapshot
+    assert (
+        tracked.observe_mark(
+            Decimal("106"),
+            fill.fill_at + timedelta(hours=25),
+            market_event_id="after-research-window",
+        )
+        is tracked
+    )
+
+
+def test_resolved_counterfactual_applies_funding_only_through_research_window() -> None:
+    fill = _fill()
+    resolved = (
+        _state()
+        .enter(fill, plan_id=UUID(int=5))
+        .observe_mark(
+            Decimal("100"),
+            fill.fill_at + timedelta(minutes=1),
+            market_event_id="funding-standard-exit",
+        )
+    )
+    standard_exit_pnl = resolved.hypothetical_pnl
+
+    funded = resolved.apply_funding(
+        Decimal("0.001"),
+        Decimal("102"),
+        fill.fill_at + timedelta(hours=8),
+        market_event_id="resolved-funding-8h",
+    )
+    final = funded.observe_mark(
+        Decimal("103"),
+        fill.fill_at + timedelta(hours=24),
+        market_event_id="resolved-funded-24h",
+    )
+
+    assert funded.status is CounterfactualStatus.RESOLVED
+    assert funded.funding == Decimal("-0.102")
+    assert funded.hypothetical_pnl == standard_exit_pnl
+    assert final.outcome("24h") == Decimal("1.29575")
+    with pytest.raises(RuntimeError, match="research window"):
+        final.apply_funding(
+            Decimal("0.001"),
+            Decimal("104"),
+            fill.fill_at + timedelta(hours=24, seconds=1),
+            market_event_id="resolved-funding-too-late",
+        )
+
+
 def test_counterfactual_horizon_uses_first_observation_at_or_after_cutoff() -> None:
     fill = _fill()
     state = _state().enter(fill, plan_id=UUID(int=5))
