@@ -91,6 +91,12 @@ def evaluate_candidate_preflight(
         evaluated_at=evaluated_at,
     )
     purpose_valid = run_purpose in {"process_drill", "soak", "seven_day"}
+    timed_run = run_purpose in {"soak", "seven_day"}
+    stored_manifest_passed = (
+        stored_manifest_hash is None
+        if timed_run
+        else stored_manifest_hash is None or stored_manifest_hash == manifest.manifest_hash
+    )
     process_drill_gate_passed = purpose_valid and (
         run_purpose != "soak"
         or (process_drill_evidence_verified and process_drill_evidence.get("passed") is True)
@@ -160,8 +166,17 @@ def evaluate_candidate_preflight(
         ),
         _check(
             "stored_manifest",
-            stored_manifest_hash is None or stored_manifest_hash == manifest.manifest_hash,
-            "experiment is new or stored manifest hash matches",
+            stored_manifest_passed,
+            (
+                "official timed run has a fresh experiment identity"
+                if timed_run and stored_manifest_hash is None
+                else (
+                    "official timed runs require a fresh experiment identity with no prior "
+                    "decisions"
+                    if timed_run
+                    else "experiment is new or stored manifest hash matches"
+                )
+            ),
         ),
         _check(
             "ledger_consistency",

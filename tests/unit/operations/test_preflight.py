@@ -137,6 +137,47 @@ def test_candidate_preflight_passes_only_when_every_gate_matches() -> None:
     assert report["safety"] == {"paper_trading_only": True, "live_money": False}
 
 
+def test_timed_candidate_preflight_requires_a_fresh_experiment() -> None:
+    manifest = _live_manifest(schema_revision="0015", worktree_hash=None)
+    repository = _repository(manifest)
+
+    for run_purpose in ("soak", "seven_day"):
+        report = evaluate_candidate_preflight(
+            manifest=manifest,
+            repository=repository,
+            settings=Settings(run_mode=RunMode.PAPER_LIVE),
+            database_name="maais",
+            database_schema_revision="0015",
+            stored_manifest_hash=manifest.manifest_hash,
+            ledger={"ok": True, "error_count": 0, "errors": []},
+            restore_verification=_restore_verification(),
+            dashboard_built=True,
+            free_disk_bytes=10 * 1024**3,
+            minimum_free_bytes=5 * 1024**3,
+            qualification=_qualification(repository),
+            qualification_bundle_verified=True,
+            evaluated_at=datetime(2026, 8, 3, 1, tzinfo=timezone.utc),
+            run_purpose=run_purpose,
+            process_drill_evidence={"passed": True, "report_id": "b" * 64},
+            process_drill_evidence_verified=True,
+            soak_readiness_evidence=(
+                _soak_readiness(
+                    repository,
+                    generated_at=datetime(2026, 8, 3, tzinfo=timezone.utc),
+                )
+                if run_purpose == "seven_day"
+                else None
+            ),
+            soak_readiness_evidence_verified=run_purpose == "seven_day",
+        )
+
+        checks = cast(list[dict[str, object]], report["checks"])
+        stored = next(check for check in checks if check["name"] == "stored_manifest")
+        assert report["passed"] is False
+        assert stored["passed"] is False
+        assert "fresh experiment" in str(stored["detail"])
+
+
 def test_candidate_preflight_rejects_manifest_that_runtime_would_reject() -> None:
     manifest = _live_manifest(schema_revision="0015", worktree_hash=None)
     manifest = replace(
