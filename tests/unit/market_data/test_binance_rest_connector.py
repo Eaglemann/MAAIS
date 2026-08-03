@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
+from maais.market_data.connectors.binance_contracts import BinanceContractError
 from maais.market_data.connectors.binance_rest import (
     PUBLIC_FAPI_BASE_URL,
     BinanceRestConnector,
@@ -234,4 +235,42 @@ async def test_funding_history_paginates_inclusive_range_without_duplicates() ->
     assert len({event.event_id for event in events}) == 3
     assert isinstance(events[-1].payload, FundingSettlementPayload)
     assert events[-1].payload.rate_type == "Special"
+    await client.aclose()
+
+
+async def test_funding_history_rejects_an_event_outside_the_requested_window() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/fapi/v1/time":
+            return httpx.Response(200, json={"serverTime": SERVER_MS})
+        if request.url.path == "/fapi/v1/exchangeInfo":
+            return httpx.Response(200, json=_exchange_info())
+        if request.url.path == "/fapi/v1/fundingRate":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "symbol": "BTCUSDT",
+                        "fundingTime": SERVER_MS - 1,
+                        "fundingRate": "0.0001",
+                        "markPrice": "100.5",
+                        "rateType": "Regular",
+                    }
+                ],
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = _client(handler)
+    connector = BinanceRestConnector(
+        client=client,
+        observed_now=lambda: OBSERVED_AT,
+        sleep=_no_sleep,
+    )
+    async with connector:
+        await connector.preflight(("BTCUSDT", "ETHUSDT"))
+        with pytest.raises(BinanceContractError, match="requested window"):
+            await connector.get_funding_events(
+                "BTCUSDT",
+                start_ms=SERVER_MS,
+                end_ms=SERVER_MS + 1,
+            )
     await client.aclose()

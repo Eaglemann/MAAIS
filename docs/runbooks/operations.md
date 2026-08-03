@@ -132,6 +132,13 @@ error type, and retry delay. The 24-hour verdict summarizes those warning events
 Contract/schema failures are never retried. Exhausted transport retries remain a
 terminal candidate failure and preserve the exact retained task name.
 
+Observed funding polls use non-overlapping millisecond windows after every
+successful fetch. Worker restart intentionally replays from the immutable
+manifest boundary; persisted official and counterfactual funding application is
+idempotent by venue settlement identity and source payload, not by the local
+re-observation timestamp. A changed rate, rate type, mark, or settlement time
+still fails closed.
+
 If an operator-review incident appears, follow `docs/runbooks/incidents.md`. Do not edit rows directly; the supported acknowledge/resolve commands preserve actor, time, rationale, version, domain event, and content hash.
 
 ## Daily close

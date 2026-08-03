@@ -106,7 +106,8 @@ class PublicMarketDataRuntime:
         self._sleep = sleep
         self._reference_poll_seconds = reference_poll_seconds
         self._funding_poll_seconds = funding_poll_seconds
-        self._funding_start_at = funding_start_at
+        self._funding_next_start_ms = int(funding_start_at.timestamp() * 1000)
+        self._funding_last_observed_at = funding_start_at
         self._preflight_refresh_seconds = preflight_refresh_seconds
         self._queue: asyncio.Queue[ObservedMarketEvent] = asyncio.Queue(maxsize=queue_size)
         self._state = PublicDataRuntimeState.STOPPED
@@ -281,15 +282,18 @@ class PublicMarketDataRuntime:
     async def _poll_funding_once(self) -> None:
         observed_at = self._observed_now()
         require_utc(observed_at, "public funding observed_at")
-        if observed_at < self._funding_start_at:
+        if observed_at < self._funding_last_observed_at:
             raise PublicDataHalt(
                 "public_funding_clock_regressed",
-                "observed time precedes the explicit funding restart cutoff",
+                "observed time precedes the last successful funding poll",
             )
-        if observed_at == self._funding_start_at:
+        if observed_at == self._funding_last_observed_at:
             return
-        start_ms = int(self._funding_start_at.timestamp() * 1000)
         end_ms = int(observed_at.timestamp() * 1000)
+        if end_ms < self._funding_next_start_ms:
+            self._funding_last_observed_at = observed_at
+            return
+        start_ms = self._funding_next_start_ms
         batches = await asyncio.gather(
             *(
                 self._futures_rest.get_funding_events(
@@ -302,6 +306,8 @@ class PublicMarketDataRuntime:
         )
         for batch in batches:
             self._emit_many(batch)
+        self._funding_next_start_ms = end_ms + 1
+        self._funding_last_observed_at = observed_at
 
     async def _refresh_preflight(self) -> None:
         while self._running:

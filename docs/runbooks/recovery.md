@@ -17,6 +17,12 @@ symbol has both mark-price coverage and a reconciled order-book event. Initial
 spot references are collected only after that WebSocket readiness point so they
 cannot silently age during connector startup.
 
+Funding history is deliberately re-read from the manifest boundary after a
+worker restart so a settlement missed during downtime can still be applied. A
+previously observed venue settlement is idempotent even though its new local
+observation timestamp differs. Any changed settlement time, rate, rate type, or
+mark price under the same venue event identity remains a terminal conflict.
+
 Recovery reuses the Docker context and PostgreSQL system identifier recorded at
 candidate start. Do not switch container engines or remap the database port; a
 different cluster is rejected before either service is restarted.

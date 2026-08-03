@@ -298,6 +298,10 @@ async def test_observed_funding_settlement_is_applied_exactly_once_after_restart
 
     await observer.observe(event, context_events=())
     await observer.observe(event, context_events=())
+    await observer.observe(
+        replace(event, observed_at=event.observed_at + timedelta(minutes=1)),
+        context_events=(),
+    )
     with pytest.raises(ContinuousRuntimeConflict, match="different persisted content"):
         await observer.observe(
             replace(
@@ -506,6 +510,11 @@ async def test_counterfactual_marks_and_funding_advance_once_without_official_po
     )
     await observer.observe(funding_event, context_events=(funding_event,))
     await observer.observe(funding_event, context_events=(funding_event,))
+    reobserved_funding = replace(
+        funding_event,
+        observed_at=funding_event.observed_at + timedelta(minutes=1),
+    )
+    await observer.observe(reobserved_funding, context_events=(reobserved_funding,))
 
     async with uow_factory.begin() as uow:
         unresolved = await uow.counterfactuals.get_unresolved(command.manifest.experiment_id)

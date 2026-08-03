@@ -338,6 +338,7 @@ class CounterfactualState:
             market_event_id,
             observed_at,
             {"rate": rate, "mark_price": mark_price},
+            allow_reobservation=True,
         ):
             return self
         amount = self.quantity * mark_price * rate
@@ -401,6 +402,8 @@ class CounterfactualState:
         market_event_id: str,
         observed_at: datetime,
         expected: Mapping[str, object],
+        *,
+        allow_reobservation: bool = False,
     ) -> bool:
         expected_payload = _payload({"market_event_id": market_event_id, **expected})
         matches = tuple(
@@ -414,7 +417,7 @@ class CounterfactualState:
         if not matches:
             return False
         existing = matches[0]
-        if existing.event_at != observed_at or any(
+        if (not allow_reobservation and existing.event_at != observed_at) or any(
             existing.payload.get(key) != value for key, value in expected_payload.items()
         ):
             raise ValueError("counterfactual market event identity has different content")

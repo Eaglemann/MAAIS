@@ -131,6 +131,34 @@ def test_counterfactual_rejects_float_funding_rate() -> None:
         )
 
 
+def test_counterfactual_funding_reobservation_ignores_local_time_but_not_payload() -> None:
+    state = _state().enter(_fill(), plan_id=UUID(int=5))
+    observed_at = NOW + timedelta(hours=8)
+    funded = state.apply_funding(
+        Decimal("0.001"),
+        Decimal("101"),
+        observed_at,
+        market_event_id="funding-reobserved",
+    )
+
+    assert (
+        funded.apply_funding(
+            Decimal("0.001"),
+            Decimal("101"),
+            observed_at + timedelta(minutes=1),
+            market_event_id="funding-reobserved",
+        )
+        == funded
+    )
+    with pytest.raises(ValueError, match="different content"):
+        funded.apply_funding(
+            Decimal("0.002"),
+            Decimal("101"),
+            observed_at + timedelta(minutes=1),
+            market_event_id="funding-reobserved",
+        )
+
+
 def test_closed_bars_advance_exit_policy_once_and_resolve_opposing_signal() -> None:
     state = _state().enter(_fill(), plan_id=UUID(int=5))
     assert state.entry_fill is not None

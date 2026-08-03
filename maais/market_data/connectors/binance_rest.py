@@ -282,6 +282,17 @@ class BinanceRestConnector:
             page = parse_funding_events(raw, symbol=symbol, observed_at=observed_at)
             if not page:
                 break
+            page_times = tuple(
+                _dt_to_ms(event.payload.funding_at)
+                for event in page
+                if isinstance(event.payload, FundingSettlementPayload)
+            )
+            if len(page_times) != len(page) or any(
+                funding_ms < cursor or funding_ms > end_ms for funding_ms in page_times
+            ):
+                raise BinanceContractError(
+                    "funding response returned an event outside the requested window"
+                )
             events.extend(page)
             last = page[-1].payload
             assert isinstance(last, FundingSettlementPayload)

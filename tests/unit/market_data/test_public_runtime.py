@@ -331,6 +331,57 @@ async def test_runtime_polls_observed_funding_from_explicit_restart_cutoff() -> 
     await runtime.stop()
 
 
+async def test_runtime_advances_funding_window_after_each_successful_poll() -> None:
+    rest = _FuturesRest()
+    current_now = NOW + timedelta(seconds=1)
+    released = False
+    blocked = asyncio.Event()
+
+    def observed_now() -> datetime:
+        return current_now
+
+    async def release_one_funding_poll(delay: float) -> None:
+        nonlocal current_now, released
+        if delay == 60 and not released:
+            released = True
+            current_now += timedelta(seconds=60)
+            return
+        await blocked.wait()
+
+    runtime = PublicMarketDataRuntime(
+        ("BTCUSDT",),
+        futures_rest=rest,  # type: ignore[arg-type]
+        primary_spot=_Reference("primary"),  # type: ignore[arg-type]
+        secondary_spot=_Reference("secondary"),  # type: ignore[arg-type]
+        websocket_factory=lambda symbols, supplied_rest: _WebSocket(),  # type: ignore[arg-type,return-value]
+        observed_now=observed_now,
+        sleep=release_one_funding_poll,
+        funding_start_at=NOW - timedelta(hours=8),
+        funding_poll_seconds=60,
+    )
+
+    await runtime.start()
+    for _ in range(50):
+        if len(rest.funding_calls) == 2:
+            break
+        await asyncio.sleep(0)
+
+    first_end = int((NOW + timedelta(seconds=1)).timestamp() * 1000)
+    assert rest.funding_calls == [
+        (
+            "BTCUSDT",
+            int((NOW - timedelta(hours=8)).timestamp() * 1000),
+            first_end,
+        ),
+        (
+            "BTCUSDT",
+            first_end + 1,
+            int((NOW + timedelta(seconds=61)).timestamp() * 1000),
+        ),
+    ]
+    await runtime.stop()
+
+
 async def test_runtime_halt_preserves_the_failed_task_identity() -> None:
     release_reference = True
     blocked = asyncio.Event()

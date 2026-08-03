@@ -145,6 +145,8 @@ class ContinuousPaperObserver:
             raise TypeError("continuous funding payload is invalid")
         if event.symbol not in self._manifest.symbols:
             raise ContinuousRuntimeConflict("funding symbol is outside the experiment")
+        if event.venue_event_at != payload.funding_at or event.observed_at < payload.funding_at:
+            raise ContinuousRuntimeConflict("funding event timestamps are inconsistent")
         async with self._uow.begin() as transaction:
             existing = await transaction.paper_execution.load_funding_event(
                 self._manifest.experiment_id,
@@ -153,7 +155,6 @@ class ContinuousPaperObserver:
             if existing is not None:
                 if (
                     existing.funding_at != payload.funding_at
-                    or existing.observed_at != event.observed_at
                     or existing.rate != payload.funding_rate
                     or existing.rate_type != payload.rate_type
                     or existing.mark_price != payload.mark_price
