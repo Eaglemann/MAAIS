@@ -4,7 +4,9 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from maais.config.paper_candidate import OFFICIAL_DATA_VERSIONS, OFFICIAL_FILL_POLICY
 from maais.db.models.accounts import ExitPlanModel, FundingEntryModel
@@ -544,6 +546,73 @@ async def test_counterfactual_marks_and_funding_advance_once_without_official_po
     )
     assert account.version == 0
     assert funding_count == 0
+
+
+async def test_redundant_counterfactual_marks_do_not_reopen_persistence(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    command, outcome, observations, observer = await _runtime_with_pending_counterfactual(
+        uow_factory
+    )
+    assert outcome.counterfactual is not None
+    eligible_after = outcome.counterfactual.eligible_after
+    entry_mark = _mark("compaction-entry-mark", Decimal("100"), eligible_after)
+    entry_book = _event_book(
+        "compaction-entry-book",
+        eligible_after + timedelta(milliseconds=1),
+        "100",
+        "101",
+        4_500,
+    )
+    await observations.observe(entry_mark)
+    await observations.observe(entry_book)
+    await observer.observe(entry_book, context_events=(entry_mark, entry_book))
+
+    async with uow_factory.begin() as uow:
+        before = await uow.counterfactuals.get(outcome.counterfactual.counterfactual_id)
+    assert before.entry_fill is not None
+
+    statements: list[str] = []
+
+    def capture_statement(
+        _connection,
+        _cursor,
+        statement: str,
+        _parameters,
+        _context,
+        _executemany,
+    ) -> None:
+        statements.append(statement)
+
+    sqlalchemy_event.listen(db_engine.sync_engine, "before_cursor_execute", capture_statement)
+    try:
+        for offset in range(1, 51):
+            mark = _mark(
+                f"compaction-flat-mark-{offset}",
+                before.entry_fill.price,
+                entry_book.observed_at + timedelta(seconds=offset),
+            )
+            await observations.observe(mark)
+            await observer.observe(mark, context_events=(mark,))
+    finally:
+        sqlalchemy_event.remove(
+            db_engine.sync_engine,
+            "before_cursor_execute",
+            capture_statement,
+        )
+
+    async with uow_factory.begin() as uow:
+        after = await uow.counterfactuals.get(outcome.counterfactual.counterfactual_id)
+
+    counterfactual_writes = tuple(
+        statement
+        for statement in statements
+        if statement.lstrip().upper().startswith(("INSERT", "UPDATE"))
+        and "counterfactual" in statement.lower()
+    )
+    assert after == before
+    assert counterfactual_writes == ()
 
 
 async def test_first_eligible_counterfactual_book_records_explicit_no_fill(

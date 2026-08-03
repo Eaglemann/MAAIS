@@ -241,6 +241,14 @@ class CounterfactualState:
                         net_pnl=self._net_pnl(mark_price),
                     )
                 )
+        evaluation = self.exit_plan.evaluate_mark(mark_price, observed_at)
+        if (
+            favorable == self.maximum_favorable_excursion
+            and adverse == self.maximum_adverse_excursion
+            and tuple(outcomes) == self.outcomes
+            and evaluation.intent is None
+        ):
+            return self
         updated = self._advance(
             status=self.status,
             event_type="counterfactual.mark_observed",
@@ -256,10 +264,8 @@ class CounterfactualState:
             maximum_favorable_excursion=favorable,
             maximum_adverse_excursion=adverse,
             outcomes=tuple(outcomes),
+            exit_plan=evaluation.plan,
         )
-        assert updated.exit_plan is not None
-        evaluation = updated.exit_plan.evaluate_mark(mark_price, observed_at)
-        updated = replace(updated, exit_plan=evaluation.plan)
         if evaluation.intent is not None:
             return updated._close(mark_price, evaluation.intent.reason.value, observed_at)
         return updated

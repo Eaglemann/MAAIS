@@ -238,15 +238,17 @@ class ContinuousPaperObserver:
                     control.kill_switch_active,
                 )
 
-        counterfactual_updates = tuple(
-            state.observe_mark(
+        counterfactual_updates = []
+        for state in states:
+            if state.symbol != event.symbol or state.status is not CounterfactualStatus.OPEN:
+                continue
+            updated = state.observe_mark(
                 payload.mark_price,
                 event.observed_at,
                 market_event_id=event.event_id,
             )
-            for state in states
-            if state.symbol == event.symbol and state.status is CounterfactualStatus.OPEN
-        )
+            if updated is not state:
+                counterfactual_updates.append(updated)
         protection_outcome = None
         if official_context is not None:
             account, exit_plan, entry_proposal_id, entry_admission_halted = official_context

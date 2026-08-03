@@ -109,6 +109,38 @@ def test_counterfactual_horizon_uses_first_observation_at_or_after_cutoff() -> N
     assert due.outcome("15m") == later.outcome("15m")
 
 
+def test_counterfactual_compacts_marks_without_tracked_state_changes() -> None:
+    fill = _fill()
+    entered = _state().enter(fill, plan_id=UUID(int=5))
+
+    observed = entered
+    for offset in range(1, 501):
+        observed = observed.observe_mark(
+            fill.price,
+            fill.fill_at + timedelta(seconds=offset),
+            market_event_id=f"unchanged-mark-{offset}",
+        )
+
+    assert observed is entered
+    assert observed.version == entered.version
+    assert observed.events == entered.events
+
+    favorable = observed.observe_mark(
+        fill.price + Decimal("0.1"),
+        fill.fill_at + timedelta(seconds=501),
+        market_event_id="new-favorable-extreme",
+    )
+    repeated = favorable.observe_mark(
+        fill.price + Decimal("0.1"),
+        fill.fill_at + timedelta(seconds=502),
+        market_event_id="same-favorable-extreme",
+    )
+
+    assert favorable.version == entered.version + 1
+    assert favorable.events[-1].event_type == "counterfactual.mark_observed"
+    assert repeated is favorable
+
+
 def test_no_fill_is_terminal_and_counterfactual_module_has_no_account_dependency() -> None:
     state = _state().mark_no_fill("insufficient_visible_depth", NOW + timedelta(seconds=1))
 
