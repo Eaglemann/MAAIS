@@ -178,3 +178,19 @@ async def test_concurrent_identical_retry_creates_one_complete_bundle(
 
     assert sorted(result.created for result in results) == [False, True]
     assert results[0].decision_cycle_id == results[1].decision_cycle_id
+
+
+async def test_market_frame_primary_key_collision_fails_as_identity_conflict(
+    uow_factory: UnitOfWork,
+) -> None:
+    _manifest_value, bundle = await _prepare_bundle(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.decisions.record_bundle(bundle)
+
+    colliding = replace(
+        bundle,
+        market_frame=replace(bundle.market_frame, content_hash="c" * 64),
+    )
+    with pytest.raises(DecisionIdentityConflict, match="market frame"):
+        async with uow_factory.begin() as uow:
+            await uow.decisions.record_bundle(colliding)

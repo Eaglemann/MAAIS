@@ -123,9 +123,7 @@ class DecisionRepository:
                 quality_results_json=_json_object(frame.quality_results),
                 content_hash=frame.content_hash,
             )
-            .on_conflict_do_nothing(
-                index_elements=[MarketFrameModel.experiment_id, MarketFrameModel.content_hash]
-            )
+            .on_conflict_do_nothing()
             .returning(MarketFrameModel.id)
         )
         frame_created = inserted_frame_id is not None
@@ -160,15 +158,7 @@ class DecisionRepository:
                 created_at=cycle.created_at,
                 completed_at=cycle.completed_at,
             )
-            .on_conflict_do_nothing(
-                index_elements=[
-                    DecisionCycleModel.experiment_id,
-                    DecisionCycleModel.symbol,
-                    DecisionCycleModel.timeframe,
-                    DecisionCycleModel.cycle_at,
-                    DecisionCycleModel.strategy_version_id,
-                ]
-            )
+            .on_conflict_do_nothing()
             .returning(DecisionCycleModel.id)
         )
         if inserted_cycle_id is None:
@@ -182,7 +172,7 @@ class DecisionRepository:
                 )
             )
             if existing is None:
-                raise RuntimeError("decision identity disappeared after conflict")
+                raise DecisionIdentityConflict("decision ID already belongs to a different key")
             if existing.content_hash != bundle_hash:
                 raise DecisionIdentityConflict(
                     "decision key already exists with different complete content"
