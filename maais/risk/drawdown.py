@@ -10,9 +10,9 @@ Note: 15–20% range uses 0.50 multiplier (same as 10–15% tier).
 """
 
 from maais.config.constants import (
+    DRAWDOWN_HALT_THRESHOLD,
     DRAWDOWN_REDUCE_25_THRESHOLD,
     DRAWDOWN_REDUCE_50_THRESHOLD,
-    DRAWDOWN_HALT_THRESHOLD,
 )
 from maais.core.logging import get_logger
 from maais.risk.schemas import DrawdownState
@@ -84,7 +84,7 @@ class DrawdownController:
 
 def _get_multiplier(drawdown_pct: float) -> tuple[float, bool]:
     """Return (multiplier, is_halted) for a given drawdown level."""
-    if drawdown_pct >= DRAWDOWN_HALT_THRESHOLD:       # >= 20%
+    if drawdown_pct >= DRAWDOWN_HALT_THRESHOLD:  # >= 20%
         return 0.0, True
     if drawdown_pct >= DRAWDOWN_REDUCE_50_THRESHOLD:  # >= 10%
         return 0.50, False

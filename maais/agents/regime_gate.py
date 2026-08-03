@@ -5,8 +5,7 @@ Each agent class declares compatible_regimes; this module
 provides a helper to filter a list of agents.
 """
 
-from maais.agents.base import BaseAgent, AgentOutput
-from maais.feature_pipeline.features import FeatureSet
+from maais.agents.base import BaseAgent
 
 
 def filter_compatible_agents(agents: list[BaseAgent], regime: str | None) -> list[BaseAgent]:

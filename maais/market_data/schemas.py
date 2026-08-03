@@ -13,19 +13,19 @@ from decimal import Decimal
 @dataclass
 class KlineData:
     symbol: str
-    timeframe: str           # "1m", "5m", "15m", "1h"
+    timeframe: str  # "1m", "5m", "15m", "1h"
     open_time: datetime
     open: Decimal
     high: Decimal
     low: Decimal
     close: Decimal
-    volume: Decimal          # base asset volume
+    volume: Decimal  # base asset volume
     close_time: datetime
-    quote_volume: Decimal    # quote asset volume
+    quote_volume: Decimal  # quote asset volume
     trade_count: int
     taker_buy_volume: Decimal
     taker_buy_quote_volume: Decimal
-    is_closed: bool = True   # False = candle still forming (WebSocket live update)
+    is_closed: bool = True  # False = candle still forming (WebSocket live update)
 
     def to_dict(self) -> dict:
         return {
@@ -66,8 +66,8 @@ class FundingRateData:
 class OrderBookSnapshot:
     symbol: str
     timestamp: datetime
-    bids: list[tuple[Decimal, Decimal]]   # (price, quantity) sorted desc by price
-    asks: list[tuple[Decimal, Decimal]]   # (price, quantity) sorted asc by price
+    bids: list[tuple[Decimal, Decimal]]  # (price, quantity) sorted desc by price
+    asks: list[tuple[Decimal, Decimal]]  # (price, quantity) sorted asc by price
     last_update_id: int
 
     def to_dict(self) -> dict:
@@ -86,7 +86,7 @@ class TradeData:
     timestamp: datetime
     price: Decimal
     quantity: Decimal
-    is_buyer_maker: bool   # True = sell-side aggressor
+    is_buyer_maker: bool  # True = sell-side aggressor
     trade_id: int
 
     def to_dict(self) -> dict:

@@ -36,11 +36,11 @@ def compute_consensus(
             agents_neutral=[],
         )
 
-    long_wp_sum = 0.0   # weighted probability sum for long direction
+    long_wp_sum = 0.0  # weighted probability sum for long direction
     short_wp_sum = 0.0
-    long_wc_sum = 0.0   # weighted confidence sum
+    long_wc_sum = 0.0  # weighted confidence sum
     short_wc_sum = 0.0
-    long_w_sum = 0.0    # pure weight sum (for direction vote)
+    long_w_sum = 0.0  # pure weight sum (for direction vote)
     short_w_sum = 0.0
     neutral_w_sum = 0.0
     agents_long: list[str] = []

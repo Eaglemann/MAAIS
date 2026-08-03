@@ -12,10 +12,8 @@ Current logic:
   - Low volatility → complacency → slight contrarian lean
 """
 
-import math
-
 from maais.agents.base import AgentOutput, BaseAgent, _clip, _neutral, _signal_to_output
-from maais.config.constants import AgentName, Regime, ZSCORE_TRIGGER
+from maais.config.constants import ZSCORE_TRIGGER, AgentName, Regime
 from maais.feature_pipeline.features import FeatureSet
 
 _NAME = AgentName.MACRO_SENTIMENT
@@ -23,7 +21,7 @@ _NAME = AgentName.MACRO_SENTIMENT
 
 class MacroSentimentAgent(BaseAgent):
     name = _NAME
-    compatible_regimes = ()   # macro context is relevant in all regimes
+    compatible_regimes = ()  # macro context is relevant in all regimes
 
     async def analyze(self, features: FeatureSet) -> AgentOutput:
         votes, total = 0.0, 0.0
@@ -31,7 +29,7 @@ class MacroSentimentAgent(BaseAgent):
 
         # Regime-based sentiment
         if regime == Regime.HIGH_VOLATILITY:
-            votes -= 0.5   # risk-off → slight short bias
+            votes -= 0.5  # risk-off → slight short bias
             total += 0.5
         elif regime == Regime.LOW_VOLATILITY:
             # Low vol = complacency; slight contrarian → no strong view
@@ -51,7 +49,7 @@ class MacroSentimentAgent(BaseAgent):
         if total == 0:
             return _neutral(_NAME)
 
-        confidence = 0.3   # low confidence — pure proxy logic until real news feed
+        confidence = 0.3  # low confidence — pure proxy logic until real news feed
         risk = _clip(features.rolling_std * 15.0) if features.rolling_std else 0.4
 
         return _signal_to_output(_NAME, votes, total, confidence, risk)

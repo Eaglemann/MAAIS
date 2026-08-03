@@ -5,7 +5,7 @@ a large institutional participant pushing price directionally.
 """
 
 from maais.agents.base import AgentOutput, BaseAgent, _clip, _neutral, _signal_to_output
-from maais.config.constants import AgentName, Regime
+from maais.config.constants import AgentName
 from maais.feature_pipeline.features import FeatureSet
 
 _NAME = AgentName.ORDER_FLOW_TOXICITY
@@ -13,7 +13,7 @@ _NAME = AgentName.ORDER_FLOW_TOXICITY
 
 class OrderFlowToxicityAgent(BaseAgent):
     name = _NAME
-    compatible_regimes = ()   # compatible with all regimes
+    compatible_regimes = ()  # compatible with all regimes
 
     async def analyze(self, features: FeatureSet) -> AgentOutput:
         if features.book_imbalance is None or features.bid_ask_spread is None:
@@ -23,7 +23,7 @@ class OrderFlowToxicityAgent(BaseAgent):
         spread = features.bid_ask_spread
 
         # Toxicity = wide spread + strong imbalance → directional institutional flow
-        toxicity = spread * abs(imbalance) * 100   # rough toxicity score
+        toxicity = spread * abs(imbalance) * 100  # rough toxicity score
         direction_vote = imbalance * 2.0
         total = 2.0
 

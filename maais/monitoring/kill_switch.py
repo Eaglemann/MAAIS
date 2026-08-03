@@ -14,7 +14,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from maais.core.logging import get_logger
-from maais.monitoring.schemas import AlertLevel
 
 logger = get_logger(__name__)
 

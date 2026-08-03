@@ -1,18 +1,17 @@
 """Tests for the Monitoring Layer (Batch 8)."""
 
-import pytest
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
-from maais.config.constants import (
-    DRAWDOWN_HALT_THRESHOLD,
-    DRAWDOWN_REDUCE_25_THRESHOLD,
-    DRAWDOWN_REDUCE_50_THRESHOLD,
-    HIGH_VOL_MULTIPLIER,
-)
+import pytest
+
 from maais.feature_pipeline.features import FeatureSet
 from maais.monitoring.alerting import AlertDispatcher
-from maais.monitoring.black_swan import BlackSwanGuard, _LIQUIDITY_COLLAPSE_SPREAD, _EXPOSURE_HARD_CEILING
+from maais.monitoring.black_swan import (
+    _EXPOSURE_HARD_CEILING,
+    _LIQUIDITY_COLLAPSE_SPREAD,
+    BlackSwanGuard,
+)
 from maais.monitoring.drawdown_monitor import DrawdownMonitor
 from maais.monitoring.engine import MonitoringEngine
 from maais.monitoring.health import SystemHealthTracker
@@ -20,8 +19,8 @@ from maais.monitoring.kill_switch import KillSwitch
 from maais.monitoring.schemas import AlertEvent, AlertLevel, ComponentName, HealthStatus
 from maais.risk.drawdown import DrawdownController
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _ts() -> datetime:
     return datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -62,6 +61,7 @@ def _engine(capital: float = 100_000.0, drawdown_pct: float = 0.0) -> Monitoring
 
 # ── AlertEvent / schemas ──────────────────────────────────────────────────────
 
+
 class TestSchemas:
     def test_alert_level_values(self):
         assert AlertLevel.INFO.value == "INFO"
@@ -83,6 +83,7 @@ class TestSchemas:
 
 
 # ── AlertDispatcher ───────────────────────────────────────────────────────────
+
 
 class TestAlertDispatcher:
     def test_telegram_disabled_by_default(self):
@@ -124,6 +125,7 @@ class TestAlertDispatcher:
 
 # ── SystemHealthTracker ───────────────────────────────────────────────────────
 
+
 class TestSystemHealthTracker:
     def test_unseen_component_is_unhealthy(self):
         tracker = SystemHealthTracker()
@@ -161,7 +163,9 @@ class TestSystemHealthTracker:
         tracker = SystemHealthTracker(stale_seconds=0)
         tracker.ping("market_data")
         # With stale_seconds=0, immediately stale
-        import time; time.sleep(0.01)
+        import time
+
+        time.sleep(0.01)
         assert not tracker.get_status("market_data").is_healthy
 
     def test_unhealthy_components_lists_bad_ones(self):
@@ -173,6 +177,7 @@ class TestSystemHealthTracker:
 
 
 # ── KillSwitch ────────────────────────────────────────────────────────────────
+
 
 class TestKillSwitch:
     def test_initially_not_halted(self):
@@ -230,6 +235,7 @@ class TestKillSwitch:
 
 
 # ── BlackSwanGuard ────────────────────────────────────────────────────────────
+
 
 class TestBlackSwanGuard:
     def test_normal_conditions_allowed(self):
@@ -289,6 +295,7 @@ class TestBlackSwanGuard:
 
 # ── DrawdownMonitor ───────────────────────────────────────────────────────────
 
+
 class TestDrawdownMonitor:
     def _monitor(self, capital: float, current: float):
         dd_ctrl = DrawdownController(capital)
@@ -337,6 +344,7 @@ class TestDrawdownMonitor:
 
 
 # ── MonitoringEngine (integration) ───────────────────────────────────────────
+
 
 class TestMonitoringEngine:
     async def test_normal_conditions_trading_allowed(self):

@@ -10,7 +10,7 @@ exceeds the estimated market return (passive hold). Stored with the
 DecisionResult for post-trade verification by Batch 9.
 """
 
-from maais.decision.schemas import AdversarialSummary, DecisionResult, EVResult
+from maais.decision.schemas import AdversarialSummary, EVResult
 
 
 def evaluate_gate(

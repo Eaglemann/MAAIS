@@ -10,23 +10,25 @@ High annualized funding magnifies the signal (better carry opportunity).
 import math
 
 from maais.agents.base import AgentOutput, BaseAgent, _clip, _neutral
-from maais.config.constants import AgentName, Regime
+from maais.config.constants import AgentName
 from maais.feature_pipeline.features import FeatureSet
 
 _NAME = AgentName.CARRY_YIELD
-_HIGH_ANNUAL_FUNDING_THRESHOLD = 0.50   # 50% annualized = very high
+_HIGH_ANNUAL_FUNDING_THRESHOLD = 0.50  # 50% annualized = very high
 
 
 class CarryYieldAgent(BaseAgent):
     name = _NAME
-    compatible_regimes = ()   # funding rate analysis relevant in all regimes
+    compatible_regimes = ()  # funding rate analysis relevant in all regimes
 
     async def analyze(self, features: FeatureSet) -> AgentOutput:
         if features.funding_bias is None or features.funding_rate is None:
             return _neutral(_NAME)
 
         rate = abs(features.funding_rate)
-        annualised = abs(features.annualized_funding) if features.annualized_funding else rate * 1095
+        annualised = (
+            abs(features.annualized_funding) if features.annualized_funding else rate * 1095
+        )
 
         # Direction: fade the crowded side (longs paying → short bias)
         if features.funding_bias == "long_heavy":

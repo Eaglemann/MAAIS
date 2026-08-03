@@ -1,7 +1,8 @@
-# PLAN.md — Short-Term Development Plan
+# PLAN.md — Historical Component Plan and Current Platform Gate
 
-> Near-term execution plan.
-> Full architecture in `ROADMAP.md`. Development process in `ORCHESTRATOR.md`.
+> The batch sections below are a historical component inventory. They are not
+> evidence that MAAIS can run a safe paper experiment. Current execution is
+> governed by `docs/superpowers/plans/2026-08-02-maais-master-delivery-plan.md`.
 
 ---
 
@@ -16,7 +17,7 @@
 | Infrastructure | Local | You |
 | Testing | pytest | You |
 | Database | PostgreSQL | You |
-| Mode | Live from day one | You |
+| Mode | Replay, public-data local paper trading, and Binance Demo/Testnet smoke only | 2026-08-02 design |
 | Position sizing | `min(Half-Kelly Size, Volatility-Adjusted Size, Risk Cap)` | v21.1 §15 |
 | Half-Kelly | Explicitly confirmed | v21.1 §15 |
 | Max risk per trade | 1–2% of total capital | v21.1 §15 |
@@ -36,9 +37,14 @@
 
 ## CURRENT POSITION
 
-**Status:** Batch 0 complete — ready for Batch 1
-**Capital Phase:** Phase 1 (< $10k — Validation)
-**Active Batch:** None — Batch 0 shipped 2026-03-12
+**Status:** Component prototype; not ready for the seven-day paper experiment
+**Paper Account:** 10,000 USDT, 1x initial leverage, one-way positions
+**Active Phase:** Phase 0 — baseline safety and repository health
+
+The previous B0–B8-style code is retained as input to the new platform build.
+Readiness additionally requires the event ledger, conservative local broker,
+validated orchestrator, Mission Control, recovery/fault evidence, deterministic
+replay, Testnet protocol smoke, and a continuous 24-hour live-data soak.
 
 ---
 

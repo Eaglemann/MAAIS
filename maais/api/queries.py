@@ -1,0 +1,1172 @@
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from typing import cast
+from uuid import UUID
+
+from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from maais.analytics.query import load_research_dataset
+from maais.api.schemas import (
+    AccountOverview,
+    AuditEvent,
+    DataFreshness,
+    DecisionCounts,
+    DecisionDetail,
+    DecisionListItem,
+    DecisionPage,
+    ExperimentIdentity,
+    ExperimentListItem,
+    ExperimentOverview,
+    OperationalCounts,
+    PaperModelAssumptions,
+    ResearchCounterfactual,
+    ResearchExecutionSensitivity,
+    ResearchLabView,
+    RuntimeOverview,
+    TradeListItem,
+    TradePage,
+)
+from maais.config.paper_candidate import OFFICIAL_MARGIN_POLICY, OFFICIAL_MODEL_LIMITATIONS
+from maais.db.models.accounts import AccountSnapshotModel, PositionModel
+from maais.db.models.counterfactuals import CounterfactualModel
+from maais.db.models.decisions import (
+    AgentEvaluationModel,
+    DecisionCycleModel,
+    DecisionSummaryModel,
+    GateEvaluationModel,
+    MarketFrameModel,
+    TradeProposalModel,
+)
+from maais.db.models.execution import FillModel, OrderEventModel, OrderIntentModel
+from maais.db.models.experiments import AgentVersionModel, ExperimentModel
+from maais.db.models.ledger import DomainEventModel
+from maais.db.models.operations import (
+    DataQualityEvaluationModel,
+    IncidentModel,
+    MarketCursorModel,
+    MarketRecoveryRunModel,
+    TradingControlModel,
+    WorkerCheckpointModel,
+    WorkerLeaseModel,
+)
+
+_PENDING_ORDER_STATUSES = ("created", "authorized", "accepted", "partially_filled")
+_OPEN_COUNTERFACTUAL_STATUSES = ("pending", "open")
+_ACTIVE_RECOVERY_STATUSES = ("detected", "backfilling")
+_DECISION_OUTCOMES = ("neutral", "rejected", "counterfactual", "approved", "filled")
+_TRADE_OUTCOMES = ("rejected", "counterfactual", "approved", "filled", "expired")
+
+
+def _fields(model: object, names: Iterable[str]) -> dict[str, object]:
+    return {name: getattr(model, name) for name in names}
+
+
+def _optional_decimal(value: object) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _decision_outcome(
+    *,
+    disposition: str,
+    has_fill: bool,
+    counterfactual_status: str | None,
+) -> str:
+    if has_fill:
+        return "filled"
+    if counterfactual_status is not None:
+        return "counterfactual"
+    if disposition == "approved":
+        return "approved"
+    if disposition == "rejected":
+        return "rejected"
+    return "neutral"
+
+
+def _trade_outcome(
+    *,
+    proposal_status: str,
+    fill_count: int,
+    counterfactual_status: str | None,
+) -> str:
+    if fill_count > 0:
+        return "filled"
+    if counterfactual_status is not None:
+        return "counterfactual"
+    return proposal_status
+
+
+def _paper_model_assumptions(model: ExperimentModel) -> PaperModelAssumptions:
+    configuration = model.manifest_json.get("configuration")
+    risk = configuration.get("risk") if isinstance(configuration, Mapping) else None
+    risk = risk if isinstance(risk, Mapping) else {}
+    expected = {"leverage": 1, **OFFICIAL_MARGIN_POLICY}
+    official = all(risk.get(name) == value for name, value in expected.items())
+    leverage = risk.get("leverage")
+    maintenance_model = risk.get("maintenance_margin_model")
+    liquidation_model = risk.get("liquidation_price_model")
+    parity = risk.get("exchange_liquidation_parity")
+    return PaperModelAssumptions(
+        model_status="frozen_paper_model" if official else "legacy_or_unsupported_policy",
+        leverage=leverage if isinstance(leverage, int) and not isinstance(leverage, bool) else None,
+        maintenance_margin_model=(
+            maintenance_model if isinstance(maintenance_model, str) else None
+        ),
+        maintenance_margin_rate=_optional_decimal(risk.get("maintenance_margin_rate")),
+        liquidation_price_model=(liquidation_model if isinstance(liquidation_model, str) else None),
+        exchange_liquidation_parity=parity if isinstance(parity, bool) else None,
+        limitations=(
+            OFFICIAL_MODEL_LIMITATIONS
+            if official
+            else ("paper_model_policy_missing_or_not_supported",)
+        ),
+    )
+
+
+class MissionControlQueryService:
+    """Read-only query model over authoritative PostgreSQL projections."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_experiments(self, *, limit: int = 50) -> tuple[ExperimentListItem, ...]:
+        if not 1 <= limit <= 200:
+            raise ValueError("experiment limit must be between 1 and 200")
+        experiments = (
+            await self._session.scalars(
+                select(ExperimentModel)
+                .order_by(ExperimentModel.created_at.desc(), ExperimentModel.id)
+                .limit(limit)
+            )
+        ).all()
+        items: list[ExperimentListItem] = []
+        for experiment in experiments:
+            items.append(await self._experiment_item(experiment))
+        return tuple(items)
+
+    async def get_overview(self, experiment_id: UUID) -> ExperimentOverview:
+        experiment = await self._session.get(ExperimentModel, experiment_id)
+        if experiment is None:
+            raise LookupError(f"experiment not found: {experiment_id}")
+        item = await self._experiment_item(experiment)
+        positions = (
+            await self._session.scalars(
+                select(PositionModel)
+                .where(
+                    PositionModel.experiment_id == experiment_id,
+                    PositionModel.status == "open",
+                )
+                .order_by(PositionModel.symbol)
+            )
+        ).all()
+        pending_orders = (
+            await self._session.scalars(
+                select(OrderIntentModel)
+                .where(
+                    OrderIntentModel.experiment_id == experiment_id,
+                    OrderIntentModel.status.in_(_PENDING_ORDER_STATUSES),
+                )
+                .order_by(OrderIntentModel.created_at, OrderIntentModel.id)
+            )
+        ).all()
+        incidents = (
+            await self._session.scalars(
+                select(IncidentModel)
+                .where(
+                    IncidentModel.experiment_id == experiment_id,
+                    IncidentModel.status != "resolved",
+                )
+                .order_by(IncidentModel.detected_at.desc(), IncidentModel.id)
+            )
+        ).all()
+        return ExperimentOverview(
+            **item.model_dump(),
+            positions=tuple(self._position(position) for position in positions),
+            pending_orders=tuple(self._order(order) for order in pending_orders),
+            incidents=tuple(self._incident(incident) for incident in incidents),
+        )
+
+    async def list_decisions(
+        self,
+        experiment_id: UUID,
+        *,
+        symbol: str | None = None,
+        status: str | None = None,
+        direction: str | None = None,
+        disposition: str | None = None,
+        reason_code: str | None = None,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        regime: str | None = None,
+        strategy_version_id: UUID | None = None,
+        gate_type: str | None = None,
+        gate_passed: bool | None = None,
+        agent_name: str | None = None,
+        agent_direction: str | None = None,
+        proposal_status: str | None = None,
+        order_status: str | None = None,
+        outcome: str | None = None,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = 100,
+    ) -> DecisionPage:
+        if not 1 <= limit <= 500:
+            raise ValueError("decision limit must be between 1 and 500")
+        if symbol is not None:
+            symbol = symbol.upper()
+        if from_at is not None and to_at is not None and from_at > to_at:
+            raise ValueError("decision from_at must not be after to_at")
+        if outcome is not None and outcome not in _DECISION_OUTCOMES:
+            raise ValueError("decision outcome must be one of " + ", ".join(_DECISION_OUTCOMES))
+        if (before_at is None) != (before_id is None):
+            raise ValueError("decision cursor requires both before_at and before_id")
+        await self._experiment(experiment_id)
+        latest_order_status = (
+            select(OrderIntentModel.status)
+            .where(OrderIntentModel.proposal_id == TradeProposalModel.id)
+            .order_by(OrderIntentModel.created_at.desc(), OrderIntentModel.id.desc())
+            .limit(1)
+            .correlate(TradeProposalModel)
+            .scalar_subquery()
+        )
+        fill_exists = exists(
+            select(FillModel.id)
+            .join(OrderIntentModel, OrderIntentModel.id == FillModel.order_intent_id)
+            .where(OrderIntentModel.proposal_id == TradeProposalModel.id)
+        )
+        statement = (
+            select(
+                DecisionCycleModel,
+                MarketFrameModel.quality_status,
+                DecisionSummaryModel.consensus_direction,
+                DecisionSummaryModel.consensus_probability,
+                DecisionSummaryModel.consensus_confidence,
+                TradeProposalModel.status.label("proposal_status"),
+                latest_order_status.label("order_status"),
+                CounterfactualModel.status.label("counterfactual_status"),
+                fill_exists.label("has_fill"),
+            )
+            .join(MarketFrameModel, MarketFrameModel.id == DecisionCycleModel.market_frame_id)
+            .outerjoin(
+                DecisionSummaryModel,
+                DecisionSummaryModel.decision_cycle_id == DecisionCycleModel.id,
+            )
+            .outerjoin(
+                TradeProposalModel,
+                TradeProposalModel.decision_cycle_id == DecisionCycleModel.id,
+            )
+            .outerjoin(
+                CounterfactualModel,
+                CounterfactualModel.decision_cycle_id == DecisionCycleModel.id,
+            )
+            .where(DecisionCycleModel.experiment_id == experiment_id)
+        )
+        if symbol is not None:
+            statement = statement.where(DecisionCycleModel.symbol == symbol)
+        if status is not None:
+            statement = statement.where(DecisionCycleModel.status == status)
+        if direction is not None:
+            statement = statement.where(DecisionCycleModel.direction == direction)
+        if disposition is not None:
+            statement = statement.where(DecisionCycleModel.disposition == disposition)
+        if reason_code is not None:
+            statement = statement.where(DecisionCycleModel.reason_code == reason_code)
+        if from_at is not None:
+            statement = statement.where(DecisionCycleModel.cycle_at >= from_at)
+        if to_at is not None:
+            statement = statement.where(DecisionCycleModel.cycle_at <= to_at)
+        if regime is not None:
+            statement = statement.where(DecisionCycleModel.regime == regime)
+        if strategy_version_id is not None:
+            statement = statement.where(
+                DecisionCycleModel.strategy_version_id == strategy_version_id
+            )
+        if gate_type is not None or gate_passed is not None:
+            gate_query = select(GateEvaluationModel.id).where(
+                GateEvaluationModel.decision_cycle_id == DecisionCycleModel.id
+            )
+            if gate_type is not None:
+                gate_query = gate_query.where(GateEvaluationModel.gate_type == gate_type)
+            if gate_passed is not None:
+                gate_query = gate_query.where(GateEvaluationModel.passed.is_(gate_passed))
+            statement = statement.where(gate_query.exists())
+        if agent_name is not None or agent_direction is not None:
+            agent_query = (
+                select(AgentEvaluationModel.id)
+                .join(
+                    AgentVersionModel,
+                    AgentVersionModel.id == AgentEvaluationModel.agent_version_id,
+                )
+                .where(AgentEvaluationModel.decision_cycle_id == DecisionCycleModel.id)
+            )
+            if agent_name is not None:
+                agent_query = agent_query.where(AgentVersionModel.agent_name == agent_name)
+            if agent_direction is not None:
+                agent_query = agent_query.where(AgentEvaluationModel.direction == agent_direction)
+            statement = statement.where(agent_query.exists())
+        if proposal_status is not None:
+            statement = statement.where(TradeProposalModel.status == proposal_status)
+        if order_status is not None:
+            statement = statement.where(
+                exists(
+                    select(OrderIntentModel.id).where(
+                        OrderIntentModel.proposal_id == TradeProposalModel.id,
+                        OrderIntentModel.status == order_status,
+                    )
+                )
+            )
+        if outcome == "filled":
+            statement = statement.where(fill_exists)
+        elif outcome == "counterfactual":
+            statement = statement.where(
+                ~fill_exists,
+                CounterfactualModel.id.is_not(None),
+            )
+        elif outcome in ("approved", "rejected", "neutral"):
+            statement = statement.where(
+                ~fill_exists,
+                CounterfactualModel.id.is_(None),
+                DecisionCycleModel.disposition == outcome,
+            )
+        if before_at is not None and before_id is not None:
+            statement = statement.where(
+                or_(
+                    DecisionCycleModel.cycle_at < before_at,
+                    and_(
+                        DecisionCycleModel.cycle_at == before_at,
+                        DecisionCycleModel.id < before_id,
+                    ),
+                )
+            )
+        rows = (
+            await self._session.execute(
+                statement.order_by(
+                    DecisionCycleModel.cycle_at.desc(),
+                    DecisionCycleModel.id.desc(),
+                ).limit(limit + 1)
+            )
+        ).all()
+        has_more = len(rows) > limit
+        items = tuple(self._decision_item(*row) for row in rows[:limit])
+        return DecisionPage(
+            items=items,
+            limit=limit,
+            has_more=has_more,
+            next_before_at=items[-1].cycle_at if has_more and items else None,
+            next_before_id=items[-1].id if has_more and items else None,
+        )
+
+    async def list_trades(
+        self,
+        experiment_id: UUID,
+        *,
+        symbol: str | None = None,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        direction: str | None = None,
+        regime: str | None = None,
+        strategy_version_id: UUID | None = None,
+        proposal_status: str | None = None,
+        decision_disposition: str | None = None,
+        order_status: str | None = None,
+        counterfactual_status: str | None = None,
+        outcome: str | None = None,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = 100,
+    ) -> TradePage:
+        """List every directional proposal with its official and research outcomes."""
+        if not 1 <= limit <= 500:
+            raise ValueError("trade limit must be between 1 and 500")
+        if symbol is not None:
+            symbol = symbol.upper()
+        if from_at is not None and to_at is not None and from_at > to_at:
+            raise ValueError("trade from_at must not be after to_at")
+        if outcome is not None and outcome not in _TRADE_OUTCOMES:
+            raise ValueError("trade outcome must be one of " + ", ".join(_TRADE_OUTCOMES))
+        if (before_at is None) != (before_id is None):
+            raise ValueError("trade cursor requires both before_at and before_id")
+        await self._experiment(experiment_id)
+        fill_exists = exists(
+            select(FillModel.id)
+            .join(OrderIntentModel, OrderIntentModel.id == FillModel.order_intent_id)
+            .where(OrderIntentModel.proposal_id == TradeProposalModel.id)
+        )
+        statement = (
+            select(TradeProposalModel, DecisionCycleModel, CounterfactualModel)
+            .join(
+                DecisionCycleModel,
+                DecisionCycleModel.id == TradeProposalModel.decision_cycle_id,
+            )
+            .outerjoin(
+                CounterfactualModel,
+                CounterfactualModel.proposal_id == TradeProposalModel.id,
+            )
+            .where(TradeProposalModel.experiment_id == experiment_id)
+        )
+        if symbol is not None:
+            statement = statement.where(TradeProposalModel.symbol == symbol)
+        if from_at is not None:
+            statement = statement.where(TradeProposalModel.proposed_at >= from_at)
+        if to_at is not None:
+            statement = statement.where(TradeProposalModel.proposed_at <= to_at)
+        if direction is not None:
+            statement = statement.where(TradeProposalModel.direction == direction)
+        if regime is not None:
+            statement = statement.where(DecisionCycleModel.regime == regime)
+        if strategy_version_id is not None:
+            statement = statement.where(
+                DecisionCycleModel.strategy_version_id == strategy_version_id
+            )
+        if proposal_status is not None:
+            statement = statement.where(TradeProposalModel.status == proposal_status)
+        if decision_disposition is not None:
+            statement = statement.where(DecisionCycleModel.disposition == decision_disposition)
+        if order_status is not None:
+            statement = statement.where(
+                exists(
+                    select(OrderIntentModel.id).where(
+                        OrderIntentModel.proposal_id == TradeProposalModel.id,
+                        OrderIntentModel.status == order_status,
+                    )
+                )
+            )
+        if counterfactual_status is not None:
+            statement = statement.where(CounterfactualModel.status == counterfactual_status)
+        if outcome == "filled":
+            statement = statement.where(fill_exists)
+        elif outcome == "counterfactual":
+            statement = statement.where(
+                ~fill_exists,
+                CounterfactualModel.id.is_not(None),
+            )
+        elif outcome in ("approved", "rejected", "expired"):
+            statement = statement.where(
+                ~fill_exists,
+                CounterfactualModel.id.is_(None),
+                TradeProposalModel.status == outcome,
+            )
+        if before_at is not None and before_id is not None:
+            statement = statement.where(
+                or_(
+                    TradeProposalModel.proposed_at < before_at,
+                    and_(
+                        TradeProposalModel.proposed_at == before_at,
+                        TradeProposalModel.id < before_id,
+                    ),
+                )
+            )
+        rows = (
+            await self._session.execute(
+                statement.order_by(
+                    TradeProposalModel.proposed_at.desc(),
+                    TradeProposalModel.id.desc(),
+                ).limit(limit + 1)
+            )
+        ).all()
+        has_more = len(rows) > limit
+        selected = rows[:limit]
+        proposal_ids = tuple(row[0].id for row in selected)
+        orders_by_proposal: dict[UUID, list[OrderIntentModel]] = {
+            proposal_id: [] for proposal_id in proposal_ids
+        }
+        fills_by_order: dict[UUID, list[FillModel]] = {}
+        if proposal_ids:
+            orders = (
+                await self._session.scalars(
+                    select(OrderIntentModel)
+                    .where(OrderIntentModel.proposal_id.in_(proposal_ids))
+                    .order_by(OrderIntentModel.created_at, OrderIntentModel.id)
+                )
+            ).all()
+            for order in orders:
+                orders_by_proposal[order.proposal_id].append(order)
+            order_ids = tuple(order.id for order in orders)
+            if order_ids:
+                fills = (
+                    await self._session.scalars(
+                        select(FillModel)
+                        .where(FillModel.order_intent_id.in_(order_ids))
+                        .order_by(FillModel.fill_at, FillModel.id)
+                    )
+                ).all()
+                for fill in fills:
+                    fills_by_order.setdefault(fill.order_intent_id, []).append(fill)
+        items = tuple(
+            self._trade_item(
+                proposal,
+                decision,
+                counterfactual,
+                orders_by_proposal[proposal.id],
+                fills_by_order,
+            )
+            for proposal, decision, counterfactual in selected
+        )
+        return TradePage(
+            items=items,
+            limit=limit,
+            has_more=has_more,
+            next_before_at=items[-1].proposed_at if has_more and items else None,
+            next_before_id=items[-1].proposal_id if has_more and items else None,
+        )
+
+    async def get_decision(self, decision_id: UUID) -> DecisionDetail:
+        cycle = await self._session.get(DecisionCycleModel, decision_id)
+        if cycle is None:
+            raise LookupError(f"decision not found: {decision_id}")
+        frame = await self._session.get(MarketFrameModel, cycle.market_frame_id)
+        if frame is None:
+            raise RuntimeError("decision market frame is missing")
+        summary = await self._session.get(DecisionSummaryModel, decision_id)
+        proposal = await self._session.scalar(
+            select(TradeProposalModel).where(TradeProposalModel.decision_cycle_id == decision_id)
+        )
+        agents = (
+            await self._session.execute(
+                select(AgentEvaluationModel, AgentVersionModel)
+                .join(
+                    AgentVersionModel, AgentVersionModel.id == AgentEvaluationModel.agent_version_id
+                )
+                .where(AgentEvaluationModel.decision_cycle_id == decision_id)
+                .order_by(AgentVersionModel.agent_name)
+            )
+        ).all()
+        gates = (
+            await self._session.scalars(
+                select(GateEvaluationModel)
+                .where(GateEvaluationModel.decision_cycle_id == decision_id)
+                .order_by(GateEvaluationModel.sequence)
+            )
+        ).all()
+        quality = (
+            await self._session.scalars(
+                select(DataQualityEvaluationModel)
+                .where(DataQualityEvaluationModel.market_frame_id == frame.id)
+                .order_by(DataQualityEvaluationModel.check_name)
+            )
+        ).all()
+        orders = []
+        if proposal is not None:
+            order_models = (
+                await self._session.scalars(
+                    select(OrderIntentModel)
+                    .where(OrderIntentModel.proposal_id == proposal.id)
+                    .order_by(OrderIntentModel.created_at, OrderIntentModel.id)
+                )
+            ).all()
+            for order in order_models:
+                events = (
+                    await self._session.scalars(
+                        select(OrderEventModel)
+                        .where(OrderEventModel.order_intent_id == order.id)
+                        .order_by(OrderEventModel.sequence)
+                    )
+                ).all()
+                fills = (
+                    await self._session.scalars(
+                        select(FillModel)
+                        .where(FillModel.order_intent_id == order.id)
+                        .order_by(FillModel.fill_at, FillModel.id)
+                    )
+                ).all()
+                orders.append(
+                    {
+                        **self._order(order),
+                        "events": [self._order_event(event) for event in events],
+                        "fills": [self._fill(fill) for fill in fills],
+                    }
+                )
+        counterfactual = await self._session.scalar(
+            select(CounterfactualModel).where(CounterfactualModel.decision_cycle_id == decision_id)
+        )
+        incident = await self._session.scalar(
+            select(IncidentModel).where(
+                IncidentModel.experiment_id == cycle.experiment_id,
+                IncidentModel.evidence_json["frame_id"].as_string() == str(frame.id),
+            )
+        )
+        aggregate_ids = {decision_id}
+        if proposal is not None:
+            aggregate_ids.add(proposal.id)
+        if counterfactual is not None:
+            aggregate_ids.add(counterfactual.id)
+        if incident is not None:
+            aggregate_ids.add(incident.id)
+        aggregate_ids.update(UUID(str(order["id"])) for order in orders)
+        events = (
+            await self._session.scalars(
+                select(DomainEventModel)
+                .where(DomainEventModel.aggregate_id.in_(aggregate_ids))
+                .order_by(DomainEventModel.global_position)
+            )
+        ).all()
+        item = await self._decision_item_for_cycle(cycle, frame, summary, proposal, counterfactual)
+        return DecisionDetail(
+            decision=item,
+            cycle=self._cycle(cycle),
+            market_frame=self._frame(frame),
+            quality_evaluations=tuple(self._quality(row) for row in quality),
+            agents=tuple(self._agent(evaluation, version) for evaluation, version in agents),
+            summary=self._summary(summary) if summary is not None else None,
+            gates=tuple(self._gate(gate) for gate in gates),
+            proposal=self._proposal(proposal) if proposal is not None else None,
+            orders=tuple(orders),
+            counterfactual=(
+                self._counterfactual(counterfactual) if counterfactual is not None else None
+            ),
+            incident=self._incident(incident) if incident is not None else None,
+            timeline=tuple(self._audit_event(event) for event in events),
+            lineage_hashes={
+                "experiment_manifest": (await self._experiment(cycle.experiment_id)).manifest_hash,
+                "market_frame": frame.content_hash,
+                "decision_cycle": cycle.content_hash,
+            },
+        )
+
+    async def get_research_lab(
+        self,
+        experiment_id: UUID,
+        *,
+        limit_per_kind: int = 500,
+    ) -> ResearchLabView:
+        """Return research-only outcomes without merging them into account projections."""
+        if not 1 <= limit_per_kind <= 1000:
+            raise ValueError("research limit must be between 1 and 1000")
+        experiment = await self._experiment(experiment_id)
+        dataset = await load_research_dataset(self._session, experiment)
+        analytics = dataset.analytics
+        counterfactuals = dataset.counterfactuals
+        return ResearchLabView(
+            analytics_as_of=dataset.analytics_as_of,
+            equity_curve=tuple(cast(list[dict[str, object]], analytics["equity_curve"])),
+            cost_waterfall=cast(Mapping[str, object], analytics["cost_waterfall"]),
+            performance=cast(Mapping[str, object], analytics["performance"]),
+            attribution=cast(Mapping[str, object], analytics["attribution"]),
+            calibration=cast(Mapping[str, object], analytics["calibration"]),
+            gate_value=cast(Mapping[str, object], analytics["gate_value"]),
+            cost_sensitivity=cast(Mapping[str, object], analytics["cost_sensitivity"]),
+            benchmarks=cast(Mapping[str, object], analytics["benchmarks"]),
+            availability=cast(Mapping[str, object], analytics["availability"]),
+            counterfactuals=tuple(
+                ResearchCounterfactual.model_validate(
+                    _fields(
+                        row,
+                        (
+                            "id",
+                            "proposal_id",
+                            "decision_cycle_id",
+                            "symbol",
+                            "direction",
+                            "rejection_gate",
+                            "status",
+                            "maximum_favorable_excursion",
+                            "maximum_adverse_excursion",
+                            "outcome_15m",
+                            "outcome_1h",
+                            "outcome_4h",
+                            "outcome_24h",
+                            "no_fill_reason",
+                            "hypothetical_exit_reason",
+                            "hypothetical_pnl",
+                            "created_at",
+                            "closed_at",
+                            "content_hash",
+                        ),
+                    )
+                )
+                for row in counterfactuals[:limit_per_kind]
+            ),
+            execution_sensitivities=tuple(
+                ResearchExecutionSensitivity(
+                    id=row.id,
+                    order_intent_id=row.order_intent_id,
+                    proposal_id=row.proposal_id,
+                    decision_cycle_id=row.decision_cycle_id,
+                    symbol=row.symbol,
+                    scenario=row.scenario,
+                    calculated_at=row.calculated_at,
+                    outcome=row.outcome,
+                )
+                for row in dataset.execution_sensitivities[:limit_per_kind]
+            ),
+            limit_per_kind=limit_per_kind,
+        )
+
+    @staticmethod
+    def _trade_item(
+        proposal: TradeProposalModel,
+        decision: DecisionCycleModel,
+        counterfactual: CounterfactualModel | None,
+        orders: list[OrderIntentModel],
+        fills_by_order: dict[UUID, list[FillModel]],
+    ) -> TradeListItem:
+        fills = [fill for order in orders for fill in fills_by_order.get(order.id, ())]
+        latest_activity_at = max(
+            (
+                proposal.proposed_at,
+                *(order.created_at for order in orders),
+                *(fill.fill_at for fill in fills),
+                *(
+                    (counterfactual.closed_at,)
+                    if counterfactual is not None and counterfactual.closed_at is not None
+                    else ()
+                ),
+            )
+        )
+        return TradeListItem(
+            proposal_id=proposal.id,
+            decision_cycle_id=proposal.decision_cycle_id,
+            proposed_at=proposal.proposed_at,
+            latest_activity_at=latest_activity_at,
+            symbol=proposal.symbol,
+            direction=proposal.direction,
+            strategy_version_id=decision.strategy_version_id,
+            proposal_status=proposal.status,
+            proposal_reason_code=proposal.reason_code,
+            approved_notional=proposal.approved_notional,
+            decision_disposition=decision.disposition,
+            decision_reason_code=decision.reason_code,
+            regime=decision.regime,
+            official_order_count=len(orders),
+            order_statuses=tuple(order.status for order in orders),
+            fill_count=len(fills),
+            filled_quantity=sum((fill.quantity for fill in fills), start=Decimal("0")),
+            gross_fill_notional=sum(
+                (fill.quantity * fill.price for fill in fills),
+                start=Decimal("0"),
+            ),
+            fees=sum((fill.fee for fill in fills), start=Decimal("0")),
+            total_slippage=sum(
+                (fill.total_slippage for fill in fills),
+                start=Decimal("0"),
+            ),
+            counterfactual_status=(counterfactual.status if counterfactual is not None else None),
+            counterfactual_pnl=(
+                counterfactual.hypothetical_pnl if counterfactual is not None else None
+            ),
+            outcome=_trade_outcome(
+                proposal_status=proposal.status,
+                fill_count=len(fills),
+                counterfactual_status=(
+                    counterfactual.status if counterfactual is not None else None
+                ),
+            ),
+        )
+
+    async def _experiment_item(self, experiment: ExperimentModel) -> ExperimentListItem:
+        experiment_id = experiment.id
+        account = await self._latest_account(experiment)
+        checkpoint = await self._session.get(WorkerCheckpointModel, experiment_id)
+        lease = await self._session.get(WorkerLeaseModel, experiment_id)
+        control = await self._session.get(TradingControlModel, experiment_id)
+        grouped_decisions = (
+            await self._session.execute(
+                select(
+                    DecisionCycleModel.status,
+                    DecisionCycleModel.disposition,
+                    func.count(),
+                )
+                .where(DecisionCycleModel.experiment_id == experiment_id)
+                .group_by(DecisionCycleModel.status, DecisionCycleModel.disposition)
+            )
+        ).all()
+        decisions = DecisionCounts(
+            total=sum(count for _, _, count in grouped_decisions),
+            completed=sum(count for status, _, count in grouped_decisions if status == "completed"),
+            rejected=sum(count for status, _, count in grouped_decisions if status == "rejected"),
+            quarantined=sum(
+                count for status, _, count in grouped_decisions if status == "quarantined"
+            ),
+            neutral=sum(
+                count for _, disposition, count in grouped_decisions if disposition == "neutral"
+            ),
+            approved=sum(
+                count for _, disposition, count in grouped_decisions if disposition == "approved"
+            ),
+            directional_rejected=sum(
+                count for _, disposition, count in grouped_decisions if disposition == "rejected"
+            ),
+        )
+        (
+            open_positions,
+            pending_orders,
+            fills,
+            open_incidents,
+            review_incidents,
+            open_cfs,
+        ) = await self._operation_counts(experiment_id)
+        cursor_count, latest_bar, latest_update, halted_cursors = (
+            await self._session.execute(
+                select(
+                    func.count(MarketCursorModel.id),
+                    func.max(MarketCursorModel.bar_close_at),
+                    func.max(MarketCursorModel.updated_at),
+                    func.count(MarketCursorModel.id).filter(MarketCursorModel.status == "halted"),
+                ).where(MarketCursorModel.experiment_id == experiment_id)
+            )
+        ).one()
+        active_recoveries = int(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(MarketRecoveryRunModel)
+                .where(
+                    MarketRecoveryRunModel.experiment_id == experiment_id,
+                    MarketRecoveryRunModel.status.in_(_ACTIVE_RECOVERY_STATUSES),
+                )
+            )
+            or 0
+        )
+        symbols = experiment.manifest_json.get("symbols", [])
+        expected_symbols = len(symbols) if isinstance(symbols, list) else 0
+        return ExperimentListItem(
+            experiment=self._identity(experiment),
+            account=account,
+            runtime=RuntimeOverview(
+                worker_status=checkpoint.status if checkpoint is not None else None,
+                checkpoint_at=checkpoint.checkpoint_at if checkpoint is not None else None,
+                checkpoint_version=checkpoint.version if checkpoint is not None else None,
+                lease_status=lease.status if lease is not None else None,
+                lease_heartbeat_at=lease.heartbeat_at if lease is not None else None,
+                lease_expires_at=lease.expires_at if lease is not None else None,
+                lease_released_at=lease.released_at if lease is not None else None,
+                lease_epoch=lease.epoch if lease is not None else None,
+                kill_switch_active=control.kill_switch_active if control is not None else False,
+                kill_switch_reason=control.reason if control is not None else None,
+                control_version=control.version if control is not None else None,
+            ),
+            decisions=decisions,
+            operations=OperationalCounts(
+                open_positions=open_positions,
+                pending_orders=pending_orders,
+                fills=fills,
+                open_incidents=open_incidents,
+                review_incidents=review_incidents,
+                pending_counterfactuals=open_cfs,
+            ),
+            freshness=DataFreshness(
+                expected_symbols=expected_symbols,
+                cursor_count=int(cursor_count or 0),
+                latest_bar_close_at=latest_bar,
+                latest_cursor_update_at=latest_update,
+                halted_cursors=int(halted_cursors or 0),
+                active_recoveries=active_recoveries,
+            ),
+        )
+
+    async def _latest_account(self, experiment: ExperimentModel) -> AccountOverview:
+        snapshot = await self._session.scalar(
+            select(AccountSnapshotModel)
+            .where(AccountSnapshotModel.experiment_id == experiment.id)
+            .order_by(AccountSnapshotModel.account_version.desc())
+            .limit(1)
+        )
+        if snapshot is None:
+            zero = Decimal("0")
+            return AccountOverview(
+                source="manifest_initial_state",
+                snapshot_at=None,
+                account_version=0,
+                cash_balance=experiment.initial_capital,
+                equity=experiment.initial_capital,
+                used_margin=zero,
+                free_margin=experiment.initial_capital,
+                gross_notional=zero,
+                risk_at_stop=zero,
+                unrealized_pnl=zero,
+                realized_pnl=zero,
+                fees=zero,
+                funding=zero,
+                peak_equity=experiment.initial_capital,
+                drawdown=zero,
+            )
+        return AccountOverview.model_validate(
+            {
+                "source": "account_snapshot",
+                **_fields(
+                    snapshot,
+                    (
+                        "snapshot_at",
+                        "account_version",
+                        "cash_balance",
+                        "equity",
+                        "used_margin",
+                        "free_margin",
+                        "gross_notional",
+                        "risk_at_stop",
+                        "unrealized_pnl",
+                        "realized_pnl",
+                        "fees",
+                        "funding",
+                        "peak_equity",
+                        "drawdown",
+                    ),
+                ),
+            }
+        )
+
+    async def _operation_counts(self, experiment_id: UUID) -> tuple[int, ...]:
+        statements = (
+            select(func.count())
+            .select_from(PositionModel)
+            .where(PositionModel.experiment_id == experiment_id, PositionModel.status == "open"),
+            select(func.count())
+            .select_from(OrderIntentModel)
+            .where(
+                OrderIntentModel.experiment_id == experiment_id,
+                OrderIntentModel.status.in_(_PENDING_ORDER_STATUSES),
+            ),
+            select(func.count())
+            .select_from(FillModel)
+            .join(OrderIntentModel, OrderIntentModel.id == FillModel.order_intent_id)
+            .where(OrderIntentModel.experiment_id == experiment_id),
+            select(func.count())
+            .select_from(IncidentModel)
+            .where(
+                IncidentModel.experiment_id == experiment_id, IncidentModel.status != "resolved"
+            ),
+            select(func.count())
+            .select_from(IncidentModel)
+            .where(
+                IncidentModel.experiment_id == experiment_id,
+                IncidentModel.status != "resolved",
+                IncidentModel.requires_operator_review.is_(True),
+            ),
+            select(func.count())
+            .select_from(CounterfactualModel)
+            .where(
+                CounterfactualModel.experiment_id == experiment_id,
+                CounterfactualModel.status.in_(_OPEN_COUNTERFACTUAL_STATUSES),
+            ),
+        )
+        counts: list[int] = []
+        for statement in statements:
+            counts.append(int(await self._session.scalar(statement) or 0))
+        return tuple(counts)
+
+    async def _decision_item_for_cycle(
+        self,
+        cycle: DecisionCycleModel,
+        frame: MarketFrameModel,
+        summary: DecisionSummaryModel | None,
+        proposal: TradeProposalModel | None,
+        counterfactual: CounterfactualModel | None,
+    ) -> DecisionListItem:
+        order_status = None
+        has_fill = False
+        if proposal is not None:
+            order_status = await self._session.scalar(
+                select(OrderIntentModel.status)
+                .where(OrderIntentModel.proposal_id == proposal.id)
+                .order_by(OrderIntentModel.created_at.desc())
+                .limit(1)
+            )
+            has_fill = bool(
+                await self._session.scalar(
+                    select(
+                        exists(
+                            select(FillModel.id)
+                            .join(
+                                OrderIntentModel,
+                                OrderIntentModel.id == FillModel.order_intent_id,
+                            )
+                            .where(OrderIntentModel.proposal_id == proposal.id)
+                        )
+                    )
+                )
+            )
+        return self._decision_item(
+            cycle,
+            frame.quality_status,
+            summary.consensus_direction if summary is not None else None,
+            summary.consensus_probability if summary is not None else None,
+            summary.consensus_confidence if summary is not None else None,
+            proposal.status if proposal is not None else None,
+            order_status,
+            counterfactual.status if counterfactual is not None else None,
+            has_fill,
+        )
+
+    @staticmethod
+    def _decision_item(
+        cycle: DecisionCycleModel,
+        quality_status: str,
+        consensus_direction: str | None,
+        consensus_probability: Decimal | None,
+        consensus_confidence: Decimal | None,
+        proposal_status: str | None,
+        order_status: str | None,
+        counterfactual_status: str | None,
+        has_fill: bool,
+    ) -> DecisionListItem:
+        return DecisionListItem.model_validate(
+            {
+                **_fields(
+                    cycle,
+                    (
+                        "id",
+                        "experiment_id",
+                        "market_frame_id",
+                        "strategy_version_id",
+                        "symbol",
+                        "timeframe",
+                        "cycle_at",
+                        "regime",
+                        "status",
+                        "direction",
+                        "disposition",
+                        "reason_code",
+                        "created_at",
+                        "completed_at",
+                    ),
+                ),
+                "quality_status": quality_status,
+                "consensus_direction": consensus_direction,
+                "consensus_probability": consensus_probability,
+                "consensus_confidence": consensus_confidence,
+                "proposal_status": proposal_status,
+                "order_status": order_status,
+                "counterfactual_status": counterfactual_status,
+                "outcome": _decision_outcome(
+                    disposition=cycle.disposition,
+                    has_fill=has_fill,
+                    counterfactual_status=counterfactual_status,
+                ),
+            }
+        )
+
+    async def _experiment(self, experiment_id: UUID) -> ExperimentModel:
+        experiment = await self._session.get(ExperimentModel, experiment_id)
+        if experiment is None:
+            raise LookupError(f"experiment not found: {experiment_id}")
+        return experiment
+
+    @staticmethod
+    def _identity(model: ExperimentModel) -> ExperimentIdentity:
+        return ExperimentIdentity.model_validate(
+            {
+                **_fields(
+                    model,
+                    (
+                        "id",
+                        "name",
+                        "mode",
+                        "status",
+                        "initial_capital",
+                        "currency",
+                        "created_at",
+                        "started_at",
+                        "ended_at",
+                        "failure_reason",
+                        "git_sha",
+                        "worktree_hash",
+                        "lock_hash",
+                        "schema_revision",
+                        "config_hash",
+                        "manifest_hash",
+                        "manifest_schema_version",
+                    ),
+                ),
+                "model_assumptions": _paper_model_assumptions(model),
+            }
+        )
+
+    @staticmethod
+    def _position(model: PositionModel) -> dict[str, object]:
+        return _fields(model, tuple(column.name for column in PositionModel.__table__.columns))
+
+    @staticmethod
+    def _order(model: OrderIntentModel) -> dict[str, object]:
+        return _fields(model, tuple(column.name for column in OrderIntentModel.__table__.columns))
+
+    @staticmethod
+    def _incident(model: IncidentModel) -> dict[str, object]:
+        return _fields(model, tuple(column.name for column in IncidentModel.__table__.columns))
+
+    @staticmethod
+    def _cycle(model: DecisionCycleModel) -> dict[str, object]:
+        return _fields(model, tuple(column.name for column in DecisionCycleModel.__table__.columns))
+
+    @staticmethod
+    def _frame(model: MarketFrameModel) -> dict[str, object]:
+        return _fields(model, tuple(column.name for column in MarketFrameModel.__table__.columns))
+
+    @staticmethod
+    def _quality(model: DataQualityEvaluationModel) -> dict[str, object]:
+        return _fields(
+            model, tuple(column.name for column in DataQualityEvaluationModel.__table__.columns)
+        )
+
+    @staticmethod
+    def _agent(model: AgentEvaluationModel, version: AgentVersionModel) -> dict[str, object]:
+        return {
+            **_fields(
+                model, tuple(column.name for column in AgentEvaluationModel.__table__.columns)
+            ),
+            "agent_name": version.agent_name,
+            "agent_version": version.version,
+            "maturity": version.maturity,
+            "implementation_hash": version.implementation_hash,
+            "data_dependencies": version.data_dependencies_json,
+        }
+
+    @staticmethod
+    def _summary(model: DecisionSummaryModel) -> dict[str, object]:
+        return _fields(
+            model, tuple(column.name for column in DecisionSummaryModel.__table__.columns)
+        )
+
+    @staticmethod
+    def _gate(model: GateEvaluationModel) -> dict[str, object]:
+        return _fields(
+            model, tuple(column.name for column in GateEvaluationModel.__table__.columns)
+        )
+
+    @staticmethod
+    def _proposal(model: TradeProposalModel) -> dict[str, object]:
+        return _fields(model, tuple(column.name for column in TradeProposalModel.__table__.columns))
+
+    @staticmethod
+    def _counterfactual(model: CounterfactualModel) -> dict[str, object]:
+        return _fields(
+            model, tuple(column.name for column in CounterfactualModel.__table__.columns)
+        )
+
+    @staticmethod
+    def _order_event(model: OrderEventModel) -> dict[str, object]:
+        return _fields(model, tuple(column.name for column in OrderEventModel.__table__.columns))
+
+    @staticmethod
+    def _fill(model: FillModel) -> dict[str, object]:
+        return _fields(model, tuple(column.name for column in FillModel.__table__.columns))
+
+    @staticmethod
+    def _audit_event(model: DomainEventModel) -> AuditEvent:
+        return AuditEvent.model_validate(
+            {
+                **_fields(
+                    model,
+                    (
+                        "id",
+                        "global_position",
+                        "aggregate_id",
+                        "aggregate_type",
+                        "stream_version",
+                        "event_type",
+                        "event_version",
+                        "occurred_at",
+                        "recorded_at",
+                    ),
+                ),
+                "payload": model.payload_json,
+                "metadata": model.metadata_json,
+            }
+        )

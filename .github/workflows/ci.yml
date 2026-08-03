@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --dev
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run pyright
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --dev
+      - run: uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm exec -- playwright install-deps chromium
+      - run: npm exec -- playwright-cli install-browser chrome-for-testing
+      - run: ../scripts/browser-smoke.sh
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --dev
+      - run: uv run pip-audit
+      - run: >-
+          git ls-files -z |
+          xargs -0 uv run detect-secrets-hook --baseline .secrets.baseline
+          --exclude-files '(^uv\.lock$|^\.superpowers/)'
+      - run: uv run pytest tests/test_execution_safety.py -q
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: maais_test
+          POSTGRES_USER: maais
+          POSTGRES_PASSWORD: maais
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U maais -d maais_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql+psycopg://maais:maais@localhost:5432/maais_test
+      MAAIS_TEST_DATABASE_URL: postgresql+psycopg://maais:maais@localhost:5432/maais_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --dev
+      - run: uv run alembic upgrade head
+      - run: >-
+          uv run pytest -q
+          --cov=maais.execution.paper
+          --cov=maais.db.repositories
+          --cov=maais.risk
+          --cov=maais.orchestration
+          --cov=maais.market_data.recovery
+          --cov-branch
+          --cov-report=term:skip-covered
+          --cov-fail-under=80
+      - run: >-
+          PGPASSWORD=maais psql -h localhost -U maais -d maais_test -Atc
+          'select version_num from alembic_version' | grep -Fx 0018

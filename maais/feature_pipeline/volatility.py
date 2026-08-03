@@ -4,6 +4,7 @@ ATR period: 14 (ATR_PERIOD in config/constants.py).
 """
 
 import statistics
+
 from maais.config.constants import ATR_PERIOD
 from maais.market_data.schemas import KlineData
 
@@ -19,8 +20,7 @@ def compute_atr(candles: list[KlineData], period: int = ATR_PERIOD) -> float | N
     if len(candles) < period + 1:
         return None
     trs = [
-        compute_true_range(candles[i], float(candles[i - 1].close))
-        for i in range(1, len(candles))
+        compute_true_range(candles[i], float(candles[i - 1].close)) for i in range(1, len(candles))
     ]
     return sum(trs[-period:]) / period
 

@@ -30,7 +30,7 @@ def half_kelly_fraction(p_win: float, gain_pct: float, loss_pct: float) -> float
     if gain_pct <= 0 or loss_pct <= 0:
         return 0.0
 
-    b = gain_pct / loss_pct           # reward-to-risk ratio
+    b = gain_pct / loss_pct  # reward-to-risk ratio
     q = 1.0 - p_win
     full_kelly = (p_win * b - q) / b
 
@@ -38,7 +38,7 @@ def half_kelly_fraction(p_win: float, gain_pct: float, loss_pct: float) -> float
         return 0.0
 
     half_kelly = full_kelly / 2.0
-    return min(half_kelly, 0.25)      # hard cap at 25% of capital
+    return min(half_kelly, 0.25)  # hard cap at 25% of capital
 
 
 def volatility_adjusted_fraction(

@@ -8,31 +8,47 @@ dependencies = [
     # Database
     "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.13",
+    "mako>=1.3.12",
     "psycopg[binary]>=3.1",
     # Analytical store
     "duckdb>=1.1",
     # Streaming
     "kafka-python-ng>=2.2",
     # Configuration & secrets
-    "pydantic-settings>=2.5",
+    "pydantic-settings>=2.14.2",
     "python-dotenv>=1.0",
     # Logging
     "structlog>=24.4",
     # HTTP + WebSocket (Binance connectors)
     "httpx[http2]>=0.27",
+    "idna>=3.15",
     "websockets>=13.0",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.1",
 ]
+
+[project.scripts]
+maais = "maais.cli:main"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3",
+    "detect-secrets>=1.5",
+    "hypothesis>=6.138",
+    "pip-audit>=2.9",
+    "pyright>=1.1.403",
+    "pygments>=2.20.0",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.2",
     "ruff>=0.7",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: requires the isolated PostgreSQL database named with an _test suffix",
+]
 
 [tool.ruff]
 line-length = 100
@@ -40,6 +56,15 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"
+include = ["maais"]
+exclude = [".venv", "data", "artifacts", "backups"]
+reportMissingTypeStubs = false
 
 [build-system]
 requires = ["hatchling"]

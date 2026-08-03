@@ -1,24 +1,31 @@
 """Tests for the Strategy Agent Engine (Batch 4)."""
 
-import pytest
 from datetime import datetime, timezone
 
-from maais.agents.base import AgentOutput, BaseAgent, _clip, _neutral, _votes_to_probability, _signal_to_output
-from maais.agents.regime_gate import filter_compatible_agents
+import pytest
+
+from maais.agents.base import (
+    AgentOutput,
+    _clip,
+    _neutral,
+    _signal_to_output,
+    _votes_to_probability,
+)
+from maais.agents.carry_yield import CarryYieldAgent
+from maais.agents.liquidity import LiquidityAgent
+from maais.agents.macro_sentiment import MacroSentimentAgent
 from maais.agents.mean_reversion import MeanReversionAgent
 from maais.agents.momentum import MomentumAgent
-from maais.agents.technical_structure import TechnicalStructureAgent
-from maais.agents.liquidity import LiquidityAgent
 from maais.agents.order_flow_toxicity import OrderFlowToxicityAgent
+from maais.agents.regime_gate import filter_compatible_agents
+from maais.agents.runner import agent_names_ran, build_agent_registry, run_agents
 from maais.agents.stop_run_detection import StopRunDetectionAgent
-from maais.agents.carry_yield import CarryYieldAgent
-from maais.agents.macro_sentiment import MacroSentimentAgent
-from maais.agents.runner import build_agent_registry, run_agents, agent_names_ran
+from maais.agents.technical_structure import TechnicalStructureAgent
 from maais.config.constants import AgentName, Regime
 from maais.feature_pipeline.features import FeatureSet
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _ts() -> datetime:
     return datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -75,32 +82,38 @@ def _assert_valid_output(output: AgentOutput) -> None:
 
 # ── AgentOutput dataclass ─────────────────────────────────────────────────────
 
+
 class TestAgentOutput:
     def test_valid_output_creates_without_error(self):
         out = AgentOutput("test", "long", 0.7, 0.8, 0.3)
         assert out.directional_hypothesis == "long"
 
     def test_invalid_hypothesis_raises(self):
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             AgentOutput("test", "up", 0.7, 0.8, 0.3)
 
     def test_probability_out_of_range_raises(self):
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             AgentOutput("test", "long", 1.5, 0.8, 0.3)
 
     def test_confidence_out_of_range_raises(self):
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             AgentOutput("test", "long", 0.7, -0.1, 0.3)
 
     def test_risk_out_of_range_raises(self):
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             AgentOutput("test", "long", 0.7, 0.8, 1.5)
 
     def test_to_dict_has_all_keys(self):
         out = AgentOutput("test", "short", 0.6, 0.5, 0.4)
         d = out.to_dict()
-        assert set(d.keys()) == {"agent_name", "directional_hypothesis", "probability_estimate",
-                                  "confidence_score", "risk_estimate"}
+        assert set(d.keys()) == {
+            "agent_name",
+            "directional_hypothesis",
+            "probability_estimate",
+            "confidence_score",
+            "risk_estimate",
+        }
 
     def test_neutral_output_helper(self):
         out = _neutral("test_agent")
@@ -144,6 +157,7 @@ class TestBaseHelpers:
 
 # ── Regime Gate ───────────────────────────────────────────────────────────────
 
+
 class TestRegimeGate:
     def test_trending_filters_momentum(self):
         agents = build_agent_registry()
@@ -182,6 +196,7 @@ class TestRegimeGate:
 
 
 # ── Mean Reversion Agent ──────────────────────────────────────────────────────
+
 
 class TestMeanReversionAgent:
     @pytest.fixture
@@ -224,6 +239,7 @@ class TestMeanReversionAgent:
 
 # ── Momentum Agent ────────────────────────────────────────────────────────────
 
+
 class TestMomentumAgent:
     @pytest.fixture
     def agent(self):
@@ -240,17 +256,25 @@ class TestMomentumAgent:
         assert out.directional_hypothesis == "neutral"
 
     async def test_bullish_ema_signal_returns_long(self, agent):
-        out = await agent.analyze(_features(
-            ema_signal=500.0, ema_slow=50000.0,
-            roc_short=0.02, roc_long=0.01,
-        ))
+        out = await agent.analyze(
+            _features(
+                ema_signal=500.0,
+                ema_slow=50000.0,
+                roc_short=0.02,
+                roc_long=0.01,
+            )
+        )
         assert out.directional_hypothesis == "long"
 
     async def test_bearish_ema_signal_returns_short(self, agent):
-        out = await agent.analyze(_features(
-            ema_signal=-500.0, ema_slow=50000.0,
-            roc_short=-0.02, roc_long=-0.01,
-        ))
+        out = await agent.analyze(
+            _features(
+                ema_signal=-500.0,
+                ema_slow=50000.0,
+                roc_short=-0.02,
+                roc_long=-0.01,
+            )
+        )
         assert out.directional_hypothesis == "short"
 
     async def test_output_valid_rule3(self, agent):
@@ -259,6 +283,7 @@ class TestMomentumAgent:
 
 
 # ── Technical Structure Agent ─────────────────────────────────────────────────
+
 
 class TestTechnicalStructureAgent:
     @pytest.fixture
@@ -270,15 +295,23 @@ class TestTechnicalStructureAgent:
 
     async def test_bullish_ema_alignment_long(self, agent):
         # ema_fast > ema_slow → bullish alignment
-        out = await agent.analyze(_features(
-            ema_fast=51000.0, ema_slow=50000.0, ema_signal=1000.0,
-        ))
+        out = await agent.analyze(
+            _features(
+                ema_fast=51000.0,
+                ema_slow=50000.0,
+                ema_signal=1000.0,
+            )
+        )
         assert out.directional_hypothesis == "long"
 
     async def test_bearish_ema_alignment_short(self, agent):
-        out = await agent.analyze(_features(
-            ema_fast=49000.0, ema_slow=50000.0, ema_signal=-1000.0,
-        ))
+        out = await agent.analyze(
+            _features(
+                ema_fast=49000.0,
+                ema_slow=50000.0,
+                ema_signal=-1000.0,
+            )
+        )
         assert out.directional_hypothesis == "short"
 
     async def test_no_features_neutral(self, agent):
@@ -291,6 +324,7 @@ class TestTechnicalStructureAgent:
 
 
 # ── Liquidity Agent ───────────────────────────────────────────────────────────
+
 
 class TestLiquidityAgent:
     @pytest.fixture
@@ -326,6 +360,7 @@ class TestLiquidityAgent:
 
 # ── Order Flow Toxicity Agent ─────────────────────────────────────────────────
 
+
 class TestOrderFlowToxicityAgent:
     @pytest.fixture
     def agent(self):
@@ -349,6 +384,7 @@ class TestOrderFlowToxicityAgent:
 
 
 # ── Stop-Run Detection Agent ──────────────────────────────────────────────────
+
 
 class TestStopRunDetectionAgent:
     @pytest.fixture
@@ -392,6 +428,7 @@ class TestStopRunDetectionAgent:
 
 # ── Carry Yield Agent ─────────────────────────────────────────────────────────
 
+
 class TestCarryYieldAgent:
     @pytest.fixture
     def agent(self):
@@ -409,40 +446,65 @@ class TestCarryYieldAgent:
         assert out.directional_hypothesis == "neutral"
 
     async def test_long_heavy_returns_short(self, agent):
-        out = await agent.analyze(_features(
-            funding_rate=0.001, annualized_funding=0.1095, funding_bias="long_heavy",
-        ))
+        out = await agent.analyze(
+            _features(
+                funding_rate=0.001,
+                annualized_funding=0.1095,
+                funding_bias="long_heavy",
+            )
+        )
         assert out.directional_hypothesis == "short"
 
     async def test_short_heavy_returns_long(self, agent):
-        out = await agent.analyze(_features(
-            funding_rate=-0.001, annualized_funding=-0.1095, funding_bias="short_heavy",
-        ))
+        out = await agent.analyze(
+            _features(
+                funding_rate=-0.001,
+                annualized_funding=-0.1095,
+                funding_bias="short_heavy",
+            )
+        )
         assert out.directional_hypothesis == "long"
 
     async def test_neutral_bias_returns_neutral(self, agent):
-        out = await agent.analyze(_features(
-            funding_rate=0.00001, annualized_funding=0.001, funding_bias="neutral",
-        ))
+        out = await agent.analyze(
+            _features(
+                funding_rate=0.00001,
+                annualized_funding=0.001,
+                funding_bias="neutral",
+            )
+        )
         assert out.directional_hypothesis == "neutral"
 
     async def test_high_funding_higher_probability(self, agent):
-        out_low = await agent.analyze(_features(
-            funding_rate=0.0001, annualized_funding=0.01, funding_bias="long_heavy",
-        ))
-        out_high = await agent.analyze(_features(
-            funding_rate=0.003, annualized_funding=0.33, funding_bias="long_heavy",
-        ))
+        out_low = await agent.analyze(
+            _features(
+                funding_rate=0.0001,
+                annualized_funding=0.01,
+                funding_bias="long_heavy",
+            )
+        )
+        out_high = await agent.analyze(
+            _features(
+                funding_rate=0.003,
+                annualized_funding=0.33,
+                funding_bias="long_heavy",
+            )
+        )
         assert out_high.probability_estimate > out_low.probability_estimate
 
     async def test_output_valid_rule3(self, agent):
-        out = await agent.analyze(_features(
-            funding_rate=0.001, annualized_funding=0.1, funding_bias="long_heavy",
-        ))
+        out = await agent.analyze(
+            _features(
+                funding_rate=0.001,
+                annualized_funding=0.1,
+                funding_bias="long_heavy",
+            )
+        )
         _assert_valid_output(out)
 
 
 # ── Macro Sentiment Agent ─────────────────────────────────────────────────────
+
 
 class TestMacroSentimentAgent:
     @pytest.fixture
@@ -462,9 +524,13 @@ class TestMacroSentimentAgent:
 
     async def test_trending_regime_non_neutral(self, agent):
         # In trending regime macro should produce a directional view
-        out = await agent.analyze(_features(
-            regime=Regime.TRENDING, ema_signal=500.0, ema_slow=50000.0,
-        ))
+        out = await agent.analyze(
+            _features(
+                regime=Regime.TRENDING,
+                ema_signal=500.0,
+                ema_slow=50000.0,
+            )
+        )
         _assert_valid_output(out)
 
     async def test_low_confidence_phase1(self, agent):
@@ -474,6 +540,7 @@ class TestMacroSentimentAgent:
 
 
 # ── Agent Runner ──────────────────────────────────────────────────────────────
+
 
 class TestAgentRunner:
     def test_build_agent_registry_has_8_agents(self):
@@ -511,17 +578,21 @@ class TestAgentRunner:
         for out in results:
             _assert_valid_output(out)
 
-    async def test_run_agents_trending_excludes_mean_reversion(self):
+    async def test_run_agents_trending_retains_neutral_mean_reversion(self):
         features = _features(regime=Regime.TRENDING)
         results = await run_agents(features)
         names = agent_names_ran(results)
-        assert AgentName.MEAN_REVERSION not in names
+        assert AgentName.MEAN_REVERSION in names
+        output = next(item for item in results if item.agent_name == AgentName.MEAN_REVERSION)
+        assert output.directional_hypothesis == "neutral"
 
-    async def test_run_agents_range_bound_excludes_momentum(self):
+    async def test_run_agents_range_bound_retains_neutral_momentum(self):
         features = _features(regime=Regime.RANGE_BOUND)
         results = await run_agents(features)
         names = agent_names_ran(results)
-        assert AgentName.MOMENTUM not in names
+        assert AgentName.MOMENTUM in names
+        output = next(item for item in results if item.agent_name == AgentName.MOMENTUM)
+        assert output.directional_hypothesis == "neutral"
 
     async def test_run_agents_accepts_custom_agent_list(self):
         features = _features(regime=Regime.TRENDING)

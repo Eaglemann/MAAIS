@@ -28,7 +28,7 @@ from maais.risk.schemas import PositionSize
 logger = get_logger(__name__)
 
 # Hard risk cap per trade (Rule 14): default to midpoint of 1–2% range
-_DEFAULT_RISK_CAP_PCT = MAX_RISK_PER_TRADE_PCT   # 2% absolute maximum
+_DEFAULT_RISK_CAP_PCT = MAX_RISK_PER_TRADE_PCT  # 2% absolute maximum
 
 
 class RiskEngine:
@@ -72,7 +72,7 @@ class RiskEngine:
         hk = half_kelly_fraction(ev.p_win, ev.expected_gain_pct, ev.expected_loss_pct)
 
         # 2. Volatility-adjusted
-        price = features.zscore_mean   # best price proxy from feature set
+        price = features.zscore_mean  # best price proxy from feature set
         va = volatility_adjusted_fraction(features.atr, price)
 
         # 3. Risk cap
@@ -122,7 +122,9 @@ class RiskEngine:
                 final_fraction=0.0,
                 final_usd=0.0,
                 approved=False,
-                rejection_reason=f"correlation_cluster: symbol={symbol} highly correlated with open positions",
+                rejection_reason=(
+                    f"correlation_cluster: symbol={symbol} highly correlated with open positions"
+                ),
             )
 
         # 7. Final fraction and USD size

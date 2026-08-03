@@ -1,0 +1,264 @@
+from dataclasses import replace
+from datetime import datetime, timezone
+from decimal import Decimal
+
+import pytest
+
+from maais.config.modes import RunMode
+from maais.config.paper_candidate import (
+    OFFICIAL_DATA_VERSIONS,
+    OFFICIAL_FILL_POLICY,
+    OFFICIAL_MARGIN_POLICY,
+)
+from maais.domain.enums import PaperOrderType
+from maais.execution.paper.filters import ExchangeFilterSnapshot
+from maais.experiments.runtime_policy import LivePaperPolicy, RuntimePolicyError
+from tests.unit.experiments.test_manifest import _manifest
+
+
+def _live_filter(symbol: str = "BTCUSDT") -> ExchangeFilterSnapshot:
+    return ExchangeFilterSnapshot(
+        symbol=symbol,
+        status="TRADING",
+        price_tick=Decimal("0.1"),
+        quantity_step=Decimal("0.001"),
+        minimum_quantity=Decimal("0.001"),
+        maximum_quantity=Decimal("200"),
+        minimum_notional=Decimal("5"),
+        supported_order_types=(PaperOrderType.LIMIT, PaperOrderType.MARKET),
+        captured_at=datetime(2026, 8, 2, 9, tzinfo=timezone.utc),
+    )
+
+
+def _live_manifest(**overrides):
+    exchange_filter = _live_filter()
+    values = {
+        "mode": RunMode.PAPER_LIVE,
+        "configuration": {
+            "risk": {
+                "leverage": 1,
+                "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+                "maintenance_margin_rate": "0.005",
+                "liquidation_price_model": "not_modeled",
+                "exchange_liquidation_parity": False,
+            },
+            "runtime": {
+                "proposal_ttl_seconds": "30",
+                "book_wait_timeout_seconds": "5",
+                "history_bars": 240,
+            },
+            "benchmark": {
+                "symbol": "BTCUSDT",
+                "horizon_bars": 60,
+                "source": "binance_spot_close",
+            },
+            "strategy": {
+                "key": "maais_primary",
+                "version": "1.0.0",
+                "stage": "simulation",
+                "implementation_hash": "b" * 64,
+                "parameters": {"timeframe": "1m"},
+            },
+        },
+        "component_versions": {
+            "features": "v1",
+            "integrity": "v1",
+            "decision": "v1",
+            "monitoring": "v1",
+            "risk": "v1",
+            "exit": "v1",
+            "fill": "v1",
+            "protection": "v1",
+            "counterfactual": "v1",
+        },
+        "clock_policy": {"latency_ms": 250, "maximum_decision_lag_ms": 5000},
+        "fee_policy": {
+            "maker": "0.0002",
+            "taker": "0.0005",
+            "venue": "binance_usdm",
+            "tier": "regular_user",
+            "settlement_asset": "USDT",
+            "discount": "none",
+            "source": "https://www.binance.com/en/fee/trading",
+            "verified_at": "2026-08-02T09:00:00Z",
+        },
+        "exchange_metadata": {
+            "venue": "binance_usdm",
+            "market": "usdt_perpetual",
+            "filter_snapshot_hashes": {"BTCUSDT": exchange_filter.content_hash},
+            "filter_snapshots": {"BTCUSDT": exchange_filter.to_dict()},
+        },
+        "market_data_sources": {
+            "futures": "binance_usdm",
+            "primary_spot": "binance_spot",
+            "secondary_venue": "bybit_spot",
+        },
+        "data_versions": OFFICIAL_DATA_VERSIONS,
+        "fill_policy": OFFICIAL_FILL_POLICY,
+    }
+    values.update(overrides)
+    return _manifest(**values)
+
+
+def test_live_policy_extracts_every_execution_critical_value_without_defaults() -> None:
+    policy = LivePaperPolicy.from_manifest(_live_manifest())
+
+    assert policy.leverage == 1
+    assert policy.maintenance_margin_model == "fixed_fraction_of_gross_notional"
+    assert policy.maintenance_margin_rate == Decimal("0.005")
+    assert policy.liquidation_price_model == "not_modeled"
+    assert policy.exchange_liquidation_parity is False
+    assert policy.proposal_ttl.total_seconds() == 30
+    assert policy.book_wait_timeout.total_seconds() == 5
+    assert policy.execution_latency.total_seconds() == 0.25
+    assert policy.maximum_decision_lag.total_seconds() == 5
+    assert policy.maker_fee_rate == Decimal("0.0002")
+    assert policy.taker_fee_rate == Decimal("0.0005")
+    assert policy.fee_tier == "regular_user"
+    assert policy.fee_schedule_verified_at == datetime(2026, 8, 2, 9, tzinfo=timezone.utc)
+    assert policy.history_bars == 240
+    assert policy.benchmark_symbol == "BTCUSDT"
+    assert policy.strategy_key == "maais_primary"
+    assert policy.strategy_version == "1.0.0"
+    assert policy.strategy_implementation_hash == "b" * 64
+    assert policy.strategy_parameters == {"timeframe": "1m"}
+    assert policy.exchange_filter_hashes == {"BTCUSDT": _live_filter().content_hash}
+    assert policy.exchange_filters == {"BTCUSDT": _live_filter()}
+    assert policy.integrity_policy().max_decision_lag == policy.maximum_decision_lag
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("maintenance_margin_model", "exchange_tiered"),
+        ("maintenance_margin_rate", "0.01"),
+        ("liquidation_price_model", "estimated"),
+        ("exchange_liquidation_parity", True),
+    ),
+)
+def test_live_policy_rejects_margin_model_drift(field: str, value: object) -> None:
+    manifest = _live_manifest()
+    configuration = dict(manifest.configuration)
+    risk = dict(configuration["risk"])  # type: ignore[arg-type]
+    risk[field] = value
+    configuration["risk"] = risk
+
+    with pytest.raises(RuntimePolicyError, match="margin policy"):
+        LivePaperPolicy.from_manifest(replace(manifest, configuration=configuration))
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        ({"mode": RunMode.REPLAY}, "mode=paper_live"),
+        (
+            {
+                "configuration": {
+                    "risk": {"leverage": 1, **OFFICIAL_MARGIN_POLICY},
+                }
+            },
+            "runtime",
+        ),
+        (
+            {
+                "configuration": {
+                    "risk": {"leverage": 1, **OFFICIAL_MARGIN_POLICY},
+                    "runtime": {
+                        "proposal_ttl_seconds": "30",
+                        "book_wait_timeout_seconds": "5",
+                        "history_bars": 240,
+                    },
+                    "benchmark": {
+                        "symbol": "BTCUSDT",
+                        "horizon_bars": 60,
+                        "source": "binance_spot_close",
+                    },
+                }
+            },
+            "strategy",
+        ),
+        (
+            {
+                "configuration": {
+                    "risk": {"leverage": 2, **OFFICIAL_MARGIN_POLICY},
+                    "runtime": {
+                        "proposal_ttl_seconds": "30",
+                        "book_wait_timeout_seconds": "5",
+                        "history_bars": 240,
+                    },
+                    "benchmark": {
+                        "symbol": "BTCUSDT",
+                        "horizon_bars": 60,
+                        "source": "binance_spot_close",
+                    },
+                }
+            },
+            "leverage exactly 1",
+        ),
+        ({"clock_policy": {"latency_ms": 250}}, "maximum_decision_lag_ms"),
+        (
+            {
+                "fee_policy": {
+                    "maker": "0.001",
+                    "taker": "0.0005",
+                    "venue": "binance_usdm",
+                    "tier": "regular_user",
+                    "settlement_asset": "USDT",
+                    "discount": "none",
+                    "source": "https://www.binance.com/en/fee/trading",
+                    "verified_at": "2026-08-02T09:00:00Z",
+                }
+            },
+            "fees",
+        ),
+        ({"fee_policy": {"maker": "0.0002", "taker": "0.0005"}}, "venue"),
+        ({"funding_policy": {"source": "estimated"}}, "funding source"),
+        (
+            {
+                "market_data_sources": {
+                    "futures": "binance_usdm",
+                    "primary_spot": "binance_spot",
+                    "secondary_venue": "coinbase",
+                }
+            },
+            "secondary_venue",
+        ),
+        ({"data_versions": {"market_frame_schema": "v0"}}, "data versions"),
+        ({"fill_policy": {"broker": "exchange"}}, "fill policy"),
+    ),
+)
+def test_live_policy_fails_closed_on_missing_or_unsafe_values(changes, message) -> None:
+    manifest = _live_manifest()
+    manifest = replace(manifest, **changes)
+
+    with pytest.raises(RuntimePolicyError, match=message):
+        LivePaperPolicy.from_manifest(manifest)
+
+
+def test_live_policy_requires_every_authoritative_component_version() -> None:
+    manifest = _live_manifest()
+    manifest = replace(
+        manifest,
+        component_versions={
+            name: version
+            for name, version in manifest.component_versions.items()
+            if name != "counterfactual"
+        },
+    )
+
+    with pytest.raises(RuntimePolicyError, match="counterfactual"):
+        LivePaperPolicy.from_manifest(manifest)
+
+
+def test_live_policy_rejects_filter_snapshot_hash_mismatch() -> None:
+    manifest = _live_manifest()
+    manifest = replace(
+        manifest,
+        exchange_metadata={
+            **manifest.exchange_metadata,
+            "filter_snapshot_hashes": {"BTCUSDT": "f" * 64},
+        },
+    )
+
+    with pytest.raises(RuntimePolicyError, match="snapshot hash"):
+        LivePaperPolicy.from_manifest(manifest)

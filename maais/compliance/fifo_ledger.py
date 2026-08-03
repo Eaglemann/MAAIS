@@ -58,7 +58,7 @@ class FifoLedger:
 
     def load_lots(self, lots: list[LotData]) -> None:
         """Restore in-memory state from persisted lots (called at startup)."""
-        for lot in sorted(lots, key=lambda l: l.opened_at):
+        for lot in sorted(lots, key=lambda item: item.opened_at):
             self._lots[(lot.asset, lot.side)].append(lot)
         logger.info("fifo_ledger_loaded", total_lots=len(lots))
 
@@ -98,7 +98,7 @@ class FifoLedger:
         self._lots[(asset, side)].appendleft(lot)  # newest to left for display
         # Re-sort by opened_at to maintain FIFO order
         self._lots[(asset, side)] = deque(
-            sorted(self._lots[(asset, side)], key=lambda l: l.opened_at)
+            sorted(self._lots[(asset, side)], key=lambda item: item.opened_at)
         )
         logger.info(
             "lot_opened",
@@ -118,7 +118,7 @@ class FifoLedger:
         side: str,
         close_size: Decimal,
         exit_price: Decimal,
-        exit_fees: Decimal,        # total fees for this entire close order
+        exit_fees: Decimal,  # total fees for this entire close order
         funding_paid_received: Decimal,
         exchange_rate: Decimal,
         closed_at: datetime | None = None,
@@ -158,7 +158,9 @@ class FifoLedger:
             allocated_entry_fees = lot.entry_fees * (matched / lot.original_size)
             total_fees_for_match = allocated_entry_fees + allocated_exit_fees
 
-            pnl = _pnl(side, lot.entry_price, exit_price, matched, total_fees_for_match, allocated_funding)
+            pnl = _pnl(
+                side, lot.entry_price, exit_price, matched, total_fees_for_match, allocated_funding
+            )
 
             record = TradeRecordData(
                 trade_id=_new_id(),
@@ -184,7 +186,9 @@ class FifoLedger:
                 queue.popleft()
                 logger.debug("lot_fully_closed", lot_id=lot.trade_id)
             else:
-                logger.debug("lot_partially_closed", lot_id=lot.trade_id, remaining=str(lot.remaining_size))
+                logger.debug(
+                    "lot_partially_closed", lot_id=lot.trade_id, remaining=str(lot.remaining_size)
+                )
 
         logger.info(
             "position_closed",

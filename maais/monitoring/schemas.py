@@ -24,19 +24,23 @@ class ComponentName(str, Enum):
 @dataclass
 class AlertEvent:
     """A single alert emitted by the monitoring system."""
+
     level: AlertLevel
     component: str
     title: str
     message: str
-    timestamp: datetime = field(default_factory=lambda: __import__("datetime").datetime.now(
-        __import__("datetime").timezone.utc
-    ))
+    timestamp: datetime = field(
+        default_factory=lambda: __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        )
+    )
     metadata: dict = field(default_factory=dict)
 
 
 @dataclass
 class HealthStatus:
     """Health record for a single system component."""
+
     component: str
     is_healthy: bool
     last_heartbeat: datetime | None

@@ -4,7 +4,12 @@ Moving average type: EMA (chosen over SMA for responsiveness to recent price act
 Constants: EMA_FAST_PERIOD=9, EMA_SLOW_PERIOD=21, MOMENTUM_ROC_SHORT=5, MOMENTUM_ROC_LONG=20
 """
 
-from maais.config.constants import EMA_FAST_PERIOD, EMA_SLOW_PERIOD, MOMENTUM_ROC_SHORT, MOMENTUM_ROC_LONG
+from maais.config.constants import (
+    EMA_FAST_PERIOD,
+    EMA_SLOW_PERIOD,
+    MOMENTUM_ROC_LONG,
+    MOMENTUM_ROC_SHORT,
+)
 
 
 def compute_ema(prices: list[float], period: int) -> float | None:

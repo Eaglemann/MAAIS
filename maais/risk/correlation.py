@@ -72,7 +72,7 @@ class CorrelationController:
         """
         corr = self.get_correlation(symbol_a, symbol_b)
         if corr is None:
-            return 1.0   # unknown correlation → full allocation (no data = no restriction)
+            return 1.0  # unknown correlation → full allocation (no data = no restriction)
 
         abs_corr = abs(corr)
         multiplier = _correlation_multiplier(abs_corr)
@@ -95,9 +95,9 @@ class CorrelationController:
 def _correlation_multiplier(abs_corr: float) -> float:
     """Map absolute correlation value to position size multiplier (Rule 12)."""
     if abs_corr >= CORRELATION_REDUCE_40_THRESHOLD:  # >= 0.70
-        return 0.0   # cluster treatment — block
+        return 0.0  # cluster treatment — block
     if abs_corr >= CORRELATION_REDUCE_20_THRESHOLD:  # >= 0.60
         return 0.60  # reduce 40%
-    if abs_corr >= CORRELATION_FULL_THRESHOLD:        # >= 0.30
+    if abs_corr >= CORRELATION_FULL_THRESHOLD:  # >= 0.30
         return 0.80  # reduce 20%
     return 1.0

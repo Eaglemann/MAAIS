@@ -1,0 +1,567 @@
+import json
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from maais.config.modes import RunMode
+from maais.config.settings import Settings
+from maais.domain.json import content_hash
+from maais.experiments.prepare import RepositoryIdentity
+from maais.operations import soak_readiness as soak_readiness_module
+from maais.operations.health import evaluate_experiment_health
+from maais.operations.soak_readiness import (
+    _health_state_from_overview,
+    audit_structured_logs,
+    evaluate_soak_readiness,
+    write_soak_readiness_bundle,
+)
+from tests.unit.experiments.test_runtime_policy import _live_manifest
+
+NOW = datetime(2026, 8, 3, 20, 1, tzinfo=timezone.utc)
+
+
+def _inputs() -> dict[str, object]:
+    manifest = _live_manifest(schema_revision="0015", worktree_hash=None)
+    repository = RepositoryIdentity(
+        git_sha=manifest.git_sha,
+        worktree_hash=None,
+        lock_hash=manifest.lock_hash,
+        schema_revision=manifest.schema_revision,
+        agent_implementation_hashes={
+            version.agent_name: version.implementation_hash for version in manifest.agent_versions
+        },
+    )
+    first_cycle = NOW - timedelta(hours=24)
+    decision_times = {
+        symbol: tuple(first_cycle + timedelta(minutes=index) for index in range(1440))
+        for symbol in manifest.symbols
+    }
+    report_cycles = sum(
+        1
+        for values in decision_times.values()
+        for cycle_at in values
+        if cycle_at.astimezone(ZoneInfo("Europe/Berlin")).date().isoformat() == "2026-08-02"
+    )
+    decision_cycles = len(manifest.symbols) * 1440
+    return {
+        "manifest": manifest,
+        "repository": repository,
+        "settings": Settings(run_mode=RunMode.PAPER_LIVE),
+        "run_state": {
+            "experiment_id": str(manifest.experiment_id),
+            "run_purpose": "soak",
+            "started_at": (NOW - timedelta(hours=24, minutes=1)).isoformat(),
+            "docker_context": "desktop-linux",
+            "postgres_system_identifier": "7669409277984608290",
+            "process_alive": {
+                "worker": True,
+                "dashboard": True,
+                "scheduler": True,
+                "awake": True,
+            },
+            "decision_metadata": {
+                "passed": True,
+                "decision_cycles": decision_cycles,
+                "market_frames": decision_cycles,
+                "decision_summaries": decision_cycles,
+                "agent_rows": decision_cycles * 8,
+                "expected_agent_rows": decision_cycles * 8,
+                "quality_rows": decision_cycles * 18,
+                "expected_quality_rows": decision_cycles * 18,
+                "gate_cycles": decision_cycles,
+                "invalid_cycle_rows": 0,
+                "invalid_frame_rows": 0,
+                "missing_summary_rows": 0,
+                "invalid_summary_rows": 0,
+                "incomplete_agent_cycles": 0,
+                "invalid_agent_rows": 0,
+                "invalid_agent_versions": 0,
+                "incomplete_quality_cycles": 0,
+                "missing_gate_cycles": 0,
+                "invalid_gate_cycles": 0,
+            },
+        },
+        "preflight": {
+            "passed": True,
+            "experiment_id": str(manifest.experiment_id),
+            "manifest_hash": manifest.manifest_hash,
+        },
+        "process_drill_evidence": {"passed": True, "report_id": "b" * 64},
+        "process_drill_evidence_verified": True,
+        "overview": {
+            "experiment": {
+                "id": str(manifest.experiment_id),
+                "mode": "paper_live",
+                "git_sha": manifest.git_sha,
+                "lock_hash": manifest.lock_hash,
+                "schema_revision": manifest.schema_revision,
+                "manifest_hash": manifest.manifest_hash,
+            },
+            "runtime": {"kill_switch_active": False},
+            "decisions": {"total": decision_cycles},
+            "operations": {"open_incidents": 0, "review_incidents": 0},
+            "freshness": {"halted_cursors": 0, "active_recoveries": 0},
+        },
+        "health": {"healthy": True, "checks": []},
+        "ledger": {"ok": True, "error_count": 0, "errors": []},
+        "database_identity": {
+            "database": "maais",
+            "system_identifier": "7669409277984608290",
+            "server_address": "172.18.0.2",
+            "server_port": 5432,
+        },
+        "decision_times": decision_times,
+        "required_quality_failures": 0,
+        "unsafe_quality_admissions": 0,
+        "log_audit": {
+            "files": 4,
+            "lines": 1000,
+            "invalid_lines": 0,
+            "error_lines": 0,
+            "warning_lines": 1,
+            "errors": [],
+        },
+        "daily_report_evidence": {
+            "passed": True,
+            "report_date": "2026-08-02",
+            "experiment_id": str(manifest.experiment_id),
+            "report_id": "a" * 64,
+            "complete_day": True,
+            "ledger_ok": True,
+            "ledger_error_count": 0,
+            "decision_cycles": report_cycles,
+        },
+        "generated_at": NOW,
+        "minimum_duration": timedelta(hours=24),
+        "maximum_lag": timedelta(minutes=3),
+    }
+
+
+def test_soak_readiness_passes_only_complete_healthy_contiguous_evidence() -> None:
+    report = evaluate_soak_readiness(**_inputs())  # type: ignore[arg-type]
+
+    assert report["passed"] is True
+    assert report["verdict"] == "ready_for_seven_day_paper_test"
+    assert report["safety"] == {"paper_trading_only": True, "live_money": False}
+    assert report["decision_coverage"]["missing_cycles"] == 0  # type: ignore[index]
+    assert all(check["passed"] for check in report["checks"])  # type: ignore[union-attr]
+
+
+def test_soak_safety_uses_frozen_runtime_evidence_not_invoking_shell_mode() -> None:
+    inputs = _inputs()
+    inputs["settings"] = Settings(run_mode=RunMode.REPLAY)
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = {check["name"]: check for check in report["checks"]}  # type: ignore[union-attr]
+
+    assert checks["paper_only_safety"]["passed"] is True
+    assert report["passed"] is True
+
+
+def test_soak_readiness_requires_verified_daily_report_reconciliation() -> None:
+    inputs = _inputs()
+    inputs["daily_report_evidence"] = {
+        "passed": False,
+        "report_date": "2026-08-02",
+        "error": "no recorded complete daily report",
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = {check["name"]: check for check in report["checks"]}  # type: ignore[union-attr]
+
+    assert report["passed"] is False
+    assert checks["daily_report_reconciliation"]["passed"] is False
+    assert "no recorded complete daily report" in checks["daily_report_reconciliation"]["detail"]
+
+
+def test_soak_readiness_rejects_a_replaced_postgresql_cluster() -> None:
+    inputs = _inputs()
+    inputs["database_identity"] = {
+        **inputs["database_identity"],  # type: ignore[dict-item]
+        "system_identifier": "7669553245924327458",
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = {check["name"]: check for check in report["checks"]}  # type: ignore[union-attr]
+
+    assert report["passed"] is False
+    assert checks["postgres_cluster_identity"] == {
+        "name": "postgres_cluster_identity",
+        "passed": False,
+        "detail": (
+            "context=desktop-linux recorded=7669409277984608290 configured=7669553245924327458"
+        ),
+    }
+
+
+def test_soak_health_restores_normalized_runtime_timestamps() -> None:
+    recent = NOW - timedelta(seconds=30)
+    overview = {
+        "runtime": {
+            "worker_status": "running",
+            "checkpoint_at": recent.isoformat(),
+            "lease_status": "active",
+            "lease_heartbeat_at": recent.isoformat(),
+            "lease_expires_at": (NOW + timedelta(seconds=30)).isoformat(),
+            "kill_switch_active": False,
+        },
+        "freshness": {
+            "expected_symbols": 1,
+            "cursor_count": 1,
+            "latest_bar_close_at": recent.isoformat(),
+            "latest_cursor_update_at": recent.isoformat(),
+            "halted_cursors": 0,
+            "active_recoveries": 0,
+        },
+        "operations": {"open_incidents": 0, "review_incidents": 0},
+    }
+
+    state = _health_state_from_overview(overview)
+    health = evaluate_experiment_health(
+        state=state,
+        ledger={"ok": True, "error_count": 0},
+        now=NOW,
+        maximum_lag=timedelta(minutes=3),
+        allow_stopped=False,
+    )
+
+    assert isinstance(state["checkpoint_at"], datetime)
+    assert health["healthy"] is True
+
+
+def test_soak_cardinality_failure_exposes_span_and_symbol_progress() -> None:
+    inputs = _inputs()
+    inputs["decision_times"] = {
+        symbol: values[:2]
+        for symbol, values in inputs["decision_times"].items()  # type: ignore[union-attr]
+    }
+    inputs["overview"] = {
+        **inputs["overview"],  # type: ignore[dict-item]
+        "decisions": {"total": len(inputs["decision_times"]) * 2},  # type: ignore[arg-type]
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    check = next(
+        item
+        for item in report["checks"]
+        if item["name"] == "decision_cardinality"  # type: ignore[union-attr]
+    )
+
+    assert check["passed"] is False
+    assert "symbols_passed=0/" in check["detail"]
+    assert "required_span_seconds=" in check["detail"]
+
+
+def test_soak_cardinality_allows_bounded_cycle_before_state_file_timestamp() -> None:
+    inputs = _inputs()
+    decision_times = inputs["decision_times"]
+    assert isinstance(decision_times, dict)
+    first_cycle = next(iter(decision_times.values()))[0]
+    inputs["run_state"] = {
+        **inputs["run_state"],  # type: ignore[dict-item]
+        "started_at": (first_cycle + timedelta(seconds=10)).isoformat(),
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    check = next(
+        item
+        for item in report["checks"]
+        if item["name"] == "decision_cardinality"  # type: ignore[union-attr]
+    )
+
+    assert check["passed"] is True
+
+
+def test_soak_readiness_explains_every_material_failure() -> None:
+    inputs = _inputs()
+    manifest = inputs["manifest"]
+    assert hasattr(manifest, "symbols")
+    decision_times = dict(inputs["decision_times"])  # type: ignore[arg-type]
+    first_symbol = manifest.symbols[0]  # type: ignore[union-attr]
+    decision_times[first_symbol] = (
+        decision_times[first_symbol][:10] + decision_times[first_symbol][11:]
+    )
+    inputs["decision_times"] = decision_times
+    inputs["required_quality_failures"] = 1
+    inputs["unsafe_quality_admissions"] = 1
+    inputs["run_state"] = {
+        **inputs["run_state"],  # type: ignore[dict-item]
+        "last_recovery_at": NOW.isoformat(),
+        "run_purpose": "process_drill",
+    }
+    inputs["process_drill_evidence_verified"] = False
+    inputs["log_audit"] = {
+        **inputs["log_audit"],  # type: ignore[dict-item]
+        "error_lines": 1,
+        "errors": [{"line": 3, "level": "error"}],
+    }
+    inputs["repository"] = replace(inputs["repository"], worktree_hash="f" * 64)  # type: ignore[arg-type]
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    failed = {check["name"] for check in report["checks"] if not check["passed"]}  # type: ignore[union-attr]
+
+    assert report["passed"] is False
+    assert report["verdict"] == "not_ready"
+    assert {
+        "candidate_identity",
+        "process_continuity",
+        "pre_soak_process_drills",
+        "decision_cardinality",
+        "required_data_quality",
+        "structured_logs",
+    }.issubset(failed)
+
+
+def test_soak_readiness_rejects_incomplete_decision_rationale_metadata() -> None:
+    inputs = _inputs()
+    run_state = inputs["run_state"]
+    assert isinstance(run_state, dict)
+    metadata = run_state["decision_metadata"]
+    assert isinstance(metadata, dict)
+    run_state["decision_metadata"] = {
+        **metadata,
+        "passed": False,
+        "incomplete_agent_cycles": 1,
+        "invalid_agent_rows": 8,
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = {check["name"]: check for check in report["checks"]}  # type: ignore[union-attr]
+
+    assert "decision_metadata_coverage" in checks
+    assert checks["decision_metadata_coverage"]["passed"] is False
+    assert report["passed"] is False
+    assert report["decision_metadata_coverage"] == run_state["decision_metadata"]
+
+
+def test_soak_readiness_bundle_is_immutable_and_hash_manifested(tmp_path: Path) -> None:
+    report = evaluate_soak_readiness(**_inputs())  # type: ignore[arg-type]
+
+    paths = write_soak_readiness_bundle(report, tmp_path)
+
+    assert paths.json_path.is_file()
+    assert paths.markdown_path.is_file()
+    assert paths.manifest_path.is_file()
+    assert "ready_for_seven_day_paper_test" in paths.markdown_path.read_text()
+    with pytest.raises(FileExistsError, match="already exists"):
+        write_soak_readiness_bundle(report, tmp_path)
+
+
+def test_fresh_soak_bundle_verifies_for_the_exact_repository(tmp_path: Path) -> None:
+    inputs = _inputs()
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    paths = write_soak_readiness_bundle(report, tmp_path)
+
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=inputs["repository"],  # type: ignore[arg-type]
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=1),
+    )
+
+
+def test_soak_bundle_verification_rejects_a_tampered_artifact(tmp_path: Path) -> None:
+    report = evaluate_soak_readiness(**_inputs())  # type: ignore[arg-type]
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    with paths.markdown_path.open("a", encoding="utf-8") as handle:
+        handle.write("tampered\n")
+
+    _, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert bundle_verified is False
+
+
+def test_soak_readiness_evidence_expires_after_24_hours(tmp_path: Path) -> None:
+    inputs = _inputs()
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert not soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=inputs["repository"],  # type: ignore[arg-type]
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=24, seconds=1),
+    )
+
+
+def test_soak_readiness_evidence_rejects_repository_identity_drift(tmp_path: Path) -> None:
+    inputs = _inputs()
+    repository = inputs["repository"]
+    assert isinstance(repository, RepositoryIdentity)
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert not soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=replace(repository, git_sha="f" * 40),
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=1),
+    )
+
+
+def test_soak_readiness_evidence_rejects_a_missing_required_gate(tmp_path: Path) -> None:
+    inputs = _inputs()
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = report["checks"]
+    assert isinstance(checks, list)
+    report["checks"] = checks[:-1]
+    report["report_id"] = content_hash(
+        {key: value for key, value in report.items() if key != "report_id"}
+    )
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert not soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=inputs["repository"],  # type: ignore[arg-type]
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=1),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "report_type",
+        "report_schema_version",
+        "legacy_schema",
+        "verdict",
+        "safety",
+        "failed_gate",
+        "elapsed_seconds",
+        "required_seconds",
+        "report_id",
+    ),
+)
+def test_soak_readiness_evidence_rejects_semantically_invalid_verdicts(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    inputs = _inputs()
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    if mutation == "report_type":
+        report["report_type"] = "other"
+    elif mutation == "report_schema_version":
+        report["report_schema_version"] = 99
+    elif mutation == "legacy_schema":
+        report["report_schema_version"] = 1
+    elif mutation == "verdict":
+        report["verdict"] = "not_ready"
+    elif mutation == "safety":
+        report["safety"] = {"paper_trading_only": False, "live_money": True}
+    elif mutation == "failed_gate":
+        checks = report["checks"]
+        assert isinstance(checks, list) and isinstance(checks[0], dict)
+        checks[0]["passed"] = False
+    else:
+        soak = report["soak"]
+        assert isinstance(soak, dict)
+        if mutation == "elapsed_seconds":
+            soak["elapsed_seconds"] = 86_399
+        elif mutation == "required_seconds":
+            soak["required_seconds"] = 86_399
+    report["report_id"] = content_hash(
+        {key: value for key, value in report.items() if key != "report_id"}
+    )
+    if mutation == "report_id":
+        report["report_id"] = "f" * 64
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert not soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=inputs["repository"],  # type: ignore[arg-type]
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=1),
+    )
+
+
+def test_log_audit_counts_every_failure_but_caps_embedded_samples(tmp_path: Path) -> None:
+    first = tmp_path / "worker.log"
+    second = tmp_path / "dashboard.log"
+    first.write_text("not-json\n" * 150, encoding="utf-8")
+    second.write_text('{"level":"info","event":"started"}\n', encoding="utf-8")
+
+    audit = audit_structured_logs((first, second))
+
+    assert audit["invalid_lines"] == 150
+    assert len(audit["errors"]) == 100  # type: ignore[arg-type]
+    assert audit["errors_truncated"] == 50
+
+
+def test_log_audit_summarizes_structured_transport_recovery_evidence(tmp_path: Path) -> None:
+    worker = tmp_path / "worker.log"
+    dashboard = tmp_path / "dashboard.log"
+    worker.write_text(
+        json.dumps(
+            {
+                "level": "warning",
+                "event": "public_rest_transport_retry",
+                "component": "bybit_spot",
+                "path": "/v5/market/orderbook",
+                "attempt": 1,
+                "max_attempts": 3,
+                "error_type": "RemoteProtocolError",
+                "error": "HTTP/2 connection terminated",
+                "retry_in_seconds": 0.25,
+            }
+        )
+        + "\n"
+        + json.dumps({"level": "info", "event": "paper_live_started"})
+        + "\n"
+        + json.dumps(
+            {
+                "level": "info",
+                "event": '127.0.0.1:64123 - "GET /api/v1/health HTTP/1.1" 200',
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    dashboard.write_text(
+        json.dumps({"level": "info", "event": "dashboard_started"}) + "\n",
+        encoding="utf-8",
+    )
+
+    audit = audit_structured_logs((worker, dashboard))
+
+    assert audit["warning_lines"] == 1
+    assert audit["event_counts"] == {
+        "dashboard_started": 1,
+        "paper_live_started": 1,
+        "public_rest_transport_retry": 1,
+    }
+    assert audit["warnings"] == [
+        {
+            "path": str(worker),
+            "line": 1,
+            "event": "public_rest_transport_retry",
+            "component": "bybit_spot",
+            "source_path": "/v5/market/orderbook",
+            "attempt": 1,
+            "max_attempts": 3,
+            "error_type": "RemoteProtocolError",
+            "error": "HTTP/2 connection terminated",
+            "retry_in_seconds": 0.25,
+        }
+    ]
+    assert audit["warnings_truncated"] == 0
+
+
+def test_soak_log_paths_cover_every_supervised_service(tmp_path: Path) -> None:
+    log_paths = getattr(soak_readiness_module, "_soak_log_paths", None)
+
+    assert log_paths is not None
+    assert log_paths(tmp_path / "current.json", "cc18fa3f") == (
+        tmp_path / "logs" / "paper-worker-cc18fa3f.log",
+        tmp_path / "logs" / "mission-control-cc18fa3f.log",
+        tmp_path / "logs" / "daily-supervisor-cc18fa3f.log",
+        tmp_path / "logs" / "sleep-inhibitor-cc18fa3f.log",
+    )

@@ -1,6 +1,5 @@
 """Order book depth and imbalance features for the Liquidity and Order Flow Toxicity agents."""
 
-from decimal import Decimal
 from maais.market_data.schemas import OrderBookSnapshot
 
 

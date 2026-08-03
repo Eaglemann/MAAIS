@@ -8,11 +8,11 @@ After a sweep, we expect a mean-reversion move OPPOSITE to the spike.
 import math
 
 from maais.agents.base import AgentOutput, BaseAgent, _clip, _neutral
-from maais.config.constants import AgentName, Regime, ZSCORE_TRIGGER
+from maais.config.constants import ZSCORE_TRIGGER, AgentName, Regime
 from maais.feature_pipeline.features import FeatureSet
 
 _NAME = AgentName.STOP_RUN_DETECTION
-_STOP_RUN_Z_THRESHOLD = ZSCORE_TRIGGER + 1.0    # slightly above mean reversion trigger
+_STOP_RUN_Z_THRESHOLD = ZSCORE_TRIGGER + 1.0  # slightly above mean reversion trigger
 
 
 class StopRunDetectionAgent(BaseAgent):
@@ -35,7 +35,7 @@ class StopRunDetectionAgent(BaseAgent):
         hypothesis = "short" if z > 0 else "long"
 
         # Confidence: requires both high Z AND elevated volatility
-        vol_elevated = vol is not None and vol > 0.002   # ~0.2% std on returns
+        vol_elevated = vol is not None and vol > 0.002  # ~0.2% std on returns
         base_prob = 0.55 + math.tanh((abs_z - _STOP_RUN_Z_THRESHOLD) * 0.8) * 0.30
         probability = _clip(base_prob * (1.2 if vol_elevated else 0.9))
         confidence = _clip(0.4 + (0.3 if vol_elevated else 0.0))

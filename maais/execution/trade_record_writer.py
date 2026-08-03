@@ -9,9 +9,6 @@ Integrates with Batch 2 compliance engine:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from decimal import Decimal
-
 from maais.compliance.exchange_rate import ExchangeRateFetcher
 from maais.compliance.fifo_ledger import FifoLedger
 from maais.compliance.schemas import TradeRecordData
@@ -55,8 +52,14 @@ class TradeRecordWriter:
             opened_at=fill.fill_time,
         )
         await self._logger.save_lot(lot)
-        logger.info("lot_opened", symbol=fill.symbol, lot_id=lot.trade_id, side=fill.side.value,
-                    qty=str(fill.filled_quantity), price=str(fill.avg_fill_price))
+        logger.info(
+            "lot_opened",
+            symbol=fill.symbol,
+            lot_id=lot.trade_id,
+            side=fill.side.value,
+            qty=str(fill.filled_quantity),
+            price=str(fill.avg_fill_price),
+        )
 
     async def record_close(
         self,

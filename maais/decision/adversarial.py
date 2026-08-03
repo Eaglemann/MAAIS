@@ -48,10 +48,7 @@ def run_adversarial(
 
     minority_direction = "short" if majority_direction == "long" else "long"
 
-    dissenters = [
-        out for out in outputs
-        if out.directional_hypothesis == minority_direction
-    ]
+    dissenters = [out for out in outputs if out.directional_hypothesis == minority_direction]
 
     if not dissenters:
         return AdversarialSummary(
@@ -69,8 +66,12 @@ def run_adversarial(
         avg_prob = 0.5
         avg_conf = 0.0
     else:
-        avg_prob = sum(registry.get(d.agent_name) * d.probability_estimate for d in dissenters) / total_w
-        avg_conf = sum(registry.get(d.agent_name) * d.confidence_score for d in dissenters) / total_w
+        avg_prob = (
+            sum(registry.get(d.agent_name) * d.probability_estimate for d in dissenters) / total_w
+        )
+        avg_conf = (
+            sum(registry.get(d.agent_name) * d.confidence_score for d in dissenters) / total_w
+        )
 
     # Challenge is accepted if dissenters are highly confident
     challenge_accepted = avg_conf >= _ADVERSARIAL_BLOCK_THRESHOLD

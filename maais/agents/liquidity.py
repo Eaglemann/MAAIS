@@ -1,7 +1,7 @@
 """Liquidity Agent — institutional liquidity patterns from order book."""
 
 from maais.agents.base import AgentOutput, BaseAgent, _clip, _neutral, _signal_to_output
-from maais.config.constants import AgentName, Regime
+from maais.config.constants import AgentName
 from maais.feature_pipeline.features import FeatureSet
 
 _NAME = AgentName.LIQUIDITY
@@ -15,8 +15,8 @@ class LiquidityAgent(BaseAgent):
         if features.book_imbalance is None:
             return _neutral(_NAME)
 
-        imbalance = features.book_imbalance   # ∈ [-1, +1]
-        votes = imbalance * 2.0               # scale to [-2, +2]
+        imbalance = features.book_imbalance  # ∈ [-1, +1]
+        votes = imbalance * 2.0  # scale to [-2, +2]
         total = 2.0
 
         # Wide spread = uncertainty = lower confidence

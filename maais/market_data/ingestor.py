@@ -60,10 +60,19 @@ def _ensure_duckdb_schema(conn: duckdb.DuckDBPyConnection) -> None:
 
 def _kline_to_row(k: KlineData) -> tuple:
     return (
-        k.symbol, k.timeframe, k.open_time,
-        k.open, k.high, k.low, k.close, k.volume,
-        k.close_time, k.quote_volume, k.trade_count,
-        k.taker_buy_volume, k.taker_buy_quote_volume,
+        k.symbol,
+        k.timeframe,
+        k.open_time,
+        k.open,
+        k.high,
+        k.low,
+        k.close,
+        k.volume,
+        k.close_time,
+        k.quote_volume,
+        k.trade_count,
+        k.taker_buy_volume,
+        k.taker_buy_quote_volume,
     )
 
 
@@ -134,7 +143,9 @@ class HistoricalIngestor:
         )
         await self._store_funding_rates(funding)
 
-        logger.info("ingest_complete", symbol=symbol, candles=total_candles, funding_records=len(funding))
+        logger.info(
+            "ingest_complete", symbol=symbol, candles=total_candles, funding_records=len(funding)
+        )
 
     # ── Storage helpers ───────────────────────────────────────────────────────
 

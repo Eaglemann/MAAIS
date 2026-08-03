@@ -214,3 +214,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MAAIS local runtime and design-session state
+.superpowers/
+.playwright-cli/
+artifacts/
+backups/
+data/
+node_modules/
+dashboard/dist/
+output/playwright/

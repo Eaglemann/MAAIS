@@ -6,11 +6,10 @@ open positions via the compliance trade logger (Rule 8, field: funding_paid_rece
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal
 
 from maais.core.logging import get_logger
-from maais.execution.binance_client import BinanceFuturesClient
+from maais.execution.protocols import AuthenticatedExecutionClient
 
 logger = get_logger(__name__)
 
@@ -18,7 +17,7 @@ logger = get_logger(__name__)
 class FundingTracker:
     """Tracks funding payments for open positions."""
 
-    def __init__(self, client: BinanceFuturesClient) -> None:
+    def __init__(self, client: AuthenticatedExecutionClient) -> None:
         self._client = client
         # symbol → cumulative funding paid/received (negative = paid, positive = received)
         self._cumulative: dict[str, Decimal] = {}

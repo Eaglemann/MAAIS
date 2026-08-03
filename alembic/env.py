@@ -1,15 +1,16 @@
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from maais.config.settings import get_settings
-from maais.db.connection import Base
+import maais.compliance.models  # noqa: F401
+import maais.db.models  # noqa: F401
 
 # Import all ORM model modules so Base.metadata is populated before migrations run.
 import maais.market_data.models  # noqa: F401
-import maais.compliance.models   # noqa: F401
+from alembic import context
+from maais.config.settings import get_settings
+from maais.db.connection import Base
 
 config = context.config
 if config.config_file_name is not None:

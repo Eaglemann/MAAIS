@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: maais
+      POSTGRES_USER: maais
+      POSTGRES_PASSWORD: maais
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - maais_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maais -d maais"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  maais_postgres_data:

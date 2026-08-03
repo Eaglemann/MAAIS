@@ -31,7 +31,12 @@ class LeverageEnforcer:
                 f"leverage_cap_exceeded: requested={requested_leverage}x, "
                 f"max={self._max_leverage}x (Rule 20)"
             )
-            logger.warning("leverage_rejected", symbol=symbol, requested=requested_leverage, cap=self._max_leverage)
+            logger.warning(
+                "leverage_rejected",
+                symbol=symbol,
+                requested=requested_leverage,
+                cap=self._max_leverage,
+            )
             return False, reason
         return True, None
 
