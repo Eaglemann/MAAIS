@@ -230,6 +230,16 @@ class ResearchExecutionSensitivity(ReadModel):
 
 class ResearchLabView(ReadModel):
     official_account_inclusion: str = "excluded"
+    analytics_as_of: datetime | None
+    equity_curve: tuple[Mapping[str, object], ...]
+    cost_waterfall: Mapping[str, object]
+    performance: Mapping[str, object]
+    attribution: Mapping[str, object]
+    calibration: Mapping[str, object]
+    gate_value: Mapping[str, object]
+    cost_sensitivity: Mapping[str, object]
+    benchmarks: Mapping[str, object]
+    availability: Mapping[str, object]
     counterfactuals: tuple[ResearchCounterfactual, ...]
     execution_sensitivities: tuple[ResearchExecutionSensitivity, ...]
     limit_per_kind: int

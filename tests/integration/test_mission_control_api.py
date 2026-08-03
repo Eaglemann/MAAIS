@@ -2,6 +2,7 @@ import csv
 import io
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -11,6 +12,11 @@ import pytest
 from maais.api.app import create_app
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import Direction
+from maais.execution.paper.authorization import ExecutionAuthorizer
+from maais.execution.paper.broker import MarketExitCommand, PaperBroker
+from maais.execution.paper.clock import DeterministicClock
+from maais.execution.paper.fills import MarketFillEngine
+from maais.execution.paper.market import BookLevel, BookSnapshot
 from maais.market_data.integrity.state_machine import IntegrityPolicy
 from maais.orchestration.results import OrchestrationDisposition
 from tests.integration.test_decision_lineage import _prepare_bundle
@@ -473,6 +479,122 @@ async def test_research_lab_exposes_execution_sensitivities_outside_official_acc
     ]
     assert all(item["symbol"] == "BTCUSDT" for item in payload["execution_sensitivities"])
     assert all(item["decision_cycle_id"] for item in payload["execution_sensitivities"])
+
+
+async def test_research_lab_exposes_reconciled_official_performance_analytics(
+    uow_factory: UnitOfWork,
+) -> None:
+    execution = await _record(uow_factory)
+    assert execution.account is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(execution)
+    application = create_app(uow_factory._session_factory)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            f"/api/v1/experiments/{execution.account.experiment_id}/research"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analytics_as_of"] == "2026-08-02T12:00:00.003000Z"
+    assert payload["equity_curve"] == [
+        {
+            "at": "2026-08-02T12:00:00.003000Z",
+            "equity": "9997.000000000000000000",
+            "drawdown": "0.000300000000000000",
+        }
+    ]
+    assert payload["cost_waterfall"] == {
+        "initial_capital": "10000.000000000000000000",
+        "gross_realized_pnl": "0E-18",
+        "fees": "-3.000000000000000000",
+        "funding": "0E-18",
+        "unrealized_pnl": "0E-18",
+        "net_change": "-3.000000000000000000",
+        "ending_equity": "9997.000000000000000000",
+        "reconciles": True,
+    }
+    assert payload["performance"]["closed_trade_allocations"] == 0
+    assert payload["availability"]["closed_trade_metrics"]["status"] == "unavailable"
+    assert payload["benchmarks"]["flat_cash"]["ending_equity"] == ("10000.000000000000000000")
+
+
+async def test_research_lab_attributes_a_closed_official_trade_from_fifo_ledger(
+    uow_factory: UnitOfWork,
+) -> None:
+    entry = await _record(uow_factory)
+    assert entry.account is not None
+    assert entry.exit_plan is not None
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(entry)
+    trigger_at = entry.fills[0].fill_at + timedelta(minutes=1)
+    triggered = entry.exit_plan.evaluate_mark(entry.exit_plan.target_price, trigger_at)
+    assert triggered.intent is not None
+    book_at = trigger_at + timedelta(milliseconds=101)
+    broker = PaperBroker(
+        clock=DeterministicClock(lambda: trigger_at),
+        authorizer=ExecutionAuthorizer(b"paper research integration key is at least 32 bytes"),
+        market_fills=MarketFillEngine(timedelta(seconds=1)),
+    )
+    result = broker.execute_market_exit(
+        MarketExitCommand(
+            order_id=UUID(int=9901),
+            fill_id=UUID(int=9902),
+            experiment_id=entry.account.experiment_id,
+            proposal_id=entry.order.proposal_id,
+            client_order_id="paper-btc-research-target",
+            symbol="BTCUSDT",
+            decision_executable_price=entry.exit_plan.target_price,
+            execution_latency=timedelta(milliseconds=100),
+            created_at=trigger_at,
+            expires_at=trigger_at + timedelta(seconds=30),
+            taker_fee_rate=Decimal("0.0005"),
+            intent=triggered.intent,
+            exchange_filters=entry.exchange_filters,
+        ),
+        account=entry.account,
+        exit_plan=triggered.plan,
+        books=(
+            BookSnapshot(
+                event_id="research-target-depth",
+                symbol="BTCUSDT",
+                venue_event_at=book_at - timedelta(milliseconds=1),
+                observed_at=book_at,
+                sequence=991,
+                bids=(BookLevel(Decimal("61000"), Decimal("1")),),
+                asks=(BookLevel(Decimal("61001"), Decimal("1")),),
+                mark_price=Decimal("61000.5"),
+            ),
+        ),
+    )
+    async with uow_factory.begin() as uow:
+        await uow.paper_execution.record(result.record)
+    application = create_app(uow_factory._session_factory)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(f"/api/v1/experiments/{entry.account.experiment_id}/research")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["performance"]["closed_trade_allocations"] == 1
+    assert Decimal(payload["performance"]["expectancy"]) == Decimal("93.95")
+    symbol_result = payload["attribution"]["by_symbol"][0]
+    assert symbol_result["key"] == "BTCUSDT"
+    assert symbol_result["trades"] == 1
+    assert symbol_result["wins"] == 1
+    assert symbol_result["losses"] == 0
+    assert Decimal(symbol_result["win_rate"]) == Decimal("1")
+    assert Decimal(symbol_result["net_pnl_ex_funding"]) == Decimal("93.95")
+    assert Decimal(symbol_result["expectancy"]) == Decimal("93.95")
+    assert payload["attribution"]["by_exit_reason"][0]["key"] == "target"
+    assert payload["calibration"]["consensus"]["sample_size"] == 1
 
 
 async def test_research_lab_exposes_rejected_trade_counterfactual_with_lineage(

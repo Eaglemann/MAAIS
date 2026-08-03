@@ -252,6 +252,72 @@ export interface ResearchExecutionSensitivity {
 
 export interface ResearchLabView {
   official_account_inclusion: "excluded";
+  analytics_as_of: string | null;
+  equity_curve: Array<{ at: string; equity: string; drawdown: string }>;
+  cost_waterfall: {
+    initial_capital: string;
+    gross_realized_pnl: string;
+    fees: string;
+    funding: string;
+    unrealized_pnl: string;
+    net_change: string;
+    ending_equity: string;
+    reconciles: boolean;
+  };
+  performance: {
+    basis: string;
+    closed_trade_allocations: number;
+    wins: number;
+    losses: number;
+    breakeven: number;
+    win_rate: string | null;
+    average_win: string | null;
+    average_loss: string | null;
+    expectancy: string | null;
+    profit_factor: string | null;
+    average_r_multiple: string | null;
+    maximum_favorable_excursion: string | null;
+    maximum_adverse_excursion: string | null;
+  };
+  attribution: Record<string, Array<{
+    key: string;
+    trades: number;
+    wins: number;
+    losses: number;
+    win_rate: string;
+    net_pnl_ex_funding: string;
+    expectancy: string;
+  }>>;
+  calibration: Record<string, {
+    sample_size: number;
+    brier_score: string | null;
+    mean_probability: string | null;
+    observed_win_rate: string | null;
+  }>;
+  gate_value: {
+    interpretation: string;
+    resolved_sample_size: number;
+    by_gate: Array<{
+      gate: string;
+      sample_size: number;
+      hypothetical_pnl: string;
+      avoided_pnl: string;
+    }>;
+  };
+  cost_sensitivity: Record<string, {
+    sample_size: number;
+    execution_cost: string;
+    marked_pnl: string;
+  }>;
+  benchmarks: {
+    buy_and_hold: JsonRecord;
+    flat_cash: JsonRecord;
+  };
+  availability: Record<string, {
+    status: string;
+    reason: string | null;
+    sample_size: number;
+  }>;
   counterfactuals: ResearchCounterfactual[];
   execution_sensitivities: ResearchExecutionSensitivity[];
   limit_per_kind: number;

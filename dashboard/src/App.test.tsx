@@ -53,6 +53,42 @@ const MODEL_ASSUMPTIONS: PaperModelAssumptions = {
   limitations: ["exchange_liquidation_behavior_not_modeled"],
 };
 
+const EMPTY_RESEARCH: ResearchLabView = {
+  official_account_inclusion: "excluded",
+  analytics_as_of: null,
+  equity_curve: [],
+  cost_waterfall: {
+    initial_capital: "10000", gross_realized_pnl: "0", fees: "0", funding: "0",
+    unrealized_pnl: "0", net_change: "0", ending_equity: "10000", reconciles: true,
+  },
+  performance: {
+    basis: "fifo_closed_fill_allocations_net_of_open_and_close_fees_ex_funding",
+    closed_trade_allocations: 0, wins: 0, losses: 0, breakeven: 0, win_rate: null,
+    average_win: null, average_loss: null, expectancy: null, profit_factor: null,
+    average_r_multiple: null, maximum_favorable_excursion: null,
+    maximum_adverse_excursion: null,
+  },
+  attribution: {
+    by_symbol: [], by_regime: [], by_strategy: [], by_agent_coalition: [],
+    by_hour_berlin: [], by_direction: [], by_exit_reason: [],
+  },
+  calibration: {
+    consensus: { sample_size: 0, brier_score: null, mean_probability: null, observed_win_rate: null },
+  },
+  gate_value: { interpretation: "", resolved_sample_size: 0, by_gate: [] },
+  cost_sensitivity: {},
+  benchmarks: {
+    buy_and_hold: { status: "unavailable", ending_equity: null },
+    flat_cash: { status: "available", ending_equity: "10000" },
+  },
+  availability: {
+    funding_attribution: { status: "unavailable", reason: "not_allocated", sample_size: 0 },
+  },
+  counterfactuals: [],
+  execution_sensitivities: [],
+  limit_per_kind: 500,
+};
+
 const EVENT_FEED_EXPERIMENT: ExperimentListItem = {
   experiment: {
     id: "22222222-2222-4222-8222-222222222222",
@@ -155,12 +191,7 @@ describe("Mission Control event synchronization", () => {
       next_before_id: null,
     });
     vi.spyOn(api, "listCommands").mockResolvedValue({ items: [], limit: 100 });
-    vi.spyOn(api, "getResearch").mockResolvedValue({
-      official_account_inclusion: "excluded",
-      counterfactuals: [],
-      execution_sensitivities: [],
-      limit_per_kind: 500,
-    });
+    vi.spyOn(api, "getResearch").mockResolvedValue(EMPTY_RESEARCH);
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -332,12 +363,7 @@ describe("Audit Ledger history", () => {
       next_before_id: null,
     });
     vi.spyOn(api, "listCommands").mockResolvedValue({ items: [], limit: 100 });
-    vi.spyOn(api, "getResearch").mockResolvedValue({
-      official_account_inclusion: "excluded",
-      counterfactuals: [],
-      execution_sensitivities: [],
-      limit_per_kind: 500,
-    });
+    vi.spyOn(api, "getResearch").mockResolvedValue(EMPTY_RESEARCH);
     vi.spyOn(api, "startResumableEventFeed").mockReturnValue(() => undefined);
 
     render(<App />);
@@ -508,6 +534,70 @@ describe("Operator Console", () => {
 
 const RESEARCH: ResearchLabView = {
   official_account_inclusion: "excluded",
+  analytics_as_of: "2026-08-03T12:00:00Z",
+  equity_curve: [
+    { at: "2026-08-02T12:00:00Z", equity: "10000", drawdown: "0" },
+    { at: "2026-08-03T12:00:00Z", equity: "10082", drawdown: "0.01" },
+  ],
+  cost_waterfall: {
+    initial_capital: "10000",
+    gross_realized_pnl: "100",
+    fees: "-10",
+    funding: "-3",
+    unrealized_pnl: "-5",
+    net_change: "82",
+    ending_equity: "10082",
+    reconciles: true,
+  },
+  performance: {
+    basis: "fifo_closed_fill_allocations_net_of_open_and_close_fees_ex_funding",
+    closed_trade_allocations: 4,
+    wins: 3,
+    losses: 1,
+    breakeven: 0,
+    win_rate: "0.75",
+    average_win: "35",
+    average_loss: "-23",
+    expectancy: "20.5",
+    profit_factor: "4.565",
+    average_r_multiple: "1.4",
+    maximum_favorable_excursion: "140",
+    maximum_adverse_excursion: "45",
+  },
+  attribution: {
+    by_symbol: [{ key: "BTCUSDT", trades: 4, wins: 3, losses: 1, win_rate: "0.75", net_pnl_ex_funding: "82", expectancy: "20.5" }],
+    by_regime: [],
+    by_strategy: [],
+    by_agent_coalition: [],
+    by_hour_berlin: [],
+    by_direction: [],
+    by_exit_reason: [],
+  },
+  calibration: {
+    consensus: { sample_size: 4, brier_score: "0.19", mean_probability: "0.68", observed_win_rate: "0.75" },
+    momentum: { sample_size: 4, brier_score: "0.17", mean_probability: "0.71", observed_win_rate: "0.75" },
+  },
+  gate_value: {
+    interpretation: "positive_avoided_pnl_means_the_rejection_avoided_a_loss",
+    resolved_sample_size: 1,
+    by_gate: [{ gate: "monitoring", sample_size: 1, hypothetical_pnl: "-82", avoided_pnl: "82" }],
+  },
+  cost_sensitivity: {
+    optimistic: { sample_size: 1, execution_cost: "4", marked_pnl: "90" },
+    stress: { sample_size: 1, execution_cost: "9", marked_pnl: "76" },
+  },
+  benchmarks: {
+    buy_and_hold: { status: "available", method: "equal_weight_long_first_to_last_observed_close_no_costs", symbols: 1, return: "0.04", ending_equity: "10400", returns_by_symbol: { BTCUSDT: "0.04" } },
+    flat_cash: { status: "available", method: "initial_capital_held_in_cash_zero_interest", return: "0", ending_equity: "10000" },
+  },
+  availability: {
+    closed_trade_metrics: { status: "available", reason: null, sample_size: 4 },
+    mfe_mae: { status: "available", reason: null, sample_size: 4 },
+    r_multiples: { status: "available", reason: null, sample_size: 4 },
+    calibration: { status: "available", reason: null, sample_size: 4 },
+    gate_value: { status: "available", reason: null, sample_size: 1 },
+    funding_attribution: { status: "unavailable", reason: "funding_is_authoritative_at_account_level_but_not_allocated_to_close_fills", sample_size: 0 },
+  },
   limit_per_kind: 500,
   counterfactuals: [
     {
@@ -552,6 +642,11 @@ describe("Research Lab", () => {
     render(<ResearchLab research={RESEARCH} currency="USDT" onOpen={open} />);
 
     expect(screen.getByText(/excluded from official account P&L/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/82\.00 USDT/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/75\.00%/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Brier score/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Buy and hold/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Funding attribution unavailable/i)).toBeInTheDocument();
     expect(screen.getByText(/rejected at monitoring/i)).toBeInTheDocument();
     expect(screen.getByText(/^stress$/i)).toBeInTheDocument();
     expect(screen.getByText(/-24\.00 USDT/)).toBeInTheDocument();
