@@ -211,16 +211,17 @@ class PublicMarketDataRuntime:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
             if not self._running:
                 return
-            failure = next(
-                (task.exception() for task in done if not task.cancelled()),
-                None,
+            failed_task = next(
+                (task for task in done if not task.cancelled() and task.exception() is not None),
+                next(iter(done)),
             )
+            failure = None if failed_task.cancelled() else failed_task.exception()
             if failure is None:
                 failure = PublicDataHalt(
                     "public_data_task_ended",
-                    "a retained public data task ended unexpectedly",
+                    "retained task ended unexpectedly",
                 )
-            await self._halt("public_data_task_failed", failure)
+            await self._halt_task(failed_task, failure)
         except asyncio.CancelledError:
             raise
         finally:
@@ -228,6 +229,25 @@ class PublicMarketDataRuntime:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _halt_task(self, task: asyncio.Task[None], exc: BaseException) -> None:
+        task_detail = f"task={task.get_name()}; "
+        if isinstance(exc, ConnectorHalt):
+            failure: BaseException = ConnectorHalt(
+                exc.reason_code,
+                f"{task_detail}{exc.detail}",
+            )
+        elif isinstance(exc, PublicDataHalt):
+            failure = PublicDataHalt(
+                exc.reason_code,
+                f"{task_detail}{exc.detail}",
+            )
+        else:
+            failure = PublicDataHalt(
+                "public_data_task_failed",
+                f"{task_detail}{_detail(exc)}",
+            )
+        await self._halt("public_data_task_failed", failure)
 
     async def _pump_websocket(self) -> None:
         if self._websocket is None:

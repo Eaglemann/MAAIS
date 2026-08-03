@@ -8,6 +8,7 @@ the official 24-hour soak; their generated evidence is retained under
 | Fault | Direct evidence | Required invariant |
 |---|---|---|
 | WebSocket disconnect | `tests/unit/market_data/test_binance_websocket_connector.py::test_disconnect_enters_recovery_and_rebuilds_depth_before_ready` | Connector cannot become ready until depth is rebuilt. |
+| REST transport disconnect | `tests/unit/market_data/test_http_transport.py` plus the transient-failure cases in each public REST connector test | Transport-only failures retry with bounded backoff and structured source evidence; exhaustion retains the exact failed task and remains fail-closed. |
 | Missing bars | `tests/unit/market_data/test_gap_recovery.py` and `tests/integration/test_recovery_store.py` | Exact closed-bar range is validated, persisted, and resumed at the first uncommitted event. |
 | Duplicate event | `tests/unit/market_data/test_frame_builder.py::test_identical_duplicate_is_idempotent_but_conflicting_duplicate_fails` and `tests/integration/test_decision_lineage.py::test_identical_retry_is_idempotent_but_changed_retry_conflicts` | Identical retry is a no-op; conflicting content fails closed. |
 | Reordered event | `tests/unit/market_data/test_integrity_state_machine.py::test_clock_drift_sequence_regression_and_stale_book_each_fail_closed` | Sequence regression quarantines the frame. |

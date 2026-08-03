@@ -488,7 +488,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(result, sort_keys=True))
         return 0
     manifest = load_manifest_file(arguments.manifest)
-    asyncio.run(run_live_paper_manifest(manifest, settings=settings))
+    try:
+        asyncio.run(run_live_paper_manifest(manifest, settings=settings))
+    except Exception as exc:
+        error = (str(exc).strip().replace("\x00", "") or "no detail")[:2000]
+        print(
+            json.dumps(
+                {
+                    "event": "paper_live_failed",
+                    "level": "error",
+                    "experiment_id": str(manifest.experiment_id),
+                    "error_type": type(exc).__name__,
+                    "error": error,
+                    "live_money": False,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return 1
     return 0
 
 

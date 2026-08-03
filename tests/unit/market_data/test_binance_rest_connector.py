@@ -61,6 +61,34 @@ async def test_public_preflight_is_keyless_and_loads_advertised_weight_limit() -
     await client.aclose()
 
 
+async def test_public_rest_retries_a_transient_transport_failure() -> None:
+    time_requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal time_requests
+        if request.url.path == "/fapi/v1/time":
+            time_requests += 1
+            if time_requests == 1:
+                raise httpx.ReadError("connection reset", request=request)
+            return httpx.Response(200, json={"serverTime": SERVER_MS})
+        if request.url.path == "/fapi/v1/exchangeInfo":
+            return httpx.Response(200, json=_exchange_info())
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = _client(handler)
+    connector = BinanceRestConnector(
+        client=client,
+        observed_now=lambda: OBSERVED_AT,
+        sleep=_no_sleep,
+    )
+    async with connector:
+        preflight = await connector.preflight(("BTCUSDT", "ETHUSDT"))
+
+    assert preflight.request_weight_limit_per_minute == 2400
+    assert time_requests == 2
+    await client.aclose()
+
+
 async def test_depth_and_backfill_refuse_to_run_before_symbol_preflight() -> None:
     client = _client(lambda request: httpx.Response(500))
     async with BinanceRestConnector(

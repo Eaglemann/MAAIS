@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import tempfile
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -586,6 +587,8 @@ def _pid_alive(value: object) -> bool:
 
 def audit_structured_logs(paths: Sequence[Path]) -> dict[str, object]:
     errors: list[dict[str, object]] = []
+    warnings: list[dict[str, object]] = []
+    event_counts: Counter[str] = Counter()
     problem_count = 0
     invalid_lines = 0
     error_lines = 0
@@ -618,6 +621,9 @@ def audit_structured_logs(paths: Sequence[Path]) -> dict[str, object]:
                 invalid_lines += 1
                 record_problem({"path": str(path), "line": line_number, "reason": "not_an_object"})
                 continue
+            event = value.get("event")
+            if isinstance(event, str) and event:
+                event_counts[event] += 1
             level = str(value.get("level", "")).lower()
             if level in {"error", "critical", "exception"}:
                 error_lines += 1
@@ -631,14 +637,35 @@ def audit_structured_logs(paths: Sequence[Path]) -> dict[str, object]:
                 )
             elif level in {"warning", "warn"}:
                 warning_lines += 1
+                if len(warnings) < 100:
+                    warning: dict[str, object] = {
+                        "path": str(path),
+                        "line": line_number,
+                        "event": str(event or "")[:240],
+                    }
+                    for source_name, output_name in (
+                        ("component", "component"),
+                        ("path", "source_path"),
+                        ("attempt", "attempt"),
+                        ("max_attempts", "max_attempts"),
+                        ("error_type", "error_type"),
+                        ("error", "error"),
+                        ("retry_in_seconds", "retry_in_seconds"),
+                    ):
+                        if source_name in value:
+                            warning[output_name] = value[source_name]
+                    warnings.append(warning)
     return {
         "files": existing,
         "lines": line_count,
         "invalid_lines": invalid_lines,
         "error_lines": error_lines,
         "warning_lines": warning_lines,
+        "event_counts": dict(sorted(event_counts.items())),
         "errors": errors,
         "errors_truncated": problem_count - len(errors),
+        "warnings": warnings,
+        "warnings_truncated": warning_lines - len(warnings),
     }
 
 

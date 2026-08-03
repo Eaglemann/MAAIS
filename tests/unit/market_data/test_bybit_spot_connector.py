@@ -257,3 +257,48 @@ async def test_keyless_connector_gates_reference_polling_on_preflight() -> None:
     ]
     assert not client.is_closed
     await client.aclose()
+
+
+async def test_reference_poll_retries_a_transient_http2_connection_termination() -> None:
+    orderbook_requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal orderbook_requests
+        if request.url.path == "/v5/market/time":
+            return httpx.Response(
+                200,
+                json=_envelope(
+                    {
+                        "timeSecond": str(SERVER_MS // 1000),
+                        "timeNano": str(SERVER_MS * 1_000_000),
+                    }
+                ),
+            )
+        if request.url.path == "/v5/market/instruments-info":
+            return httpx.Response(200, json=_instruments())
+        if request.url.path == "/v5/market/orderbook":
+            orderbook_requests += 1
+            if orderbook_requests == 1:
+                raise httpx.RemoteProtocolError(
+                    "<ConnectionTerminated error_code:0, last_stream_id:3933>",
+                    request=request,
+                )
+            return httpx.Response(200, json=_book())
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.AsyncClient(
+        base_url=PUBLIC_BYBIT_API_BASE_URL,
+        transport=httpx.MockTransport(handler),
+    )
+    connector = BybitSpotConnector(
+        client=client,
+        observed_now=lambda: OBSERVED_AT,
+        sleep=_no_sleep,
+    )
+    async with connector:
+        await connector.preflight(("BTCUSDT", "ETHUSDT"))
+        event = await connector.get_reference_event("BTCUSDT")
+
+    assert event.symbol == "BTCUSDT"
+    assert orderbook_requests == 2
+    await client.aclose()

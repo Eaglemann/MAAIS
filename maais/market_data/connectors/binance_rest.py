@@ -26,6 +26,7 @@ from maais.market_data.connectors.binance_rest_contracts import (
     parse_funding_events,
     parse_server_time,
 )
+from maais.market_data.connectors.http_transport import get_with_transport_retry
 from maais.market_data.events import (
     ClosedBarPayload,
     FundingSettlementPayload,
@@ -108,6 +109,7 @@ class BinanceRestConnector:
         self._client = client
         self._owns_client = client is None
         self._observed_now = observed_now or (lambda: datetime.now(timezone.utc))
+        self._sleep = sleep
         self._weight = RequestPacer(
             _PROVISIONAL_WEIGHT_LIMIT,
             60,
@@ -438,7 +440,13 @@ class BinanceRestConnector:
     ) -> tuple[object, datetime]:
         client = self._http
         await self._weight.acquire(weight)
-        response = await client.get(path, params=params)
+        response = await get_with_transport_retry(
+            client,
+            path,
+            params,
+            component="binance_usdm",
+            sleep=self._sleep,
+        )
         response.raise_for_status()
         observed_at = self._observed_now()
         require_utc(observed_at, "observed_now")

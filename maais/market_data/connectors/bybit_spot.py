@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 import httpx
 
 from maais.execution.paper.clock import require_utc
+from maais.market_data.connectors.http_transport import get_with_transport_retry
 from maais.market_data.events import (
     MarketEventKind,
     ObservedMarketEvent,
@@ -213,6 +214,7 @@ class BybitSpotConnector:
         self._client = client
         self._owns_client = client is None
         self._observed_now = observed_now or (lambda: datetime.now(timezone.utc))
+        self._sleep = sleep
         self._pacer = _Pacer(monotonic=monotonic, sleep=sleep)
         self._mappings: dict[str, BybitSymbolMapping] = {}
 
@@ -294,7 +296,13 @@ class BybitSpotConnector:
         if self._client is None:
             raise RuntimeError("BybitSpotConnector must be used as an async context manager")
         await self._pacer.acquire()
-        response = await self._client.get(path, params=params)
+        response = await get_with_transport_retry(
+            self._client,
+            path,
+            params,
+            component="bybit_spot",
+            sleep=self._sleep,
+        )
         response.raise_for_status()
         observed_at = self._observed_now()
         require_utc(observed_at, "observed_now")

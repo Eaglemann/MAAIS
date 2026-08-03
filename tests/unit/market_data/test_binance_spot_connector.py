@@ -288,3 +288,40 @@ async def test_keyless_connector_gates_one_batch_poll_on_preflight() -> None:
     ]
     assert not client.is_closed
     await client.aclose()
+
+
+async def test_spot_rest_retries_a_transient_transport_failure() -> None:
+    ticker_requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal ticker_requests
+        if request.url.path == "/api/v3/time":
+            return httpx.Response(200, json={"serverTime": SERVER_MS})
+        if request.url.path == "/api/v3/exchangeInfo":
+            return httpx.Response(200, json=_exchange_info())
+        if request.url.path == "/api/v3/ticker/bookTicker":
+            ticker_requests += 1
+            if ticker_requests == 1:
+                raise httpx.ConnectError("connection reset", request=request)
+            return httpx.Response(
+                200,
+                json=[_book_ticker("BTCUSDT"), _book_ticker("ETHUSDT")],
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.AsyncClient(
+        base_url=PUBLIC_BINANCE_SPOT_API_BASE_URL,
+        transport=httpx.MockTransport(handler),
+    )
+    connector = BinanceSpotConnector(
+        client=client,
+        observed_now=lambda: OBSERVED_AT,
+        sleep=_no_sleep,
+    )
+    async with connector:
+        await connector.preflight(("BTCUSDT", "ETHUSDT"))
+        events = await connector.get_reference_events()
+
+    assert [event.symbol for event in events] == ["BTCUSDT", "ETHUSDT"]
+    assert ticker_requests == 2
+    await client.aclose()

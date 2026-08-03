@@ -140,6 +140,13 @@ class _Reference:
         )
 
 
+class _FailingReference(_Reference):
+    async def get_reference_events(self) -> tuple[ObservedMarketEvent, ...]:
+        if self.calls == 1:
+            raise RuntimeError("reference transport retries exhausted")
+        return await super().get_reference_events()
+
+
 class _WebSocket:
     def __init__(self) -> None:
         self.queue: asyncio.Queue[object] = asyncio.Queue()
@@ -291,3 +298,40 @@ async def test_runtime_polls_observed_funding_from_explicit_restart_cutoff() -> 
         )
     ]
     await runtime.stop()
+
+
+async def test_runtime_halt_preserves_the_failed_task_identity() -> None:
+    release_reference = True
+    blocked = asyncio.Event()
+
+    async def release_one_reference_poll(delay: float) -> None:
+        nonlocal release_reference
+        if delay == 1 and release_reference:
+            release_reference = False
+            return
+        await blocked.wait()
+
+    runtime = PublicMarketDataRuntime(
+        ("BTCUSDT",),
+        futures_rest=_FuturesRest(),  # type: ignore[arg-type]
+        primary_spot=_FailingReference("primary"),  # type: ignore[arg-type]
+        secondary_spot=_Reference("secondary"),  # type: ignore[arg-type]
+        websocket_factory=lambda symbols, supplied_rest: _WebSocket(),  # type: ignore[arg-type,return-value]
+        observed_now=lambda: NOW + timedelta(seconds=1),
+        sleep=release_one_reference_poll,
+        funding_start_at=NOW - timedelta(hours=8),
+        reference_poll_seconds=1,
+        funding_poll_seconds=60,
+        preflight_refresh_seconds=30,
+    )
+
+    await runtime.start()
+    await runtime.wait_closed()
+
+    assert runtime.state is PublicDataRuntimeState.HALTED
+    assert runtime.failure is not None
+    assert runtime.failure.reason_code == "public_data_task_failed"
+    assert runtime.failure.error_type == "PublicDataHalt"
+    assert runtime.failure.detail == (
+        "task=public_reference_poll; RuntimeError: reference transport retries exhausted"
+    )

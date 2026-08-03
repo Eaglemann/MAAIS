@@ -109,6 +109,13 @@ time separately. The publication-age gate is five seconds: the documented
 three-second idle level-1 snapshot cadence plus two seconds of transport
 allowance. A value beyond five seconds still fails closed and opens an incident.
 
+An isolated public REST connection reset or HTTP/2 termination is retried with
+bounded backoff and appears in the worker log as
+`public_rest_transport_retry`, including venue component, public path, attempt,
+error type, and retry delay. The 24-hour verdict summarizes those warning events.
+Contract/schema failures are never retried. Exhausted transport retries remain a
+terminal candidate failure and preserve the exact retained task name.
+
 If an operator-review incident appears, follow `docs/runbooks/incidents.md`. Do not edit rows directly; the supported acknowledge/resolve commands preserve actor, time, rationale, version, domain event, and content hash.
 
 ## Daily close

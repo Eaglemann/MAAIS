@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -314,3 +315,55 @@ def test_log_audit_counts_every_failure_but_caps_embedded_samples(tmp_path: Path
     assert audit["invalid_lines"] == 150
     assert len(audit["errors"]) == 100  # type: ignore[arg-type]
     assert audit["errors_truncated"] == 50
+
+
+def test_log_audit_summarizes_structured_transport_recovery_evidence(tmp_path: Path) -> None:
+    worker = tmp_path / "worker.log"
+    dashboard = tmp_path / "dashboard.log"
+    worker.write_text(
+        json.dumps(
+            {
+                "level": "warning",
+                "event": "public_rest_transport_retry",
+                "component": "bybit_spot",
+                "path": "/v5/market/orderbook",
+                "attempt": 1,
+                "max_attempts": 3,
+                "error_type": "RemoteProtocolError",
+                "error": "HTTP/2 connection terminated",
+                "retry_in_seconds": 0.25,
+            }
+        )
+        + "\n"
+        + json.dumps({"level": "info", "event": "paper_live_started"})
+        + "\n",
+        encoding="utf-8",
+    )
+    dashboard.write_text(
+        json.dumps({"level": "info", "event": "dashboard_started"}) + "\n",
+        encoding="utf-8",
+    )
+
+    audit = audit_structured_logs((worker, dashboard))
+
+    assert audit["warning_lines"] == 1
+    assert audit["event_counts"] == {
+        "dashboard_started": 1,
+        "paper_live_started": 1,
+        "public_rest_transport_retry": 1,
+    }
+    assert audit["warnings"] == [
+        {
+            "path": str(worker),
+            "line": 1,
+            "event": "public_rest_transport_retry",
+            "component": "bybit_spot",
+            "source_path": "/v5/market/orderbook",
+            "attempt": 1,
+            "max_attempts": 3,
+            "error_type": "RemoteProtocolError",
+            "error": "HTTP/2 connection terminated",
+            "retry_in_seconds": 0.25,
+        }
+    ]
+    assert audit["warnings_truncated"] == 0

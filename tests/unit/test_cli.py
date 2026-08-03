@@ -553,6 +553,33 @@ def test_manifest_file_loader_preserves_exact_identity(tmp_path: Path) -> None:
     assert restored.manifest_hash == manifest.manifest_hash
 
 
+def test_paper_live_cli_serializes_a_terminal_failure_without_a_plain_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = _live_manifest(schema_revision="0015")
+
+    async def fail_worker(*_: object, **__: object) -> None:
+        raise RuntimeError("public source retries exhausted")
+
+    monkeypatch.setattr("maais.cli.get_settings", lambda: Settings(run_mode=RunMode.PAPER_LIVE))
+    monkeypatch.setattr("maais.cli.load_manifest_file", lambda _: manifest)
+    monkeypatch.setattr("maais.cli.run_live_paper_manifest", fail_worker)
+
+    assert main(["paper-live", "--manifest", "candidate.json"]) == 1
+    output = capsys.readouterr()
+    payload = json.loads(output.out)
+    assert output.err == ""
+    assert payload == {
+        "error": "public source retries exhausted",
+        "error_type": "RuntimeError",
+        "event": "paper_live_failed",
+        "experiment_id": str(manifest.experiment_id),
+        "level": "error",
+        "live_money": False,
+    }
+
+
 async def test_paper_live_refuses_nonpaper_environment_before_database_access() -> None:
     manifest = _live_manifest(schema_revision="0015")
     settings = Settings(run_mode=RunMode.REPLAY)
