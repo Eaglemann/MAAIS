@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getDecision, getOverview, listDecisions, listExperiments, listTrades } from "./api";
+import {
+  getDecision,
+  getOverview,
+  getResearch,
+  listCommands,
+  listDecisions,
+  listExperiments,
+  listTrades,
+  requestOperatorCommand,
+  startResumableEventFeed,
+} from "./api";
 import {
   formatCompact,
   formatMoney,
@@ -18,9 +28,17 @@ import type {
   DecisionPage,
   ExperimentListItem,
   ExperimentOverview,
+  EventFeedStatus,
   JsonRecord,
+  OperatorActionDraft,
+  OperatorCommandPage,
+  ResearchLabView,
   TradePage,
 } from "./types";
+import { OperatorConsole } from "./OperatorConsole";
+import { ResearchLab } from "./ResearchLab";
+
+export { OperatorConsole, ResearchLab };
 
 const EMPTY_FILTERS: DecisionFilters = {
   symbol: "",
@@ -407,6 +425,8 @@ export default function App() {
   const [overview, setOverview] = useState<ExperimentOverview | null>(null);
   const [decisionPage, setDecisionPage] = useState<DecisionPage | null>(null);
   const [tradePage, setTradePage] = useState<TradePage | null>(null);
+  const [commands, setCommands] = useState<OperatorCommandPage | null>(null);
+  const [research, setResearch] = useState<ResearchLabView | null>(null);
   const [filters, setFilters] = useState<DecisionFilters>(EMPTY_FILTERS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -415,6 +435,25 @@ export default function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [controlToken, setControlToken] = useState(() => {
+    try {
+      return window.sessionStorage.getItem("maais.control_token.v1") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [commandBusy, setCommandBusy] = useState(false);
+  const [commandError, setCommandError] = useState<string | null>(null);
+  const [liveStatus, setLiveStatus] = useState<EventFeedStatus>("catching_up");
+
+  useEffect(() => {
+    try {
+      if (controlToken) window.sessionStorage.setItem("maais.control_token.v1", controlToken);
+      else window.sessionStorage.removeItem("maais.control_token.v1");
+    } catch {
+      // A blocked browser storage policy only removes tab-level convenience.
+    }
+  }, [controlToken]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -432,16 +471,27 @@ export default function App() {
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!selectedId) return;
     try {
-      const [nextOverview, nextDecisions, nextTrades, nextExperiments] = await Promise.all([
+      const [
+        nextOverview,
+        nextDecisions,
+        nextTrades,
+        nextExperiments,
+        nextCommands,
+        nextResearch,
+      ] = await Promise.all([
         getOverview(selectedId, signal),
         listDecisions(selectedId, filters, signal),
         listTrades(selectedId, filters.symbol, signal),
         listExperiments(signal),
+        listCommands(selectedId, signal),
+        getResearch(selectedId, signal),
       ]);
       setOverview(nextOverview);
       setDecisionPage(nextDecisions);
       setTradePage(nextTrades);
       setExperiments(nextExperiments);
+      setCommands(nextCommands);
+      setResearch(nextResearch);
       setLastUpdated(new Date().toISOString());
       setError(null);
     } catch (reason: unknown) {
@@ -456,11 +506,34 @@ export default function App() {
     const controller = new AbortController();
     setLoading(true);
     void refresh(controller.signal);
-    const interval = window.setInterval(() => void refresh(controller.signal), 5_000);
+    const interval = window.setInterval(() => void refresh(controller.signal), 30_000);
     return () => {
       window.clearInterval(interval);
       controller.abort();
     };
+  }, [refresh, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    let initialCursor = 0;
+    try {
+      const stored = Number(window.sessionStorage.getItem("maais.event_cursor.v1") ?? 0);
+      if (Number.isSafeInteger(stored) && stored >= 0) initialCursor = stored;
+    } catch {
+      // Catch-up from zero remains safe when browser storage is unavailable.
+    }
+    return startResumableEventFeed({
+      initialCursor,
+      onEvents: () => void refresh(),
+      onCursor: (cursor) => {
+        try {
+          window.sessionStorage.setItem("maais.event_cursor.v1", String(cursor));
+        } catch {
+          // The in-memory cursor still makes this connection gap-free.
+        }
+      },
+      onStatus: setLiveStatus,
+    });
   }, [refresh, selectedId]);
 
   const activeExperiment = useMemo(
@@ -483,6 +556,29 @@ export default function App() {
       setDetailError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function submitOperatorCommand(draft: OperatorActionDraft, token: string) {
+    if (!selectedId) return;
+    setCommandBusy(true);
+    setCommandError(null);
+    try {
+      const randomIdentity =
+        typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      await requestOperatorCommand(
+        selectedId,
+        token,
+        `mission-control-${randomIdentity}`,
+        draft,
+      );
+      await refresh();
+    } catch (reason: unknown) {
+      setCommandError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCommandBusy(false);
     }
   }
 
@@ -514,6 +610,8 @@ export default function App() {
           <a className="nav-link" href="#trades"><span>02</span>Trade Ledger</a>
           <a className="nav-link" href="#ledger"><span>03</span>Audit Ledger</a>
           <a className="nav-link" href="#operations"><span>04</span>Operations</a>
+          <a className="nav-link" href="#operator-console"><span>05</span>Operator Console</a>
+          <a className="nav-link" href="#research"><span>06</span>Research Lab</a>
         </nav>
         <div className="rail-safety">
           <span className="safety-dot" />
@@ -554,6 +652,7 @@ export default function App() {
           <div className="safety-banner__facts">
             <div><span>Worker</span><Badge value={runtime?.worker_status ?? "unknown"} /></div>
             <div><span>Kill switch</span><Badge value={runtime?.kill_switch_active ? "active" : "clear"} tone={killTone} /></div>
+            <div><span>Live updates</span><Badge value={liveStatus} tone={liveStatus === "live" ? "good" : "warn"} /></div>
             <div><span>Last refresh</span><strong>{formatTime(lastUpdated)}</strong></div>
           </div>
         </section>
@@ -624,6 +723,17 @@ export default function App() {
           </section>
         ) : null}
 
+        <OperatorConsole
+          commands={commands}
+          runtime={runtime}
+          incidents={overview?.incidents ?? []}
+          token={controlToken}
+          busy={commandBusy}
+          error={commandError}
+          onTokenChange={setControlToken}
+          onSubmit={(draft, token) => void submitOperatorCommand(draft, token)}
+        />
+
         <section className="dashboard-section" id="trades">
           <SectionHeader
             title="Trade Ledger"
@@ -632,6 +742,12 @@ export default function App() {
           />
           {loading && !tradePage ? <div className="table-loading">Loading proposed trades…</div> : <TradeTable page={tradePage} currency={currency} onOpen={(decisionId) => void openDecisionId(decisionId)} />}
         </section>
+
+        <ResearchLab
+          research={research}
+          currency={currency}
+          onOpen={(decisionId) => void openDecisionId(decisionId)}
+        />
 
         <section className="dashboard-section" id="ledger">
           <SectionHeader

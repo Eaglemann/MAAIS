@@ -4,6 +4,13 @@ import type {
   DecisionPage,
   ExperimentListItem,
   ExperimentOverview,
+  EventFeedStatus,
+  OperatorActionDraft,
+  OperatorCommand,
+  OperatorCommandPage,
+  OutboxCursorEvent,
+  OutboxCursorPage,
+  ResearchLabView,
   TradePage,
 } from "./types";
 
@@ -13,6 +20,36 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${API_ROOT}${path}`, {
     headers: { Accept: "application/json" },
     cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      detail = payload.detail ?? detail;
+    } catch {
+      // The HTTP status remains the authoritative fallback.
+    }
+    throw new Error(detail);
+  }
+  return (await response.json()) as T;
+}
+
+async function postJson<T>(
+  path: string,
+  token: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  const response = await fetch(`${API_ROOT}${path}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    cache: "no-store",
+    body: JSON.stringify(body),
     signal,
   });
   if (!response.ok) {
@@ -73,4 +110,157 @@ export function getDecision(
   signal?: AbortSignal,
 ): Promise<DecisionDetail> {
   return getJson<DecisionDetail>(`/decisions/${decisionId}`, signal);
+}
+
+export function getResearch(
+  experimentId: string,
+  signal?: AbortSignal,
+): Promise<ResearchLabView> {
+  return getJson<ResearchLabView>(`/experiments/${experimentId}/research`, signal);
+}
+
+export function listCommands(
+  experimentId: string,
+  signal?: AbortSignal,
+): Promise<OperatorCommandPage> {
+  return getJson<OperatorCommandPage>(`/experiments/${experimentId}/commands`, signal);
+}
+
+export function requestOperatorCommand(
+  experimentId: string,
+  token: string,
+  idempotencyKey: string,
+  draft: OperatorActionDraft,
+  signal?: AbortSignal,
+): Promise<OperatorCommand> {
+  return postJson<OperatorCommand>(
+    `/experiments/${experimentId}/commands`,
+    token,
+    {
+      command_type: draft.commandType,
+      idempotency_key: idempotencyKey,
+      reason: draft.reason,
+      payload: draft.payload,
+      confirmation: draft.confirmation,
+    },
+    signal,
+  );
+}
+
+export function getEventPage(
+  afterCursor: number,
+  signal?: AbortSignal,
+): Promise<OutboxCursorPage> {
+  const params = new URLSearchParams({
+    after_cursor: String(afterCursor),
+    limit: "500",
+  });
+  return getJson<OutboxCursorPage>(`/events?${params.toString()}`, signal);
+}
+
+function eventStreamUrl(afterCursor: number): string {
+  const base = typeof window === "undefined" ? "http://127.0.0.1" : window.location.href;
+  const url = new URL(`${API_ROOT}/events/stream`, base);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("after_cursor", String(afterCursor));
+  return url.toString();
+}
+
+export function startResumableEventFeed({
+  initialCursor,
+  onEvents,
+  onCursor,
+  onStatus,
+  reconnectDelayMs = 1_500,
+}: {
+  initialCursor: number;
+  onEvents: (events: OutboxCursorEvent[]) => void;
+  onCursor: (cursor: number) => void;
+  onStatus: (status: EventFeedStatus) => void;
+  reconnectDelayMs?: number;
+}): () => void {
+  let cursor = Math.max(0, Math.trunc(initialCursor));
+  let stopped = false;
+  let reconnectTimer: number | null = null;
+  let socket: WebSocket | null = null;
+  const controller = new AbortController();
+
+  function acceptPage(page: OutboxCursorPage) {
+    if (page.items.length === 0 && page.next_cursor < cursor) {
+      cursor = page.next_cursor;
+      onCursor(cursor);
+      return;
+    }
+    const unseen = page.items
+      .filter((event) => event.cursor > cursor)
+      .sort((left, right) => left.cursor - right.cursor);
+    if (unseen.length > 0) onEvents(unseen);
+    const next = Math.max(
+      cursor,
+      page.next_cursor,
+      unseen.at(-1)?.cursor ?? cursor,
+    );
+    if (next > cursor) {
+      cursor = next;
+      onCursor(cursor);
+    }
+  }
+
+  function scheduleReconnect() {
+    if (stopped || reconnectTimer !== null) return;
+    onStatus("reconnecting");
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      void resume();
+    }, reconnectDelayMs);
+  }
+
+  async function resume() {
+    if (stopped) return;
+    onStatus("catching_up");
+    try {
+      let page: OutboxCursorPage;
+      do {
+        page = await getEventPage(cursor, controller.signal);
+        if (stopped) return;
+        acceptPage(page);
+      } while (page.has_more);
+
+      const nextSocket = new WebSocket(eventStreamUrl(cursor));
+      socket = nextSocket;
+      nextSocket.onopen = () => {
+        if (!stopped) onStatus("live");
+      };
+      nextSocket.onmessage = (message) => {
+        if (stopped) return;
+        try {
+          const payload = JSON.parse(String(message.data)) as
+            | ({ type: "events" } & OutboxCursorPage)
+            | { type: "heartbeat"; next_cursor: number };
+          if (payload.type === "events") acceptPage(payload);
+        } catch {
+          nextSocket.close();
+        }
+      };
+      nextSocket.onerror = () => nextSocket.close();
+      nextSocket.onclose = () => {
+        if (socket === nextSocket) socket = null;
+        scheduleReconnect();
+      };
+    } catch (reason: unknown) {
+      if (!controller.signal.aborted) scheduleReconnect();
+    }
+  }
+
+  void resume();
+  return () => {
+    stopped = true;
+    controller.abort();
+    if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+    if (socket !== null) {
+      socket.onclose = null;
+      socket.close();
+    }
+    onStatus("stopped");
+  };
 }

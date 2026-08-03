@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -8,11 +9,20 @@ from secrets import compare_digest
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from maais.api.auth import load_control_token
@@ -26,11 +36,15 @@ from maais.api.schemas import (
     OperatorCommandPage,
     OperatorCommandRequest,
     OperatorCommandView,
+    OutboxCursorEvent,
+    OutboxCursorPage,
+    ResearchLabView,
     TradePage,
 )
 from maais.config.settings import get_settings
 from maais.db.connection import get_engine, get_session_factory
 from maais.db.models.experiments import ExperimentModel
+from maais.db.models.ledger import OutboxEventModel
 from maais.db.repositories.events import EventRepository
 from maais.db.repositories.operator_commands import (
     OperatorCommandConflict,
@@ -224,6 +238,20 @@ def create_app(
     ) -> DecisionDetail:
         return await MissionControlQueryService(session).get_decision(decision_id)
 
+    @application.get(
+        "/api/v1/experiments/{experiment_id}/research",
+        response_model=ResearchLabView,
+    )
+    async def research(
+        experiment_id: UUID,
+        limit_per_kind: int = Query(500, ge=1, le=1000),
+        session: AsyncSession = Depends(read_session),
+    ) -> ResearchLabView:
+        return await MissionControlQueryService(session).get_research_lab(
+            experiment_id,
+            limit_per_kind=limit_per_kind,
+        )
+
     @application.post(
         "/api/v1/experiments/{experiment_id}/commands",
         response_model=OperatorCommandView,
@@ -293,6 +321,60 @@ def create_app(
         stored = await repository.get(command_id)
         return OperatorCommandView.model_validate(stored.to_dict())
 
+    @application.get("/api/v1/events", response_model=OutboxCursorPage)
+    async def events(
+        after_cursor: int = Query(0, ge=0),
+        limit: int = Query(500, ge=1, le=1000),
+        session: AsyncSession = Depends(read_session),
+    ) -> OutboxCursorPage:
+        return await _outbox_cursor_page(
+            session,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+
+    @application.websocket("/api/v1/events/stream")
+    async def event_stream(
+        websocket: WebSocket,
+        after_cursor: int = 0,
+    ) -> None:
+        if after_cursor < 0:
+            await websocket.close(code=1008, reason="after_cursor cannot be negative")
+            return
+        await websocket.accept()
+        cursor = after_cursor
+        loop = asyncio.get_running_loop()
+        last_heartbeat = loop.time()
+        try:
+            while True:
+                factory: SessionFactory | None = application.state.session_factory
+                if factory is None:
+                    factory = get_session_factory()
+                    application.state.session_factory = factory
+                async with factory() as session:
+                    async with session.begin():
+                        await session.execute(text("SET TRANSACTION READ ONLY"))
+                        page = await _outbox_cursor_page(
+                            session,
+                            after_cursor=cursor,
+                            limit=500,
+                        )
+                if page.items:
+                    cursor = page.next_cursor
+                    await websocket.send_json({"type": "events", **page.model_dump(mode="json")})
+                elif loop.time() - last_heartbeat >= 10:
+                    await websocket.send_json(
+                        {
+                            "type": "heartbeat",
+                            "next_cursor": cursor,
+                            "checked_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    last_heartbeat = loop.time()
+                await asyncio.sleep(0.5)
+        except WebSocketDisconnect:
+            return
+
     resolved_dashboard = dashboard_dir or Path(__file__).resolve().parents[2] / "dashboard" / "dist"
     if resolved_dashboard.is_dir():
         application.mount(
@@ -314,6 +396,40 @@ def create_app(
             )
 
     return application
+
+
+async def _outbox_cursor_page(
+    session: AsyncSession,
+    *,
+    after_cursor: int,
+    limit: int,
+) -> OutboxCursorPage:
+    high_watermark = int(await session.scalar(select(func.max(OutboxEventModel.cursor))) or 0)
+    effective_after = min(after_cursor, high_watermark)
+    rows = (
+        await session.scalars(
+            select(OutboxEventModel)
+            .where(OutboxEventModel.cursor > effective_after)
+            .order_by(OutboxEventModel.cursor)
+            .limit(limit + 1)
+        )
+    ).all()
+    visible = rows[:limit]
+    items = tuple(
+        OutboxCursorEvent(
+            cursor=row.cursor,
+            event_type=row.topic,
+            created_at=row.created_at,
+            payload=row.payload_json,
+        )
+        for row in visible
+    )
+    return OutboxCursorPage(
+        items=items,
+        limit=limit,
+        has_more=len(rows) > limit,
+        next_cursor=items[-1].cursor if items else effective_after,
+    )
 
 
 app = create_app()

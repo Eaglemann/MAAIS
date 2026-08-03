@@ -180,6 +180,46 @@ class TradePage(ReadModel):
     next_before_id: UUID | None
 
 
+class ResearchCounterfactual(ReadModel):
+    id: UUID
+    proposal_id: UUID
+    decision_cycle_id: UUID
+    symbol: str
+    direction: str
+    rejection_gate: str
+    status: str
+    maximum_favorable_excursion: Decimal
+    maximum_adverse_excursion: Decimal
+    outcome_15m: Decimal | None
+    outcome_1h: Decimal | None
+    outcome_4h: Decimal | None
+    outcome_24h: Decimal | None
+    no_fill_reason: str | None
+    hypothetical_exit_reason: str | None
+    hypothetical_pnl: Decimal | None
+    created_at: datetime
+    closed_at: datetime | None
+    content_hash: str
+
+
+class ResearchExecutionSensitivity(ReadModel):
+    id: UUID
+    order_intent_id: UUID
+    proposal_id: UUID
+    decision_cycle_id: UUID
+    symbol: str
+    scenario: str
+    calculated_at: datetime
+    outcome: Mapping[str, object]
+
+
+class ResearchLabView(ReadModel):
+    official_account_inclusion: str = "excluded"
+    counterfactuals: tuple[ResearchCounterfactual, ...]
+    execution_sensitivities: tuple[ResearchExecutionSensitivity, ...]
+    limit_per_kind: int
+
+
 class AuditEvent(ReadModel):
     id: UUID
     global_position: int
@@ -242,3 +282,17 @@ class OperatorCommandView(ReadModel):
 class OperatorCommandPage(ReadModel):
     items: tuple[OperatorCommandView, ...]
     limit: int
+
+
+class OutboxCursorEvent(ReadModel):
+    cursor: int
+    event_type: str
+    created_at: datetime
+    payload: Mapping[str, object]
+
+
+class OutboxCursorPage(ReadModel):
+    items: tuple[OutboxCursorEvent, ...]
+    limit: int
+    has_more: bool
+    next_cursor: int

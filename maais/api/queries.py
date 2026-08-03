@@ -20,6 +20,9 @@ from maais.api.schemas import (
     ExperimentListItem,
     ExperimentOverview,
     OperationalCounts,
+    ResearchCounterfactual,
+    ResearchExecutionSensitivity,
+    ResearchLabView,
     RuntimeOverview,
     TradeListItem,
     TradePage,
@@ -34,7 +37,12 @@ from maais.db.models.decisions import (
     MarketFrameModel,
     TradeProposalModel,
 )
-from maais.db.models.execution import FillModel, OrderEventModel, OrderIntentModel
+from maais.db.models.execution import (
+    ExecutionSensitivityModel,
+    FillModel,
+    OrderEventModel,
+    OrderIntentModel,
+)
 from maais.db.models.experiments import AgentVersionModel, ExperimentModel
 from maais.db.models.ledger import DomainEventModel
 from maais.db.models.operations import (
@@ -413,6 +421,94 @@ class MissionControlQueryService:
                 "market_frame": frame.content_hash,
                 "decision_cycle": cycle.content_hash,
             },
+        )
+
+    async def get_research_lab(
+        self,
+        experiment_id: UUID,
+        *,
+        limit_per_kind: int = 500,
+    ) -> ResearchLabView:
+        """Return research-only outcomes without merging them into account projections."""
+        if not 1 <= limit_per_kind <= 1000:
+            raise ValueError("research limit must be between 1 and 1000")
+        await self._experiment(experiment_id)
+        counterfactuals = (
+            await self._session.scalars(
+                select(CounterfactualModel)
+                .where(CounterfactualModel.experiment_id == experiment_id)
+                .order_by(CounterfactualModel.created_at.desc(), CounterfactualModel.id)
+                .limit(limit_per_kind)
+            )
+        ).all()
+        sensitivity_rows = (
+            await self._session.execute(
+                select(
+                    ExecutionSensitivityModel,
+                    OrderIntentModel,
+                    TradeProposalModel,
+                )
+                .join(
+                    OrderIntentModel,
+                    OrderIntentModel.id == ExecutionSensitivityModel.order_intent_id,
+                )
+                .join(
+                    TradeProposalModel,
+                    TradeProposalModel.id == OrderIntentModel.proposal_id,
+                )
+                .where(OrderIntentModel.experiment_id == experiment_id)
+                .order_by(
+                    ExecutionSensitivityModel.calculated_at.desc(),
+                    ExecutionSensitivityModel.order_intent_id,
+                    ExecutionSensitivityModel.scenario,
+                )
+                .limit(limit_per_kind)
+            )
+        ).all()
+        return ResearchLabView(
+            counterfactuals=tuple(
+                ResearchCounterfactual.model_validate(
+                    _fields(
+                        row,
+                        (
+                            "id",
+                            "proposal_id",
+                            "decision_cycle_id",
+                            "symbol",
+                            "direction",
+                            "rejection_gate",
+                            "status",
+                            "maximum_favorable_excursion",
+                            "maximum_adverse_excursion",
+                            "outcome_15m",
+                            "outcome_1h",
+                            "outcome_4h",
+                            "outcome_24h",
+                            "no_fill_reason",
+                            "hypothetical_exit_reason",
+                            "hypothetical_pnl",
+                            "created_at",
+                            "closed_at",
+                            "content_hash",
+                        ),
+                    )
+                )
+                for row in counterfactuals
+            ),
+            execution_sensitivities=tuple(
+                ResearchExecutionSensitivity(
+                    id=sensitivity.id,
+                    order_intent_id=order.id,
+                    proposal_id=proposal.id,
+                    decision_cycle_id=proposal.decision_cycle_id,
+                    symbol=order.symbol,
+                    scenario=sensitivity.scenario,
+                    calculated_at=sensitivity.calculated_at,
+                    outcome=sensitivity.outcome_json,
+                )
+                for sensitivity, order, proposal in sensitivity_rows
+            ),
+            limit_per_kind=limit_per_kind,
         )
 
     @staticmethod

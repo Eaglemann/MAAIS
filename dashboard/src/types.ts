@@ -158,6 +158,106 @@ export interface TradePage {
   next_before_id: string | null;
 }
 
+export type OperatorCommandType =
+  | "start"
+  | "pause"
+  | "resume"
+  | "stop"
+  | "emergency_halt"
+  | "flatten"
+  | "acknowledge_incident"
+  | "resolve_incident"
+  | "reset_kill_switch";
+
+export type OperatorCommandStatus = "requested" | "accepted" | "completed" | "rejected";
+
+export interface OperatorCommand {
+  command_id: string;
+  experiment_id: string;
+  command_type: OperatorCommandType;
+  status: OperatorCommandStatus;
+  idempotency_key: string;
+  actor: string;
+  reason: string;
+  payload: JsonRecord;
+  operator_confirmed: boolean;
+  request_hash: string;
+  requested_at: string;
+  version: number;
+  accepted_at: string | null;
+  accepted_by: string | null;
+  completed_at: string | null;
+  result: JsonRecord | null;
+}
+
+export interface OperatorCommandPage {
+  items: OperatorCommand[];
+  limit: number;
+}
+
+export interface OperatorActionDraft {
+  commandType: OperatorCommandType;
+  reason: string;
+  payload: JsonRecord;
+  confirmation: string;
+}
+
+export interface ResearchCounterfactual {
+  id: string;
+  proposal_id: string;
+  decision_cycle_id: string;
+  symbol: string;
+  direction: string;
+  rejection_gate: string;
+  status: string;
+  maximum_favorable_excursion: string;
+  maximum_adverse_excursion: string;
+  outcome_15m: string | null;
+  outcome_1h: string | null;
+  outcome_4h: string | null;
+  outcome_24h: string | null;
+  no_fill_reason: string | null;
+  hypothetical_exit_reason: string | null;
+  hypothetical_pnl: string | null;
+  created_at: string;
+  closed_at: string | null;
+  content_hash: string;
+}
+
+export interface ResearchExecutionSensitivity {
+  id: string;
+  order_intent_id: string;
+  proposal_id: string;
+  decision_cycle_id: string;
+  symbol: string;
+  scenario: string;
+  calculated_at: string;
+  outcome: JsonRecord;
+}
+
+export interface ResearchLabView {
+  official_account_inclusion: "excluded";
+  counterfactuals: ResearchCounterfactual[];
+  execution_sensitivities: ResearchExecutionSensitivity[];
+  limit_per_kind: number;
+}
+
+export interface OutboxCursorEvent {
+  cursor: number;
+  event_type: string;
+  created_at: string;
+  payload: JsonRecord;
+}
+
+export interface OutboxCursorPage {
+  items: OutboxCursorEvent[];
+  limit: number;
+  has_more: boolean;
+  next_cursor: number;
+}
+
+export type EventFeedStatus = "catching_up" | "live" | "reconnecting" | "stopped";
+
 export interface AuditEvent {
   id: string;
   global_position: number;

@@ -217,3 +217,57 @@ async def test_command_read_endpoints_expose_worker_status_and_terminal_result(
         "kill_switch_active": True,
         "experiment_status": "paused",
     }
+
+
+async def test_outbox_cursor_feed_resumes_without_gaps_or_replaying_seen_events(
+    uow_factory: UnitOfWork,
+) -> None:
+    await _prepare_experiment(uow_factory)
+    application = create_app(
+        uow_factory._session_factory,
+        control_token=CONTROL_TOKEN,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        initial = await client.get("/api/v1/events", params={"after_cursor": 0})
+        requested = await client.post(
+            f"/api/v1/experiments/{EXPERIMENT_ID}/commands",
+            headers={"Authorization": f"Bearer {CONTROL_TOKEN}"},
+            json={
+                "command_type": "pause",
+                "idempotency_key": "cursor-resume-pause-0001",
+                "reason": "verify resumable local event delivery",
+                "payload": {},
+                "confirmation": "CONFIRM PAUSE",
+            },
+        )
+        assert requested.status_code == 202
+        first_catchup = await client.get(
+            "/api/v1/events",
+            params={"after_cursor": initial.json()["next_cursor"]},
+        )
+        resumed = await client.get(
+            "/api/v1/events",
+            params={"after_cursor": first_catchup.json()["next_cursor"]},
+        )
+        restored_database_cursor = await client.get(
+            "/api/v1/events",
+            params={"after_cursor": first_catchup.json()["next_cursor"] + 10_000},
+        )
+
+    assert initial.status_code == 200
+    assert first_catchup.status_code == 200
+    cursors = [item["cursor"] for item in first_catchup.json()["items"]]
+    assert cursors == sorted(cursors)
+    assert len(cursors) == len(set(cursors)) == 1
+    event = first_catchup.json()["items"][0]
+    assert event["event_type"] == "operator_command.requested"
+    assert event["payload"]["aggregate_type"] == "operator_command"
+    assert resumed.status_code == 200
+    assert resumed.json()["items"] == []
+    assert resumed.json()["next_cursor"] == first_catchup.json()["next_cursor"]
+    assert restored_database_cursor.status_code == 200
+    assert restored_database_cursor.json()["items"] == []
+    assert restored_database_cursor.json()["next_cursor"] == first_catchup.json()["next_cursor"]
