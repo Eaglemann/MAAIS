@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import cast
 from uuid import UUID
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from maais.api.queries import MissionControlQueryService
@@ -157,8 +158,12 @@ async def collect_configured_experiment_health(
         async with factory() as session:
             async with session.begin():
                 await establish_read_only_snapshot(session)
+                snapshot_at = await session.scalar(select(func.transaction_timestamp()))
+                if not isinstance(snapshot_at, datetime) or snapshot_at.tzinfo is None:
+                    raise TypeError("database snapshot time must be timezone-aware")
                 overview = await MissionControlQueryService(session).get_overview(experiment_id)
                 ledger = ledger_consistency_payload(await verify_ledger_consistency(session))
+        completed_at = datetime.now(UTC)
         state = {
             **overview.runtime.model_dump(),
             **overview.freshness.model_dump(),
@@ -167,10 +172,26 @@ async def collect_configured_experiment_health(
         report = evaluate_experiment_health(
             state=state,
             ledger=ledger,
-            now=datetime.now(UTC),
+            now=snapshot_at.astimezone(UTC),
             maximum_lag=maximum_lag,
             allow_stopped=allow_stopped,
         )
+        verification_duration = completed_at - snapshot_at.astimezone(UTC)
+        verification_fresh = timedelta(0) <= verification_duration <= maximum_lag
+        checks = cast(list[dict[str, object]], report["checks"])
+        checks.append(
+            _check(
+                "verification_freshness",
+                verification_fresh,
+                f"duration_seconds={verification_duration.total_seconds():.6f}",
+            )
+        )
+        if not verification_fresh:
+            report["healthy"] = False
+            report["status"] = "critical"
+        report["snapshot_at"] = snapshot_at
+        report["completed_at"] = completed_at
+        report["verification_duration_seconds"] = verification_duration.total_seconds()
         report["experiment_id"] = str(experiment_id)
         report["experiment_status"] = overview.experiment.status
         report["account"] = overview.account.model_dump()

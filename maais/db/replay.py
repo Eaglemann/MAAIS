@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from maais.db.models.accounts import AccountSnapshotModel, ExitPlanModel, PositionModel
@@ -84,9 +85,17 @@ async def rebuild_experiment_projection(
             .order_by(DomainEventModel.stream_version)
         )
     ).all()
-    if not events or events[0].event_type != "experiment.created":
+    return _rebuild_experiment_projection_from_events(experiment_id, events)
+
+
+def _rebuild_experiment_projection_from_events(
+    experiment_id: UUID,
+    events: Iterable[DomainEventModel],
+) -> RebuiltExperimentProjection:
+    ordered_events = sorted(events, key=lambda event: event.stream_version)
+    if not ordered_events or ordered_events[0].event_type != "experiment.created":
         raise ValueError("experiment stream must begin with experiment.created")
-    created = events[0]
+    created = ordered_events[0]
     config_hash = str(created.payload_json.get("config_hash", ""))
     manifest_hash = str(created.payload_json.get("manifest_hash", ""))
     status = ExperimentStatus.CREATED
@@ -100,7 +109,7 @@ async def rebuild_experiment_projection(
         "experiment.completed": ExperimentStatus.COMPLETED,
         "experiment.failed": ExperimentStatus.FAILED,
     }
-    for event in events[1:]:
+    for event in ordered_events[1:]:
         target = event_statuses.get(event.event_type)
         if target is None:
             continue
@@ -140,47 +149,152 @@ def _error(
     )
 
 
+def _index_event_streams(
+    streams: Iterable[EventStreamModel],
+) -> tuple[
+    dict[UUID, EventStreamModel],
+    dict[tuple[str, UUID], EventStreamModel],
+]:
+    by_id: dict[UUID, EventStreamModel] = {}
+    by_aggregate: dict[tuple[str, UUID], EventStreamModel] = {}
+    for stream in streams:
+        by_id[stream.id] = stream
+        by_aggregate[(stream.aggregate_type, stream.aggregate_id)] = stream
+    return by_id, by_aggregate
+
+
 async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyReport:
     errors: list[LedgerConsistencyError] = []
     streams = (await session.scalars(select(EventStreamModel))).all()
-    events = (
-        await session.scalars(select(DomainEventModel).order_by(DomainEventModel.global_position))
-    ).all()
-    events_by_stream: dict[UUID, list[DomainEventModel]] = {}
-    aggregate_event_counts: dict[tuple[str, UUID], int] = {}
-    for event in events:
-        events_by_stream.setdefault(event.stream_id, []).append(event)
-        aggregate_key = (event.aggregate_type, event.aggregate_id)
-        aggregate_event_counts[aggregate_key] = aggregate_event_counts.get(aggregate_key, 0) + 1
-    for stream in streams:
-        stream_events = sorted(
-            events_by_stream.get(stream.id, []),
-            key=lambda event: event.stream_version,
+    streams_by_id, streams_by_aggregate = _index_event_streams(streams)
+    aggregate_event_counts = {
+        (aggregate_type, aggregate_id): int(count)
+        for aggregate_type, aggregate_id, count in (
+            await session.execute(
+                select(
+                    DomainEventModel.aggregate_type,
+                    DomainEventModel.aggregate_id,
+                    func.count(DomainEventModel.id),
+                ).group_by(
+                    DomainEventModel.aggregate_type,
+                    DomainEventModel.aggregate_id,
+                )
+            )
+        ).all()
+    }
+    stream_stats = {
+        stream_id: (
+            int(event_count),
+            minimum_version,
+            maximum_version,
+            int(distinct_versions),
+            int(identity_mismatches),
         )
-        actual_versions = [event.stream_version for event in stream_events]
-        expected_versions = list(range(1, stream.current_version + 1))
-        if actual_versions != expected_versions:
+        for (
+            stream_id,
+            event_count,
+            minimum_version,
+            maximum_version,
+            distinct_versions,
+            identity_mismatches,
+        ) in (
+            await session.execute(
+                select(
+                    EventStreamModel.id,
+                    func.count(DomainEventModel.id),
+                    func.min(DomainEventModel.stream_version),
+                    func.max(DomainEventModel.stream_version),
+                    func.count(func.distinct(DomainEventModel.stream_version)),
+                    func.count(DomainEventModel.id).filter(
+                        or_(
+                            DomainEventModel.aggregate_id.is_distinct_from(
+                                EventStreamModel.aggregate_id
+                            ),
+                            DomainEventModel.aggregate_type.is_distinct_from(
+                                EventStreamModel.aggregate_type
+                            ),
+                        )
+                    ),
+                )
+                .outerjoin(
+                    DomainEventModel,
+                    DomainEventModel.stream_id == EventStreamModel.id,
+                )
+                .group_by(EventStreamModel.id)
+            )
+        ).all()
+    }
+    for stream in streams:
+        (
+            event_count,
+            minimum_version,
+            maximum_version,
+            distinct_versions,
+            identity_mismatches,
+        ) = stream_stats.get(
+            stream.id,
+            (0, None, None, 0, 0),
+        )
+        versions_are_complete = (
+            event_count == 0
+            and distinct_versions == 0
+            and minimum_version is None
+            and maximum_version is None
+            and stream.current_version == 0
+        ) or (
+            event_count == stream.current_version
+            and distinct_versions == stream.current_version
+            and minimum_version == 1
+            and maximum_version == stream.current_version
+        )
+        if not versions_are_complete:
             errors.append(
                 _error(
                     "stream_gap",
                     stream,
-                    f"expected versions {expected_versions}, found {actual_versions}",
+                    f"expected contiguous versions 1..{stream.current_version}, "
+                    f"found count={event_count}, distinct={distinct_versions}, "
+                    f"minimum={minimum_version}, maximum={maximum_version}",
                 )
             )
-        for event in stream_events:
-            if (
-                event.aggregate_id != stream.aggregate_id
-                or event.aggregate_type != stream.aggregate_type
-            ):
-                errors.append(
-                    _error("stream_identity_mismatch", stream, f"event {event.id} identity differs")
+        if identity_mismatches:
+            errors.append(
+                _error(
+                    "stream_identity_mismatch",
+                    stream,
+                    f"{identity_mismatches} event identities differ from the stream",
                 )
+            )
 
-    outbox_rows = (await session.scalars(select(OutboxEventModel))).all()
-    outbox_by_event = {row.domain_event_id: row for row in outbox_rows}
-    for event in events:
-        row = outbox_by_event.get(event.id)
-        stream = next((item for item in streams if item.id == event.stream_id), None)
+    outbox_mismatches = (
+        await session.execute(
+            select(DomainEventModel, OutboxEventModel)
+            .outerjoin(
+                OutboxEventModel,
+                OutboxEventModel.domain_event_id == DomainEventModel.id,
+            )
+            .where(
+                or_(
+                    OutboxEventModel.id.is_(None),
+                    OutboxEventModel.payload_json["event_id"].is_distinct_from(
+                        func.to_jsonb(DomainEventModel.id)
+                    ),
+                    OutboxEventModel.payload_json["global_position"].is_distinct_from(
+                        func.to_jsonb(DomainEventModel.global_position)
+                    ),
+                    OutboxEventModel.payload_json["stream_version"].is_distinct_from(
+                        func.to_jsonb(DomainEventModel.stream_version)
+                    ),
+                    OutboxEventModel.payload_json["event_type"].is_distinct_from(
+                        func.to_jsonb(DomainEventModel.event_type)
+                    ),
+                )
+            )
+            .order_by(DomainEventModel.global_position)
+        )
+    ).all()
+    for event, row in outbox_mismatches:
+        stream = streams_by_id.get(event.stream_id)
         if row is None:
             errors.append(_error("missing_outbox", stream, f"event {event.id} has no outbox row"))
             continue
@@ -200,6 +314,17 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
                         f"outbox {row.id} {key}={payload.get(key)!r}, expected {expected!r}",
                     )
                 )
+
+    experiment_events_by_id: dict[UUID, list[DomainEventModel]] = {}
+    experiment_events = (
+        await session.scalars(
+            select(DomainEventModel)
+            .where(DomainEventModel.aggregate_type == "experiment")
+            .order_by(DomainEventModel.global_position)
+        )
+    ).all()
+    for event in experiment_events:
+        experiment_events_by_id.setdefault(event.aggregate_id, []).append(event)
 
     agent_counts = {
         cycle_id: int(count)
@@ -242,14 +367,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
         expected_event_count = 1 + agent_count + gate_count + proposal_count
         actual_event_count = aggregate_event_counts.get(("decision_cycle", cycle.id), 0)
         if agent_count != 8 or actual_event_count != expected_event_count:
-            stream = next(
-                (
-                    item
-                    for item in streams
-                    if item.aggregate_type == "decision_cycle" and item.aggregate_id == cycle.id
-                ),
-                None,
-            )
+            stream = streams_by_aggregate.get(("decision_cycle", cycle.id))
             errors.append(
                 _error(
                     "decision_projection_mismatch",
@@ -261,17 +379,13 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
 
     experiments = (await session.scalars(select(ExperimentModel))).all()
     for experiment in experiments:
+        stream = streams_by_aggregate.get(("experiment", experiment.id))
         try:
-            rebuilt = await rebuild_experiment_projection(session, experiment.id)
-        except ValueError as exc:
-            stream = next(
-                (
-                    item
-                    for item in streams
-                    if item.aggregate_type == "experiment" and item.aggregate_id == experiment.id
-                ),
-                None,
+            rebuilt = _rebuild_experiment_projection_from_events(
+                experiment.id,
+                experiment_events_by_id.get(experiment.id, []),
             )
+        except ValueError as exc:
             errors.append(_error("experiment_rebuild_failed", stream, str(exc)))
             continue
         stored = RebuiltExperimentProjection(
@@ -284,14 +398,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
             manifest_hash=experiment.manifest_hash,
         )
         if rebuilt.normalized() != stored.normalized():
-            stream = next(
-                (
-                    item
-                    for item in streams
-                    if item.aggregate_type == "experiment" and item.aggregate_id == experiment.id
-                ),
-                None,
-            )
+            stream = streams_by_aggregate.get(("experiment", experiment.id))
             errors.append(
                 _error(
                     "experiment_projection_mismatch",
@@ -300,35 +407,48 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
                 )
             )
 
-    orders = (await session.scalars(select(OrderIntentModel))).all()
-    for order in orders:
-        projection_event_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(OrderEventModel)
-                .where(OrderEventModel.order_intent_id == order.id)
-            )
-            or 0
+    order_event_counts = (
+        select(
+            OrderEventModel.order_intent_id.label("order_intent_id"),
+            func.count(OrderEventModel.id).label("projection_event_count"),
         )
+        .group_by(OrderEventModel.order_intent_id)
+        .subquery()
+    )
+    fill_quantities = (
+        select(
+            FillModel.order_intent_id.label("order_intent_id"),
+            func.sum(FillModel.quantity).label("filled_quantity"),
+        )
+        .group_by(FillModel.order_intent_id)
+        .subquery()
+    )
+    order_rows = (
+        await session.execute(
+            select(
+                OrderIntentModel,
+                func.coalesce(order_event_counts.c.projection_event_count, 0),
+                func.coalesce(fill_quantities.c.filled_quantity, Decimal("0")),
+            )
+            .outerjoin(
+                order_event_counts,
+                order_event_counts.c.order_intent_id == OrderIntentModel.id,
+            )
+            .outerjoin(
+                fill_quantities,
+                fill_quantities.c.order_intent_id == OrderIntentModel.id,
+            )
+        )
+    ).all()
+    for order, raw_projection_event_count, filled_quantity in order_rows:
+        projection_event_count = int(raw_projection_event_count)
         domain_event_count = aggregate_event_counts.get(("paper_order", order.id), 0)
-        filled_quantity = await session.scalar(
-            select(func.coalesce(func.sum(FillModel.quantity), 0)).where(
-                FillModel.order_intent_id == order.id
-            )
-        )
         if (
             projection_event_count != order.version
             or domain_event_count != order.version
             or filled_quantity != order.filled_quantity
         ):
-            stream = next(
-                (
-                    item
-                    for item in streams
-                    if item.aggregate_type == "paper_order" and item.aggregate_id == order.id
-                ),
-                None,
-            )
+            stream = streams_by_aggregate.get(("paper_order", order.id))
             errors.append(
                 _error(
                     "order_projection_mismatch",
@@ -339,20 +459,37 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
                 )
             )
 
-    for experiment in experiments:
-        latest_account = await session.scalar(
-            select(AccountSnapshotModel)
-            .where(AccountSnapshotModel.experiment_id == experiment.id)
-            .order_by(AccountSnapshotModel.account_version.desc())
-            .limit(1)
+    account_snapshots = (
+        await session.scalars(
+            select(AccountSnapshotModel).order_by(
+                AccountSnapshotModel.experiment_id,
+                AccountSnapshotModel.account_version,
+            )
         )
-        if latest_account is None:
-            continue
-        positions = (
-            await session.scalars(
-                select(PositionModel).where(PositionModel.experiment_id == experiment.id)
+    ).all()
+    latest_accounts: dict[UUID, AccountSnapshotModel] = {}
+    for snapshot in account_snapshots:
+        latest_accounts[snapshot.experiment_id] = snapshot
+    positions_by_experiment: dict[UUID, list[PositionModel]] = {}
+    active_exits_by_experiment: dict[UUID, list[ExitPlanModel]] = {}
+    if account_snapshots:
+        for position in (await session.scalars(select(PositionModel))).all():
+            positions_by_experiment.setdefault(position.experiment_id, []).append(position)
+        active_exit_rows = (
+            await session.execute(
+                select(PositionModel.experiment_id, ExitPlanModel)
+                .join(ExitPlanModel, ExitPlanModel.position_id == PositionModel.id)
+                .where(ExitPlanModel.status.in_(("active", "triggered")))
             )
         ).all()
+        for experiment_id, exit_plan in active_exit_rows:
+            active_exits_by_experiment.setdefault(experiment_id, []).append(exit_plan)
+
+    for experiment in experiments:
+        latest_account = latest_accounts.get(experiment.id)
+        if latest_account is None:
+            continue
+        positions = positions_by_experiment.get(experiment.id, [])
         zero = Decimal("0")
         realized = sum((item.realized_pnl for item in positions), start=zero)
         unrealized = sum((item.unrealized_pnl for item in positions), start=zero)
@@ -363,16 +500,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
         expected_cash = experiment.initial_capital + realized - fees + funding
         expected_equity = latest_account.cash_balance + unrealized
         expected_free_margin = expected_equity - used_margin
-        active_exits = (
-            await session.scalars(
-                select(ExitPlanModel)
-                .join(PositionModel, PositionModel.id == ExitPlanModel.position_id)
-                .where(
-                    PositionModel.experiment_id == experiment.id,
-                    ExitPlanModel.status.in_(("active", "triggered")),
-                )
-            )
-        ).all()
+        active_exits = active_exits_by_experiment.get(experiment.id, [])
         expected_risk_at_stop = sum(
             (
                 abs(exit_plan.average_entry - exit_plan.stop_price) * exit_plan.quantity
@@ -392,14 +520,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
             or latest_account.used_margin != used_margin
             or latest_account.risk_at_stop != expected_risk_at_stop
         ):
-            stream = next(
-                (
-                    item
-                    for item in streams
-                    if item.aggregate_type == "paper_account" and item.aggregate_id == experiment.id
-                ),
-                None,
-            )
+            stream = streams_by_aggregate.get(("paper_account", experiment.id))
             errors.append(
                 _error(
                     "account_projection_mismatch",
@@ -414,15 +535,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
         event_count = aggregate_event_counts.get(("counterfactual", counterfactual.id), 0)
         hash_matches = content_hash(counterfactual.state_json) == counterfactual.content_hash
         if event_count != counterfactual.version or not hash_matches:
-            stream = next(
-                (
-                    item
-                    for item in streams
-                    if item.aggregate_type == "counterfactual"
-                    and item.aggregate_id == counterfactual.id
-                ),
-                None,
-            )
+            stream = streams_by_aggregate.get(("counterfactual", counterfactual.id))
             errors.append(
                 _error(
                     "counterfactual_projection_mismatch",
@@ -447,14 +560,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
             event_count = aggregate_event_counts.get((aggregate_type, row.id), 0)
             hash_matches = content_hash(row.state_json) == row.content_hash
             if event_count != row.version or not hash_matches:
-                stream = next(
-                    (
-                        item
-                        for item in streams
-                        if item.aggregate_type == aggregate_type and item.aggregate_id == row.id
-                    ),
-                    None,
-                )
+                stream = streams_by_aggregate.get((aggregate_type, row.id))
                 errors.append(
                     _error(
                         f"{aggregate_type}_projection_mismatch",
@@ -468,15 +574,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
         event_count = aggregate_event_counts.get(("worker_checkpoint", checkpoint.experiment_id), 0)
         hash_matches = content_hash(checkpoint.state_json) == checkpoint.content_hash
         if event_count != checkpoint.version or not hash_matches:
-            stream = next(
-                (
-                    item
-                    for item in streams
-                    if item.aggregate_type == "worker_checkpoint"
-                    and item.aggregate_id == checkpoint.experiment_id
-                ),
-                None,
-            )
+            stream = streams_by_aggregate.get(("worker_checkpoint", checkpoint.experiment_id))
             errors.append(
                 _error(
                     "worker_checkpoint_projection_mismatch",
@@ -514,14 +612,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
         names = {row.check_name for row in rows}
         event_count = aggregate_event_counts.get(("market_quality", frame_id), 0)
         if len(names) != len(rows) or event_count != 1:
-            stream = next(
-                (
-                    item
-                    for item in streams
-                    if item.aggregate_type == "market_quality" and item.aggregate_id == frame_id
-                ),
-                None,
-            )
+            stream = streams_by_aggregate.get(("market_quality", frame_id))
             errors.append(
                 _error(
                     "market_quality_projection_mismatch",
@@ -554,14 +645,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
         )
         event_count = aggregate_event_counts.get(("operator_command", command.id), 0)
         if expected_hash != command.content_hash or event_count != command.version:
-            stream = next(
-                (
-                    item
-                    for item in streams
-                    if item.aggregate_type == "operator_command" and item.aggregate_id == command.id
-                ),
-                None,
-            )
+            stream = streams_by_aggregate.get(("operator_command", command.id))
             errors.append(
                 _error(
                     "operator_command_projection_mismatch",

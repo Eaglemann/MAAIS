@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from functools import partial
 from uuid import UUID
 
@@ -21,7 +22,15 @@ from maais.db.replay import (
     verify_ledger_consistency,
 )
 from maais.db.unit_of_work import UnitOfWork
-from maais.domain.enums import ExperimentStatus
+from maais.domain.enums import (
+    ExperimentStatus,
+    PaperOrderSide,
+    PaperOrderType,
+    PositionEffect,
+)
+from maais.execution.paper.filters import ExchangeFilterSnapshot
+from maais.execution.paper.orders import PaperOrder
+from maais.execution.paper.records import PaperExecutionRecord
 from maais.experiments.service import ExperimentLifecycle
 from maais.operations.backups import collect_backup_metadata
 from maais.operations.health import collect_configured_experiment_health
@@ -74,7 +83,7 @@ async def test_consistency_report_accepts_valid_ledger(
     assert not report.errors
 
 
-async def test_ledger_verification_uses_a_bounded_query_count_for_decisions(
+async def test_ledger_verification_uses_a_bounded_query_count_for_projected_rows(
     uow_factory: UnitOfWork,
     db_engine: AsyncEngine,
 ) -> None:
@@ -88,6 +97,8 @@ async def test_ledger_verification_uses_a_bounded_query_count_for_decisions(
             strategy_version_id=template.cycle.strategy_version_id,
             agent_version_ids=agent_version_ids,
         )
+        proposal = bundle.proposal
+        assert proposal is not None
         bundle = replace(
             bundle,
             market_frame=replace(
@@ -104,9 +115,9 @@ async def test_ledger_verification_uses_a_bounded_query_count_for_decisions(
                 completed_at=bundle.cycle.completed_at + shift,
             ),
             proposal=replace(
-                bundle.proposal,
-                proposed_at=bundle.proposal.proposed_at + shift,
-                expires_at=bundle.proposal.expires_at + shift,
+                proposal,
+                proposed_at=proposal.proposed_at + shift,
+                expires_at=proposal.expires_at + shift,
             ),
         )
         bundle.validate()
@@ -114,6 +125,48 @@ async def test_ledger_verification_uses_a_bounded_query_count_for_decisions(
     async with uow_factory.begin() as uow:
         for bundle in bundles:
             await uow.decisions.record_bundle(bundle)
+        for index in range(24):
+            await uow.experiments.create(
+                replace(
+                    manifest,
+                    experiment_id=UUID(int=100 + index),
+                    name=f"query-bound replay {index}",
+                )
+            )
+        proposal = bundles[0].proposal
+        assert proposal is not None
+        filters = ExchangeFilterSnapshot(
+            symbol="BTCUSDT",
+            status="TRADING",
+            price_tick=Decimal("0.1"),
+            quantity_step=Decimal("0.001"),
+            minimum_quantity=Decimal("0.001"),
+            maximum_quantity=Decimal("10"),
+            minimum_notional=Decimal("5"),
+            supported_order_types=(PaperOrderType.MARKET,),
+            captured_at=proposal.proposed_at - timedelta(minutes=1),
+        )
+        for index in range(24):
+            created_at = proposal.proposed_at + timedelta(milliseconds=index)
+            order = PaperOrder.create(
+                order_id=UUID(int=1_000 + index),
+                experiment_id=manifest.experiment_id,
+                proposal_id=proposal.id,
+                client_order_id=f"query-bound-order-{index}",
+                command_hash=f"{index + 1:064x}",
+                symbol="BTCUSDT",
+                side=PaperOrderSide.BUY,
+                order_type=PaperOrderType.MARKET,
+                position_effect=PositionEffect.OPEN,
+                quantity=Decimal("0.1"),
+                limit_price=None,
+                reduce_only=False,
+                open_quantity=Decimal("0"),
+                created_at=created_at,
+                expires_at=created_at + timedelta(seconds=30),
+            )
+            order = order.authorize(created_at).accept(created_at)
+            await uow.paper_execution.record(PaperExecutionRecord(order, filters, (), None, None))
 
     statement_count = 0
 
@@ -226,6 +279,9 @@ async def test_health_verification_keeps_one_snapshot_during_concurrent_write(
         "passed": True,
         "detail": "ledger errors=0",
     }
+    assert result["checked_at"] == result["snapshot_at"]
+    assert result["completed_at"] >= result["snapshot_at"]  # type: ignore[operator]
+    assert result["verification_duration_seconds"] >= 0  # type: ignore[operator]
 
 
 async def test_daily_report_keeps_one_snapshot_during_concurrent_write(
@@ -502,6 +558,33 @@ async def test_consistency_report_finds_stream_and_outbox_damage(
     assert not report.ok
     assert any(error.code == "stream_gap" for error in report.errors)
     assert any(error.code == "missing_outbox" for error in report.errors)
+
+
+async def test_consistency_report_finds_malformed_outbox_payload(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    _manifest, bundle = await _prepare_bundle(uow_factory)
+    async with uow_factory.begin() as uow:
+        await uow.decisions.record_bundle(bundle)
+
+    factory = async_sessionmaker(db_engine)
+    async with factory.begin() as session:
+        outbox = await session.scalar(select(OutboxEventModel).limit(1))
+        assert outbox is not None
+        payload = dict(outbox.payload_json)
+        payload["global_position"] = "not-an-integer"
+        await session.execute(
+            update(OutboxEventModel)
+            .where(OutboxEventModel.id == outbox.id)
+            .values(payload_json=payload)
+        )
+
+    async with factory() as session:
+        report = await verify_ledger_consistency(session)
+
+    assert not report.ok
+    assert any(error.code == "outbox_payload_mismatch" for error in report.errors)
 
 
 async def test_experiment_projection_rebuild_matches_lifecycle(

@@ -20,6 +20,13 @@ purpose-bound disposable candidate and must produce a passing exact-commit
 bundle before `scripts/start-paper-soak.sh` can begin the clean soak. The soak
 readiness verdict independently re-verifies that bundle.
 
+Operator health is evaluated at the PostgreSQL snapshot timestamp, not at the end of a
+potentially long ledger scan. The report records `snapshot_at`, `completed_at`, and
+`verification_duration_seconds`; its required `verification_freshness` check fails if the
+scan exceeds the configured maximum lag. Full ledger verification uses set-based,
+query-count-bounded reconciliation so accumulated experiments, decisions, orders, and fills
+do not create per-row database queries.
+
 After at least 24 uninterrupted hours, while all four supervised processes are still
 running, freeze the soak decision:
 
