@@ -93,9 +93,9 @@ class OperatorCommandModel(Base):
         CheckConstraint(
             "(status = 'requested' AND version = 1 AND accepted_at IS NULL AND "
             "accepted_by IS NULL AND completed_at IS NULL AND result_json IS NULL) OR "
-            "(status = 'accepted' AND version = 2 AND accepted_at IS NOT NULL AND "
+            "(status = 'accepted' AND version >= 2 AND accepted_at IS NOT NULL AND "
             "accepted_by IS NOT NULL AND completed_at IS NULL AND result_json IS NULL) OR "
-            "(status IN ('completed', 'rejected') AND version = 3 AND accepted_at IS NOT NULL "
+            "(status IN ('completed', 'rejected') AND version >= 3 AND accepted_at IS NOT NULL "
             "AND accepted_by IS NOT NULL AND completed_at IS NOT NULL AND result_json IS NOT NULL)",
             name="ck_operator_command_lifecycle",
         ),

@@ -111,14 +111,17 @@ class OperatorCommand:
             raise ValueError("operator command completion time cannot regress")
         if self.command_type in _SAFETY_CRITICAL and not self.operator_confirmed:
             raise ValueError("safety-critical operator command must be confirmed")
-        expected_shape = {
+        minimum_version, has_acceptance, has_completion = {
             CommandStatus.REQUESTED: (1, False, False),
             CommandStatus.ACCEPTED: (2, True, False),
             CommandStatus.COMPLETED: (3, True, True),
             CommandStatus.REJECTED: (3, True, True),
         }[self.status]
-        version, has_acceptance, has_completion = expected_shape
-        if self.version != version:
+        if (
+            self.version != minimum_version
+            if self.status is CommandStatus.REQUESTED
+            else self.version < minimum_version
+        ):
             raise ValueError("operator command version differs from lifecycle status")
         acceptance_complete = self.accepted_at is not None and self.accepted_by is not None
         acceptance_empty = self.accepted_at is None and self.accepted_by is None
@@ -198,6 +201,19 @@ class OperatorCommand:
             accepted_by=worker_id,
         )
 
+    def take_over(self, *, worker_id: str) -> OperatorCommand:
+        if self.status is not CommandStatus.ACCEPTED:
+            raise ValueError("only an accepted operator command can be taken over")
+        if not worker_id or worker_id != worker_id.strip():
+            raise ValueError("operator command worker identity must be nonempty and trimmed")
+        if self.accepted_by == worker_id:
+            return self
+        return replace(
+            self,
+            version=self.version + 1,
+            accepted_by=worker_id,
+        )
+
     def complete(
         self,
         *,
@@ -214,7 +230,7 @@ class OperatorCommand:
         return replace(
             self,
             status=CommandStatus.COMPLETED,
-            version=3,
+            version=self.version + 1,
             completed_at=completed_at,
             result=normalized_result,
         )
@@ -240,7 +256,7 @@ class OperatorCommand:
         return replace(
             self,
             status=CommandStatus.REJECTED,
-            version=3,
+            version=self.version + 1,
             completed_at=completed_at,
             result=result,
         )

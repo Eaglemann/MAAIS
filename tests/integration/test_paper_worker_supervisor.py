@@ -8,7 +8,9 @@ import pytest
 from maais.db.unit_of_work import UnitOfWork, UnitOfWorkContext
 from maais.domain.enums import ExperimentStatus
 from maais.market_data.events import MarketEventKind, ObservedMarketEvent
+from maais.operations.operator_commands import CommandType, OperatorCommand
 from maais.orchestration.checkpoints import WorkerLeaseStatus, WorkerStatus
+from maais.orchestration.operator_control import OperatorCommandExecutor
 from maais.orchestration.supervisor import (
     PaperWorkerHalt,
     PaperWorkerSupervisor,
@@ -376,3 +378,90 @@ async def test_supervisor_ingests_future_observations_while_dispatch_is_waiting(
         "dispatch-start:future-event",
         "dispatch:future-event",
     ]
+
+
+async def test_command_enabled_supervisor_waits_for_audited_start_before_market_data(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest = _live_manifest(
+        experiment_id=UUID(int=97),
+        schema_revision="0017",
+    )
+    worker_id = UUID(int=98)
+    start = OperatorCommand.request(
+        command_id=UUID(int=99),
+        experiment_id=manifest.experiment_id,
+        command_type=CommandType.START,
+        idempotency_key="start-command-0001",
+        actor="local_operator",
+        reason="begin the prepared local paper run",
+        payload={},
+        confirmation="CONFIRM START",
+        requested_at=NOW,
+    )
+    async with uow_factory.begin() as uow:
+        await uow.experiments.create(manifest)
+        await uow.commands.enqueue(start)
+    public = _PublicData()
+    sleep = _SleepControl()
+    supervisor = PaperWorkerSupervisor(
+        uow=uow_factory,
+        manifest=manifest,
+        worker_id=worker_id,
+        public_data=public,
+        observations=_Observations([]),  # type: ignore[arg-type]
+        engine=_Engine([]),  # type: ignore[arg-type]
+        operator_commands=OperatorCommandExecutor(
+            uow=uow_factory,
+            manifest=manifest,
+            worker_id=worker_id,
+            now=_Clock(),
+        ),
+        now=_Clock(),
+        sleep=sleep,
+        lease_ttl=timedelta(seconds=30),
+        lease_renew_interval=timedelta(seconds=10),
+        drain_timeout=timedelta(seconds=1),
+    )
+
+    await supervisor.start()
+    for _ in range(200):
+        if public.started:
+            break
+        if supervisor.failure is not None:
+            raise supervisor.failure
+        await asyncio.sleep(0.01)
+
+    async with uow_factory.begin() as uow:
+        stored = await uow.commands.get(start.command_id)
+        status = await uow.experiments.get_status(manifest.experiment_id)
+
+    assert public.started
+    assert stored.status.value == "completed"
+    assert status is ExperimentStatus.RUNNING
+    assert supervisor.state is PaperWorkerSupervisorState.RUNNING
+
+    stop = OperatorCommand.request(
+        command_id=UUID(int=100),
+        experiment_id=manifest.experiment_id,
+        command_type=CommandType.STOP,
+        idempotency_key="stop-command-0001",
+        actor="local_operator",
+        reason="end the local paper worker cleanly",
+        payload={},
+        confirmation="CONFIRM STOP",
+        requested_at=NOW,
+    )
+    async with uow_factory.begin() as uow:
+        await uow.commands.enqueue(stop)
+    sleep.release(0.25)
+    async with asyncio.timeout(2):
+        await supervisor.operator_stop_requested.wait()
+
+    async with uow_factory.begin() as uow:
+        stopped_command = await uow.commands.get(stop.command_id)
+        stopped_status = await uow.experiments.get_status(manifest.experiment_id)
+    assert stopped_command.status.value == "completed"
+    assert stopped_status is ExperimentStatus.STOPPED
+    assert public.started and not public.stopped
+    await supervisor.stop()

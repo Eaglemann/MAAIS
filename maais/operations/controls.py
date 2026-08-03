@@ -60,6 +60,35 @@ class TradingControlSnapshot:
             changed_by=actor,
         )
 
+    def reset(
+        self,
+        *,
+        reset_at: datetime,
+        actor: str,
+        expected_version: int,
+        allowed_reason_prefix: str,
+    ) -> TradingControlSnapshot:
+        require_utc(reset_at, "trading control reset_at")
+        if not actor or not allowed_reason_prefix:
+            raise ValueError("trading reset requires an actor and allowed reason prefix")
+        if expected_version != self.version:
+            raise ValueError("trading control version changed before reset")
+        if reset_at < self.changed_at:
+            raise ValueError("trading control time cannot regress")
+        if not self.kill_switch_active:
+            return self
+        assert self.reason is not None
+        if not self.reason.startswith(allowed_reason_prefix):
+            raise ValueError("trading control reason is not eligible for this reset")
+        return replace(
+            self,
+            kill_switch_active=False,
+            reason=None,
+            version=self.version + 1,
+            changed_at=reset_at,
+            changed_by=actor,
+        )
+
     def to_dict(self) -> dict[str, object]:
         return {
             "experiment_id": self.experiment_id,

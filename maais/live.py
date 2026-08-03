@@ -31,7 +31,7 @@ from maais.market_data.connectors.bybit_spot import BybitSpotConnector
 from maais.market_data.public_runtime import PublicMarketDataRuntime
 from maais.orchestration.bootstrap import restore_live_paper_runtime
 from maais.orchestration.composition import assemble_live_paper_application
-from maais.orchestration.supervisor import PaperWorkerSupervisorState
+from maais.orchestration.supervisor import PaperWorkerSupervisor, PaperWorkerSupervisorState
 
 StatusWriter = Callable[[dict[str, object]], None]
 
@@ -135,30 +135,15 @@ async def run_live_paper_manifest(
             )
             local_stop = stop_event or asyncio.Event()
             remove_signals = _install_signal_handlers(local_stop) if stop_event is None else None
-            monitor = asyncio.create_task(
-                application.supervisor.wait_closed(),
-                name="paper_live_worker_monitor",
-            )
-            stopped = asyncio.create_task(local_stop.wait(), name="paper_live_stop_signal")
             try:
-                done, _ = await asyncio.wait(
-                    (monitor, stopped),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if monitor in done:
-                    await monitor
-                else:
-                    await application.supervisor.stop()
-                    await monitor
+                await _wait_for_supervisor_end(application.supervisor, local_stop)
             finally:
                 if remove_signals is not None:
                     remove_signals()
-                if not stopped.done():
-                    stopped.cancel()
-                if not monitor.done():
-                    monitor.cancel()
-                await asyncio.gather(stopped, monitor, return_exceptions=True)
-                if application.supervisor.state is PaperWorkerSupervisorState.RUNNING:
+                if application.supervisor.state in {
+                    PaperWorkerSupervisorState.RUNNING,
+                    PaperWorkerSupervisorState.STANDBY,
+                }:
                     await application.supervisor.stop()
             writer(
                 {
@@ -170,6 +155,36 @@ async def run_live_paper_manifest(
             )
     finally:
         await engine.dispose()
+
+
+async def _wait_for_supervisor_end(
+    supervisor: PaperWorkerSupervisor,
+    local_stop: asyncio.Event,
+) -> None:
+    monitor = asyncio.create_task(
+        supervisor.wait_closed(),
+        name="paper_live_worker_monitor",
+    )
+    stopped = asyncio.create_task(local_stop.wait(), name="paper_live_stop_signal")
+    operator_stop = asyncio.create_task(
+        supervisor.operator_stop_requested.wait(),
+        name="paper_live_operator_stop",
+    )
+    try:
+        done, _ = await asyncio.wait(
+            (monitor, stopped, operator_stop),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if monitor in done:
+            await monitor
+            return
+        await supervisor.stop()
+        await monitor
+    finally:
+        for task in (monitor, stopped, operator_stop):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(monitor, stopped, operator_stop, return_exceptions=True)
 
 
 def load_manifest_file(path: Path) -> ExperimentManifest:

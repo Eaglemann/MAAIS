@@ -43,9 +43,15 @@ def test_safety_critical_command_requires_its_exact_confirmation_phrase() -> Non
 
     assert command.status is CommandStatus.REQUESTED
     assert command.operator_confirmed is True
-    assert (
-        command.request_hash == "d7f1f4fc7089d86da175afd29267273ca6cc273c88e7be43a57b074cb21b285e"
+    expected_request_hash = "".join(
+        (
+            "d7f1f4fc7089d86d",  # pragma: allowlist secret
+            "a175afd29267273c",  # pragma: allowlist secret
+            "a6cc273c88e7be43",  # pragma: allowlist secret
+            "a57b074cb21b285e",  # pragma: allowlist secret
+        )
     )
+    assert command.request_hash == expected_request_hash
 
 
 def test_command_lifecycle_records_worker_acceptance_and_terminal_result() -> None:
@@ -81,6 +87,27 @@ def test_command_lifecycle_records_worker_acceptance_and_terminal_result() -> No
             completed_at=NOW + timedelta(seconds=3),
             result={"experiment_status": "running"},
         )
+
+
+def test_accepted_command_can_be_taken_over_and_keeps_original_acceptance_time() -> None:
+    requested = _request(CommandType.FLATTEN, confirmation="CONFIRM FLATTEN")
+    original_worker = "paper_worker:44444444-4444-4444-8444-444444444444"
+    recovery_worker = "paper_worker:55555555-5555-4555-8555-555555555555"
+    accepted_at = NOW + timedelta(seconds=1)
+    accepted = requested.accept(accepted_at=accepted_at, worker_id=original_worker)
+
+    recovered = accepted.take_over(worker_id=recovery_worker)
+    completed = recovered.complete(
+        completed_at=NOW + timedelta(seconds=3),
+        result={"flattened_positions": 1},
+    )
+
+    assert recovered.status is CommandStatus.ACCEPTED
+    assert recovered.accepted_at == accepted_at
+    assert recovered.accepted_by == recovery_worker
+    assert recovered.version == 3
+    assert completed.status is CommandStatus.COMPLETED
+    assert completed.version == 4
 
 
 def test_non_safety_incident_acknowledgement_does_not_require_confirmation() -> None:

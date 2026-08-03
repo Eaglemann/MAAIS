@@ -16,7 +16,65 @@ experiment_id="$(jq -r '.experiment_id' "${current_state}")"
 worker_pid="$(jq -r '.worker_pid' "${current_state}")"
 dashboard_pid="$(jq -r '.dashboard_pid' "${current_state}")"
 awake_pid="$(jq -r '.awake_pid // empty' "${current_state}")"
+mission_control_port="$(jq -er '.mission_control_port' "${current_state}")"
+control_token_file="$(jq -er '.control_token_file' "${current_state}")"
+stop_request_body="${state_dir}/.stop-command-${experiment_id%%-*}.json"
+stop_request_config="${state_dir}/.stop-command-${experiment_id%%-*}.curl"
+cleanup_stop_request() {
+  rm -f "${stop_request_body}" "${stop_request_config}"
+}
+trap cleanup_stop_request EXIT INT TERM
 
+if kill -0 "${worker_pid}" 2>/dev/null; then
+  if ! kill -0 "${dashboard_pid}" 2>/dev/null \
+    || ! curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/health" >/dev/null 2>&1; then
+    echo "Mission Control must be healthy before an audited STOP; recover it first" >&2
+    exit 1
+  fi
+  stop_idempotency_key="paper-week-stop-${experiment_id}"
+  jq -n \
+    --arg idempotency_key "${stop_idempotency_key}" \
+    '{"command_type":"stop","idempotency_key":$idempotency_key,"reason":"stop the local paper week cleanly","payload":{"source":"stop-paper-week.sh"},"confirmation":"CONFIRM STOP"}' \
+    > "${stop_request_body}"
+  control_token="$(<"${control_token_file}")"
+  umask 077
+  printf '%s\n' \
+    "url = \"http://127.0.0.1:${mission_control_port}/api/v1/experiments/${experiment_id}/commands\"" \
+    'request = "POST"' \
+    'header = "Content-Type: application/json"' \
+    "header = \"Authorization: Bearer ${control_token}\"" \
+    "data = \"@${stop_request_body}\"" \
+    > "${stop_request_config}"
+  unset control_token
+  stop_response="$(curl --silent --show-error --fail --config "${stop_request_config}")"
+  cleanup_stop_request
+  stop_command_id="$(jq -er '.command_id' <<<"${stop_response}")"
+  command_status=""
+  command_response=""
+  for _attempt in $(seq 1 60); do
+    command_response="$(curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/commands/${stop_command_id}" 2>/dev/null || true)"
+    if [[ -n "${command_response}" ]]; then
+      command_status="$(jq -r '.status // empty' <<<"${command_response}")"
+    fi
+    if [[ "${command_status}" == "rejected" ]]; then
+      echo "audited STOP was rejected; flatten open exposure first: ${command_response}" >&2
+      exit 1
+    fi
+    if [[ "${command_status}" == "completed" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  if [[ "${command_status}" != "completed" ]]; then
+    echo "paper worker did not complete the audited STOP command" >&2
+    exit 1
+  fi
+
+  for _attempt in $(seq 1 60); do
+    kill -0 "${worker_pid}" 2>/dev/null || break
+    sleep 1
+  done
+fi
 if kill -0 "${worker_pid}" 2>/dev/null; then
   paper_signal_process_tree "${worker_pid}"
   for _attempt in $(seq 1 60); do
@@ -51,4 +109,5 @@ stopped_state="${state_dir}/stopped-$(date -u +%Y%m%dT%H%M%SZ).json"
 jq --arg stopped_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '. + {stopped_at:$stopped_at}' \
   "${current_state}" > "${stopped_state}"
 mv "${current_state}" "${current_state}.previous"
+trap - EXIT INT TERM
 echo "paper week stopped cleanly: experiment=${experiment_id} state=${stopped_state}"

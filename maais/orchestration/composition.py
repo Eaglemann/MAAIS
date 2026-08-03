@@ -27,10 +27,15 @@ from maais.orchestration.context import (
     PersistentTradingControls,
 )
 from maais.orchestration.continuous import ContinuousPaperObserver
+from maais.orchestration.flatten import (
+    LivePaperFlattenPlanner,
+    PostgresFlattenSourceLoader,
+)
 from maais.orchestration.observations import (
     MarketObservationBuffer,
     RuntimeHealthRegistry,
 )
+from maais.orchestration.operator_control import OperatorCommandExecutor
 from maais.orchestration.protection import PositionProtectionService
 from maais.orchestration.recovery import GapRecoveryManager
 from maais.orchestration.runtime import AtomicCycleDispatcher
@@ -102,6 +107,7 @@ class LivePaperApplication:
     observations: MarketObservationBuffer
     health: RuntimeHealthRegistry
     engine: HealthAwareDispatchEngine
+    operator_commands: OperatorCommandExecutor
     supervisor: PaperWorkerSupervisor
 
     def __post_init__(self) -> None:
@@ -174,12 +180,13 @@ async def assemble_live_paper_application(
         integrity_policy=snapshot.policy.integrity_policy(),
         service=service,
     )
+    protection = PositionProtectionService(broker)
     continuous = ContinuousPaperObserver(
         uow=uow,
         manifest=snapshot.manifest,
         policy=snapshot.policy,
         observations=observations,
-        protection=PositionProtectionService(broker),
+        protection=protection,
         market_fills=market_fills,
         exchange_filters=pinned_filters,
     )
@@ -206,6 +213,21 @@ async def assemble_live_paper_application(
         health,
         admission_policy.mandatory_components,
     )
+    operator_commands = OperatorCommandExecutor(
+        uow=uow,
+        manifest=snapshot.manifest,
+        worker_id=worker_id,
+        now=observed_now,
+        flatten_planner=LivePaperFlattenPlanner(
+            manifest=snapshot.manifest,
+            policy=snapshot.policy,
+            source_loader=PostgresFlattenSourceLoader(uow),
+            observations=observations,
+            broker=broker,
+            exchange_filters=pinned_filters,
+            now=observed_now,
+        ),
+    )
     supervisor = PaperWorkerSupervisor(
         uow=uow,
         manifest=snapshot.manifest,
@@ -213,6 +235,7 @@ async def assemble_live_paper_application(
         public_data=public_data,
         observations=observations,
         engine=engine,
+        operator_commands=operator_commands,
         now=observed_now,
         sleep=sleep,
     )
@@ -226,6 +249,7 @@ async def assemble_live_paper_application(
         observations=observations,
         health=health,
         engine=engine,
+        operator_commands=operator_commands,
         supervisor=supervisor,
     )
 

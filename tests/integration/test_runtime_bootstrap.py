@@ -17,7 +17,7 @@ async def test_runtime_bootstrap_restores_exact_pinned_identity(
 ) -> None:
     manifest = _live_manifest(
         experiment_id=UUID(int=201),
-        schema_revision="0016",
+        schema_revision="0017",
     )
     async with uow_factory.begin() as uow:
         await uow.experiments.create(manifest)
@@ -26,7 +26,7 @@ async def test_runtime_bootstrap_restores_exact_pinned_identity(
 
     assert snapshot.manifest == manifest
     assert snapshot.policy.strategy_key == "maais_primary"
-    assert snapshot.database_schema_revision == "0016"
+    assert snapshot.database_schema_revision == "0017"
     assert snapshot.strategy_version_id.int != 0
     assert tuple(snapshot.agent_version_ids) == tuple(
         entry.agent_name for entry in manifest.agent_versions
@@ -59,7 +59,7 @@ async def test_runtime_bootstrap_refuses_failed_gap_recovery(
 ) -> None:
     manifest = _live_manifest(
         experiment_id=UUID(int=203),
-        schema_revision="0016",
+        schema_revision="0017",
     )
     recovery = _recovery(manifest.experiment_id).fail(
         "backfill exhausted",

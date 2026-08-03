@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,7 +48,7 @@ def _new_event(command: OperatorCommand, event_type: str, occurred_at: datetime)
         aggregate_type="operator_command",
         event_type=event_type,
         payload=_event_object(command.to_dict()),
-        metadata={"schema_revision": "0016"},
+        metadata={"schema_revision": "0017"},
         occurred_at=occurred_at,
     )
 
@@ -180,15 +180,47 @@ class OperatorCommandRepository:
             select(OperatorCommandModel)
             .where(
                 OperatorCommandModel.experiment_id == experiment_id,
-                OperatorCommandModel.status == CommandStatus.REQUESTED.value,
+                OperatorCommandModel.status.in_(
+                    (
+                        CommandStatus.ACCEPTED.value,
+                        CommandStatus.REQUESTED.value,
+                    )
+                ),
             )
-            .order_by(OperatorCommandModel.requested_at, OperatorCommandModel.id)
+            .order_by(
+                case(
+                    (OperatorCommandModel.status == CommandStatus.ACCEPTED.value, 0),
+                    else_=1,
+                ),
+                OperatorCommandModel.requested_at,
+                OperatorCommandModel.id,
+            )
             .limit(1)
             .with_for_update(skip_locked=True)
         )
         if row is None:
             return None
         current = _verify(row)
+        if current.status is CommandStatus.ACCEPTED:
+            recovered = current.take_over(worker_id=worker_id)
+            if recovered == current:
+                return current
+            row.version = recovered.version
+            row.accepted_by = recovered.accepted_by
+            row.content_hash = recovered.content_hash
+            await self._events.append(
+                recovered.command_id,
+                "operator_command",
+                current.version,
+                (
+                    _new_event(
+                        recovered,
+                        "operator_command.recovered",
+                        accepted_at,
+                    ),
+                ),
+            )
+            return recovered
         accepted = current.accept(accepted_at=accepted_at, worker_id=worker_id)
         row.status = accepted.status.value
         row.version = accepted.version

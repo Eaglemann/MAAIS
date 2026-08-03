@@ -58,6 +58,8 @@ awake_log="${log_dir}/sleep-inhibitor-${session_suffix}.log"
 dashboard_pid=""
 worker_pid=""
 awake_pid=""
+start_request_body="${state_dir}/.start-command-${session_suffix}.json"
+start_request_config="${state_dir}/.start-command-${session_suffix}.curl"
 cleanup_startup() {
   if [[ "${worker_pid}" =~ ^[0-9]+$ ]]; then
     paper_signal_process_tree "${worker_pid}"
@@ -71,6 +73,7 @@ cleanup_startup() {
   paper_stop_tmux_session "${awake_session}"
   paper_stop_tmux_session "${worker_session}"
   paper_stop_tmux_session "${dashboard_session}"
+  rm -f "${start_request_body}" "${start_request_config}"
 }
 trap cleanup_startup ERR INT TERM
 
@@ -116,6 +119,51 @@ for _attempt in $(seq 1 90); do
 done
 if [[ "${worker_ready}" != true ]]; then
   echo "paper worker did not acquire a healthy runtime lease; inspect ${worker_log}" >&2
+  cleanup_startup
+  exit 1
+fi
+
+start_idempotency_key="paper-week-start-${experiment_id}"
+jq -n \
+  --arg idempotency_key "${start_idempotency_key}" \
+  '{"command_type":"start","idempotency_key":$idempotency_key,"reason":"start the prepared local paper week","payload":{"source":"start-paper-week.sh"},"confirmation":"CONFIRM START"}' \
+  > "${start_request_body}"
+control_token="$(<"${control_token_file}")"
+umask 077
+printf '%s\n' \
+  "url = \"http://127.0.0.1:${mission_control_port}/api/v1/experiments/${experiment_id}/commands\"" \
+  'request = "POST"' \
+  'header = "Content-Type: application/json"' \
+  "header = \"Authorization: Bearer ${control_token}\"" \
+  "data = \"@${start_request_body}\"" \
+  > "${start_request_config}"
+unset control_token
+start_response="$(curl --silent --show-error --fail --config "${start_request_config}")"
+rm -f "${start_request_body}" "${start_request_config}"
+start_command_id="$(jq -er '.command_id' <<<"${start_response}")"
+command_status=""
+experiment_status=""
+for _attempt in $(seq 1 60); do
+  command_response="$(curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/commands/${start_command_id}" 2>/dev/null || true)"
+  overview="$(curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
+  if [[ -n "${command_response}" ]]; then
+    command_status="$(jq -r '.status // empty' <<<"${command_response}")"
+  fi
+  if [[ -n "${overview}" ]]; then
+    experiment_status="$(jq -r '.experiment.status // empty' <<<"${overview}")"
+  fi
+  if [[ "${command_status}" == "rejected" ]]; then
+    echo "audited START command was rejected: ${command_response}" >&2
+    cleanup_startup
+    exit 1
+  fi
+  if [[ "${command_status}" == "completed" && "${experiment_status}" == "running" ]]; then
+    break
+  fi
+  sleep 1
+done
+if [[ "${command_status}" != "completed" || "${experiment_status}" != "running" ]]; then
+  echo "paper worker did not complete the audited START command" >&2
   cleanup_startup
   exit 1
 fi

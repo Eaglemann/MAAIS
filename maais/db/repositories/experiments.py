@@ -251,6 +251,96 @@ class ExperimentRepository:
         await self.transition(manifest, transition)
         return True
 
+    async def pause_active(
+        self,
+        manifest: ExperimentManifest,
+        *,
+        paused_at: datetime,
+    ) -> bool:
+        model = await self._session.scalar(
+            select(ExperimentModel)
+            .where(ExperimentModel.id == manifest.experiment_id)
+            .with_for_update()
+        )
+        if model is None:
+            raise LookupError(f"experiment not found: {manifest.experiment_id}")
+        if model.manifest_hash != manifest.manifest_hash:
+            raise ImmutableManifestError("stored manifest identity does not match pause manifest")
+        status = ExperimentStatus(model.status)
+        if status is ExperimentStatus.PAUSED:
+            return False
+        if status is not ExperimentStatus.RUNNING:
+            raise RuntimeError(f"paper worker cannot pause experiment from {status.value}")
+        version = await self._events.stream_version(manifest.experiment_id, "experiment")
+        transition = ExperimentLifecycle(
+            manifest,
+            status,
+            version,
+            now=lambda: paused_at,
+        ).pause()
+        await self.transition(manifest, transition)
+        return True
+
+    async def resume_paused(
+        self,
+        manifest: ExperimentManifest,
+        *,
+        resumed_at: datetime,
+    ) -> bool:
+        model = await self._session.scalar(
+            select(ExperimentModel)
+            .where(ExperimentModel.id == manifest.experiment_id)
+            .with_for_update()
+        )
+        if model is None:
+            raise LookupError(f"experiment not found: {manifest.experiment_id}")
+        if model.manifest_hash != manifest.manifest_hash:
+            raise ImmutableManifestError("stored manifest identity does not match resume manifest")
+        status = ExperimentStatus(model.status)
+        if status is ExperimentStatus.RUNNING:
+            return False
+        if status is not ExperimentStatus.PAUSED:
+            raise RuntimeError(f"paper worker cannot resume experiment from {status.value}")
+        version = await self._events.stream_version(manifest.experiment_id, "experiment")
+        transition = ExperimentLifecycle(
+            manifest,
+            status,
+            version,
+            now=lambda: resumed_at,
+        ).resume()
+        await self.transition(manifest, transition)
+        return True
+
+    async def stop_active(
+        self,
+        manifest: ExperimentManifest,
+        *,
+        stopped_at: datetime,
+    ) -> bool:
+        model = await self._session.scalar(
+            select(ExperimentModel)
+            .where(ExperimentModel.id == manifest.experiment_id)
+            .with_for_update()
+        )
+        if model is None:
+            raise LookupError(f"experiment not found: {manifest.experiment_id}")
+        if model.manifest_hash != manifest.manifest_hash:
+            raise ImmutableManifestError("stored manifest identity does not match stop manifest")
+        status = ExperimentStatus(model.status)
+        if status is ExperimentStatus.STOPPED:
+            return False
+        if status not in {ExperimentStatus.RUNNING, ExperimentStatus.PAUSED}:
+            raise RuntimeError(f"paper worker cannot stop experiment from {status.value}")
+        version = await self._events.stream_version(manifest.experiment_id, "experiment")
+        transition = ExperimentLifecycle(
+            manifest,
+            status,
+            version,
+            now=lambda: stopped_at,
+        ).stop()
+        await self.transition(manifest, transition)
+        return True
+
     async def get_agent_version_ids(
         self,
         manifest: ExperimentManifest,

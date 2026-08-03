@@ -120,6 +120,51 @@ class TradingControlRepository:
             raise TradingControlConflict("trading control content hash is invalid")
         return snapshot
 
+    async def reset(
+        self,
+        experiment_id: UUID,
+        *,
+        reset_at: datetime,
+        actor: str,
+        expected_version: int,
+        allowed_reason_prefix: str,
+    ) -> TradingControlSnapshot:
+        row = await self._locked(experiment_id)
+        current = _from_row(row)
+        if content_hash(_json_object(current.to_dict())) != row.content_hash:
+            raise TradingControlConflict("trading control content hash is invalid")
+        reset = current.reset(
+            reset_at=reset_at,
+            actor=actor,
+            expected_version=expected_version,
+            allowed_reason_prefix=allowed_reason_prefix,
+        )
+        if reset == current:
+            return current
+        state = _json_object(reset.to_dict())
+        row.kill_switch_active = reset.kill_switch_active
+        row.reason = reset.reason
+        row.version = reset.version
+        row.changed_at = reset.changed_at
+        row.changed_by = reset.changed_by
+        row.state_json = state
+        row.content_hash = content_hash(state)
+        await self._events.append(
+            experiment_id,
+            "trading_control",
+            current.version,
+            (
+                _new_event(
+                    aggregate_id=experiment_id,
+                    aggregate_type="trading_control",
+                    event_type="trading_control.reset",
+                    payload=state,
+                    occurred_at=reset_at,
+                ),
+            ),
+        )
+        return reset
+
     async def _locked(self, experiment_id: UUID) -> TradingControlModel:
         row = await self._session.scalar(
             select(TradingControlModel)

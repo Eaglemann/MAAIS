@@ -41,9 +41,22 @@ class DispatchEnginePort(Protocol):
     async def process(self, event: ObservedMarketEvent) -> object: ...
 
 
+class OperatorCommandResultPort(Protocol):
+    @property
+    def stop_worker(self) -> bool: ...
+
+    @property
+    def activate_worker(self) -> bool: ...
+
+
+class OperatorCommandPort(Protocol):
+    async def execute_next(self) -> OperatorCommandResultPort | None: ...
+
+
 class PaperWorkerSupervisorState(StrEnum):
     STOPPED = "stopped"
     STARTING = "starting"
+    STANDBY = "standby"
     RUNNING = "running"
     STOPPING = "stopping"
     HALTED = "halted"
@@ -69,6 +82,7 @@ class PaperWorkerSupervisor:
         public_data: PublicDataPort,
         observations: ObservationPort,
         engine: DispatchEnginePort,
+        operator_commands: OperatorCommandPort | None = None,
         now: Callable[[], datetime] | None = None,
         sleep: Sleep = asyncio.sleep,
         lease_ttl: timedelta = timedelta(seconds=30),
@@ -76,6 +90,7 @@ class PaperWorkerSupervisor:
         checkpoint_interval: timedelta = timedelta(seconds=60),
         drain_timeout: timedelta = timedelta(seconds=30),
         dispatch_queue_size: int = 10_000,
+        command_poll_interval: timedelta = timedelta(milliseconds=250),
     ) -> None:
         policy = LivePaperPolicy.from_manifest(manifest)
         if worker_id.int == 0:
@@ -90,6 +105,8 @@ class PaperWorkerSupervisor:
             raise ValueError("paper worker drain timeout must be positive")
         if dispatch_queue_size <= 0:
             raise ValueError("paper worker dispatch queue size must be positive")
+        if command_poll_interval <= timedelta(0):
+            raise ValueError("operator command poll interval must be positive")
         self._uow = uow
         self._manifest = manifest
         self._policy = policy
@@ -97,12 +114,14 @@ class PaperWorkerSupervisor:
         self._public_data = public_data
         self._observations = observations
         self._engine = engine
+        self._operator_commands = operator_commands
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._sleep = sleep
         self._lease_ttl = lease_ttl
         self._renew_interval = lease_renew_interval
         self._checkpoint_interval = checkpoint_interval
         self._drain_timeout = drain_timeout
+        self._command_poll_interval = command_poll_interval
         self._state = PaperWorkerSupervisorState.STOPPED
         self._checkpoint: WorkerCheckpoint | None = None
         self._lease: WorkerLease | None = None
@@ -115,6 +134,10 @@ class PaperWorkerSupervisor:
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._checkpoint_task: asyncio.Task[None] | None = None
         self._monitor_task: asyncio.Task[None] | None = None
+        self._command_task: asyncio.Task[None] | None = None
+        self._data_active = asyncio.Event()
+        self._operator_stop_requested = asyncio.Event()
+        self._serialization_lock = asyncio.Lock()
         self._stopping = False
         self._failure: PaperWorkerHalt | None = None
 
@@ -126,6 +149,10 @@ class PaperWorkerSupervisor:
     def failure(self) -> PaperWorkerHalt | None:
         return self._failure
 
+    @property
+    def operator_stop_requested(self) -> asyncio.Event:
+        return self._operator_stop_requested
+
     async def start(self) -> None:
         if self._state is not PaperWorkerSupervisorState.STOPPED or any(
             task is not None
@@ -135,20 +162,26 @@ class PaperWorkerSupervisor:
                 self._heartbeat_task,
                 self._checkpoint_task,
                 self._monitor_task,
+                self._command_task,
             )
         ):
             raise RuntimeError("paper worker can be started exactly once")
         self._state = PaperWorkerSupervisorState.STARTING
         try:
-            await self._start_persistence()
-            await self._public_data.start()
+            activate_data = await self._start_persistence()
             await self._transition(WorkerStatus.RUNNING)
+            if activate_data:
+                await self._activate_data()
         except Exception as exc:
             await self._halt(exc)
             assert self._failure is not None
             raise self._failure from exc
 
-        self._state = PaperWorkerSupervisorState.RUNNING
+        self._state = (
+            PaperWorkerSupervisorState.RUNNING
+            if self._data_active.is_set()
+            else PaperWorkerSupervisorState.STANDBY
+        )
         self._ingest_task = asyncio.create_task(
             self._ingest(),
             name="paper_worker_event_ingest",
@@ -165,6 +198,11 @@ class PaperWorkerSupervisor:
             self._checkpoint_snapshots(),
             name="paper_worker_checkpoint_snapshots",
         )
+        if self._operator_commands is not None:
+            self._command_task = asyncio.create_task(
+                self._poll_operator_commands(),
+                name="paper_worker_operator_commands",
+            )
         self._monitor_task = asyncio.create_task(
             self._monitor(),
             name="paper_worker_supervisor",
@@ -176,20 +214,33 @@ class PaperWorkerSupervisor:
         if self._state is PaperWorkerSupervisorState.HALTED:
             assert self._failure is not None
             raise self._failure
-        if self._state is not PaperWorkerSupervisorState.RUNNING:
+        if self._state not in {
+            PaperWorkerSupervisorState.RUNNING,
+            PaperWorkerSupervisorState.STANDBY,
+        }:
             raise RuntimeError("paper worker is not running")
 
         self._stopping = True
         self._state = PaperWorkerSupervisorState.STOPPING
+        await self._cancel_operator_commands()
         await self._cancel_checkpoint_snapshots()
         await self._transition(WorkerStatus.STOPPING)
         try:
-            await self._public_data.stop()
-            async with asyncio.timeout(self._drain_timeout.total_seconds()):
-                if self._ingest_task is not None:
-                    await self._ingest_task
-                if self._dispatch_task is not None:
-                    await self._dispatch_task
+            if self._data_active.is_set():
+                await self._public_data.stop()
+                async with asyncio.timeout(self._drain_timeout.total_seconds()):
+                    if self._ingest_task is not None:
+                        await self._ingest_task
+                    if self._dispatch_task is not None:
+                        await self._dispatch_task
+            else:
+                for task in (self._ingest_task, self._dispatch_task):
+                    if task is not None and not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    *(task for task in (self._ingest_task, self._dispatch_task) if task),
+                    return_exceptions=True,
+                )
         except Exception as exc:
             await self._halt(exc)
             assert self._failure is not None
@@ -207,7 +258,7 @@ class PaperWorkerSupervisor:
         if self._failure is not None:
             raise self._failure
 
-    async def _start_persistence(self) -> None:
+    async def _start_persistence(self) -> bool:
         started_at = self._observed_now()
         async with self._uow.begin() as transaction:
             self._lease = await transaction.workers.acquire(
@@ -242,10 +293,18 @@ class PaperWorkerSupervisor:
             await transaction.orchestration.record_checkpoint(self._checkpoint)
         async with self._uow.begin() as transaction:
             await self._audit_recovered_state(transaction)
-            await transaction.experiments.ensure_running(
-                self._manifest,
-                started_at=self._observed_now(),
-            )
+            status = await transaction.experiments.get_status(self._manifest.experiment_id)
+            if self._operator_commands is None:
+                await transaction.experiments.ensure_running(
+                    self._manifest,
+                    started_at=self._observed_now(),
+                )
+                return True
+            if status is ExperimentStatus.CREATED:
+                return False
+            if status in {ExperimentStatus.RUNNING, ExperimentStatus.PAUSED}:
+                return True
+            raise PaperWorkerHalt(f"paper worker cannot recover experiment from {status.value}")
 
     async def _audit_recovered_state(self, transaction: UnitOfWorkContext) -> None:
         account = await transaction.paper_execution.load_account(self._manifest.experiment_id)
@@ -275,6 +334,7 @@ class PaperWorkerSupervisor:
             )
 
     async def _ingest(self) -> None:
+        await self._data_active.wait()
         try:
             async for event in self._public_data.events():
                 await self._observations.observe(event)
@@ -286,13 +346,36 @@ class PaperWorkerSupervisor:
             await self._dispatch_queue.put(self._dispatch_stop)
 
     async def _dispatch(self) -> None:
+        await self._data_active.wait()
         while True:
             event = await self._dispatch_queue.get()
             if event is self._dispatch_stop:
                 return
             if not isinstance(event, ObservedMarketEvent):
                 raise TypeError("paper worker dispatch queue contains an invalid item")
-            await self._engine.process(event)
+            async with self._serialization_lock:
+                await self._engine.process(event)
+
+    async def _poll_operator_commands(self) -> None:
+        if self._operator_commands is None:
+            return
+        while True:
+            async with self._serialization_lock:
+                execution = await self._operator_commands.execute_next()
+                if execution is not None:
+                    if execution.activate_worker:
+                        await self._activate_data()
+                    if execution.stop_worker:
+                        self._operator_stop_requested.set()
+            await self._sleep(self._command_poll_interval.total_seconds())
+
+    async def _activate_data(self) -> None:
+        if self._data_active.is_set():
+            return
+        await self._public_data.start()
+        self._data_active.set()
+        if self._state is PaperWorkerSupervisorState.STANDBY:
+            self._state = PaperWorkerSupervisorState.RUNNING
 
     async def _heartbeat(self) -> None:
         while True:
@@ -326,13 +409,15 @@ class PaperWorkerSupervisor:
             and self._heartbeat_task is not None
             and self._checkpoint_task is not None
         )
+        tasks = (
+            self._ingest_task,
+            self._dispatch_task,
+            self._heartbeat_task,
+            self._checkpoint_task,
+            *((self._command_task,) if self._command_task is not None else ()),
+        )
         done, _ = await asyncio.wait(
-            (
-                self._ingest_task,
-                self._dispatch_task,
-                self._heartbeat_task,
-                self._checkpoint_task,
-            ),
+            tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
         if self._stopping:
@@ -438,6 +523,7 @@ class PaperWorkerSupervisor:
                 self._dispatch_task,
                 self._heartbeat_task,
                 self._checkpoint_task,
+                self._command_task,
             )
             if task is not None and task is not current and not task.done()
         )
@@ -458,6 +544,12 @@ class PaperWorkerSupervisor:
         self._checkpoint_task.cancel()
         await asyncio.gather(self._checkpoint_task, return_exceptions=True)
 
+    async def _cancel_operator_commands(self) -> None:
+        if self._command_task is None or self._command_task.done():
+            return
+        self._command_task.cancel()
+        await asyncio.gather(self._command_task, return_exceptions=True)
+
     def _checkpoint_state(self) -> dict[str, object]:
         cursors = tuple(
             sorted(
@@ -477,6 +569,9 @@ class PaperWorkerSupervisor:
             "cursor_count": len(cursors),
             "cursors": cursors,
             "dispatch_queue_depth": self._dispatch_queue.qsize(),
+            "market_data_active": self._data_active.is_set(),
+            "operator_commands_enabled": self._operator_commands is not None,
+            "operator_stop_requested": self._operator_stop_requested.is_set(),
         }
 
     def _observed_now(self) -> datetime:

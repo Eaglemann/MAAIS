@@ -84,7 +84,7 @@ jobs:
       - run: uv run alembic upgrade head
       - run: >-
           PGPASSWORD=maais psql -h localhost -U maais -d maais -Atc
-          'select version_num from alembic_version' | grep -Fx 0016
+          'select version_num from alembic_version' | grep -Fx 0017
 
   postgres-integration:
     runs-on: ubuntu-latest
@@ -115,4 +115,4 @@ jobs:
       - run: uv run pytest tests/integration -q
       - run: >-
           PGPASSWORD=maais psql -h localhost -U maais -d maais_test -Atc
-          'select version_num from alembic_version' | grep -Fx 0016
+          'select version_num from alembic_version' | grep -Fx 0017

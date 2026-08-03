@@ -14,6 +14,11 @@ def test_paper_services_start_with_structured_production_logging() -> None:
         "exec env RUN_MODE=paper_live ENVIRONMENT=production "
         "uv run maais paper-live" in start_script
     )
+    assert '"command_type":"start"' in start_script
+    assert '"confirmation":"CONFIRM START"' in start_script
+    assert '--config "${start_request_config}"' in start_script
+    assert '"${command_status}" == "completed"' in start_script
+    assert '"${experiment_status}" == "running"' in start_script
 
 
 def test_recovery_script_is_fail_closed_and_audited() -> None:
@@ -36,3 +41,15 @@ def test_daily_operations_atomically_record_the_immutable_report_bundle() -> Non
     assert 'mv "${temporary_state}" "${current_state}"' in daily_script
     assert "paper_acquire_operation_lock" in daily_script
     assert "--resume-existing" in daily_script
+
+
+def test_stop_script_uses_the_audited_stop_command_before_process_signals() -> None:
+    stop_script = (REPOSITORY_ROOT / "scripts" / "stop-paper-week.sh").read_text()
+
+    assert '"command_type":"stop"' in stop_script
+    assert '"confirmation":"CONFIRM STOP"' in stop_script
+    assert '"${command_status}" == "rejected"' in stop_script
+    assert '"${command_status}" == "completed"' in stop_script
+    assert stop_script.index('"command_type":"stop"') < stop_script.index(
+        'paper_signal_process_tree "${worker_pid}"'
+    )

@@ -29,7 +29,7 @@ def _request_body() -> dict[str, object]:
 
 async def _prepare_experiment(uow_factory: UnitOfWork) -> None:
     async with uow_factory.begin() as uow:
-        await uow.experiments.create(_manifest(experiment_id=EXPERIMENT_ID, schema_revision="0016"))
+        await uow.experiments.create(_manifest(experiment_id=EXPERIMENT_ID, schema_revision="0017"))
 
 
 async def test_command_endpoint_rejects_missing_and_wrong_bearer_without_writing(
