@@ -39,6 +39,12 @@ with no error-level event. Its JSON,
 Markdown, and SHA-256 manifest form the readiness verdict; a failed bundle is evidence to
 investigate, never permission to begin the week.
 
+The seven-day launcher requires that bundle explicitly. Prepare a new week
+experiment manifest from the exact same clean commit; do not reuse or restart
+the stopped soak experiment. The launch preflight re-hashes the bundle,
+re-validates every ordered soak gate, matches the full repository and agent
+identity, and rejects evidence more than 24 hours old.
+
 ## During the run
 
 - Do not change code, dependencies, manifest, thresholds, symbols, agent weights, fees, latency, or risk settings.
@@ -55,6 +61,14 @@ full experimental day. Invoke the prepared seven-day launcher during the final t
 before midnight; it waits only for that immediate boundary and fails closed if activation is
 outside seconds `00` through `05` or wakes late. Soak and process-drill launches continue to
 align to the next safe minute instead.
+
+```bash
+scripts/start-paper-week.sh \
+  artifacts/manifests/WEEK_MANIFEST.json \
+  artifacts/restore-drills/RESTORE/restore-verification.json \
+  artifacts/qualification/QUALIFICATION_BUNDLE \
+  artifacts/readiness/SOAK_READINESS_BUNDLE
+```
 
 After the seventh Berlin day has ended, keep the worker running while generating that
 day's bundle, then freeze the final aggregate:

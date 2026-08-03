@@ -28,6 +28,10 @@ from maais.operations.qualification import (
     load_verified_qualification,
     qualification_evidence_passes,
 )
+from maais.operations.soak_readiness import (
+    load_verified_soak_readiness,
+    soak_readiness_evidence_passes,
+)
 from maais.operations.verification import establish_read_only_snapshot, ledger_consistency_payload
 
 UTC = timezone.utc
@@ -56,6 +60,8 @@ def evaluate_candidate_preflight(
     run_purpose: str,
     process_drill_evidence: dict[str, object],
     process_drill_evidence_verified: bool,
+    soak_readiness_evidence: dict[str, object] | None = None,
+    soak_readiness_evidence_verified: bool = False,
 ) -> dict[str, object]:
     """Evaluate every local, identity, safety, and recovery prerequisite."""
     runtime_policy_error: str | None = None
@@ -88,6 +94,16 @@ def evaluate_candidate_preflight(
     process_drill_gate_passed = purpose_valid and (
         run_purpose != "soak"
         or (process_drill_evidence_verified and process_drill_evidence.get("passed") is True)
+    )
+    soak_readiness_evidence = soak_readiness_evidence or {"passed": False}
+    soak_readiness_passed = soak_readiness_evidence_passes(
+        soak_readiness_evidence,
+        repository=repository,
+        bundle_verified=soak_readiness_evidence_verified,
+        evaluated_at=evaluated_at,
+    )
+    soak_readiness_gate_passed = purpose_valid and (
+        run_purpose != "seven_day" or soak_readiness_passed
     )
     checks = [
         _check(
@@ -192,6 +208,19 @@ def evaluate_candidate_preflight(
                 )
             ),
         ),
+        _check(
+            "soak_readiness_gate",
+            soak_readiness_gate_passed,
+            (
+                f"run purpose={run_purpose}; soak readiness evidence is not required"
+                if run_purpose != "seven_day" and purpose_valid
+                else (
+                    "run purpose=seven_day; verified 24-hour soak readiness evidence passed"
+                    if soak_readiness_gate_passed
+                    else "seven-day run requires passing, verified 24-hour soak readiness evidence"
+                )
+            ),
+        ),
     ]
     return {
         "passed": all(check["passed"] is True for check in checks),
@@ -200,6 +229,7 @@ def evaluate_candidate_preflight(
         "qualification_report_id": qualification.get("report_id"),
         "run_purpose": run_purpose,
         "process_drill_report_id": process_drill_evidence.get("report_id"),
+        "soak_readiness_report_id": soak_readiness_evidence.get("report_id"),
         "safety": {"paper_trading_only": True, "live_money": False},
         "checks": checks,
     }
@@ -235,6 +265,7 @@ async def run_candidate_preflight(
     qualification_directory: Path,
     run_purpose: str,
     process_drill_directory: Path | None,
+    soak_readiness_directory: Path | None,
     repository_root: Path,
     dashboard_directory: Path,
     minimum_free_gb: int,
@@ -267,6 +298,17 @@ async def run_candidate_preflight(
             repository=repository,
             bundle_verified=process_bundle_verified,
         )
+    if soak_readiness_directory is None:
+        soak_readiness_evidence: dict[str, object] = {"passed": False}
+        soak_readiness_evidence_verified = False
+    else:
+        try:
+            soak_readiness_evidence, soak_readiness_evidence_verified = (
+                load_verified_soak_readiness(soak_readiness_directory)
+            )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            soak_readiness_evidence = {"passed": False, "error": str(exc)}
+            soak_readiness_evidence_verified = False
     report = evaluate_candidate_preflight(
         manifest=manifest,
         repository=repository,
@@ -285,11 +327,16 @@ async def run_candidate_preflight(
         run_purpose=run_purpose,
         process_drill_evidence=process_drill_evidence,
         process_drill_evidence_verified=process_drill_evidence_verified,
+        soak_readiness_evidence=soak_readiness_evidence,
+        soak_readiness_evidence_verified=soak_readiness_evidence_verified,
     )
     report["evaluated_at"] = evaluated_at.isoformat().replace("+00:00", "Z")
     report["restore_verification_path"] = str(restore_verification_path.resolve())
     report["qualification_directory"] = str(qualification_directory.resolve())
     report["process_drill_directory"] = (
         str(process_drill_directory.resolve()) if process_drill_directory is not None else None
+    )
+    report["soak_readiness_directory"] = (
+        str(soak_readiness_directory.resolve()) if soak_readiness_directory is not None else None
     )
     return report

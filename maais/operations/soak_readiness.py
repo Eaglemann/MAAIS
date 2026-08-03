@@ -44,8 +44,26 @@ from maais.operations.verification import establish_read_only_snapshot, ledger_c
 
 UTC = timezone.utc
 SOAK_DURATION = timedelta(hours=24)
-SOAK_READINESS_SCHEMA_VERSION = 1
+SOAK_READINESS_SCHEMA_VERSION = 2
+SOAK_READINESS_BUNDLE_SCHEMA_VERSION = 1
+SOAK_READINESS_MAX_AGE = timedelta(hours=24)
 BERLIN = ZoneInfo("Europe/Berlin")
+SOAK_READINESS_REQUIRED_CHECKS = (
+    "paper_only_safety",
+    "candidate_identity",
+    "postgres_cluster_identity",
+    "preflight_evidence",
+    "pre_soak_process_drills",
+    "minimum_duration",
+    "process_continuity",
+    "runtime_health",
+    "ledger_consistency",
+    "operational_state",
+    "decision_cardinality",
+    "required_data_quality",
+    "structured_logs",
+    "daily_report_reconciliation",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +123,16 @@ def _health_state_from_overview(overview: Mapping[str, object]) -> dict[str, obj
 
 def _manifest_agents(manifest: ExperimentManifest) -> dict[str, str]:
     return {version.agent_name: version.implementation_hash for version in manifest.agent_versions}
+
+
+def _repository_payload(repository: RepositoryIdentity) -> dict[str, object]:
+    return {
+        "git_sha": repository.git_sha,
+        "worktree_hash": repository.worktree_hash,
+        "lock_hash": repository.lock_hash,
+        "schema_revision": repository.schema_revision,
+        "agent_implementation_hashes": dict(sorted(repository.agent_implementation_hashes.items())),
+    }
 
 
 def _decision_coverage(
@@ -430,6 +458,7 @@ def evaluate_soak_readiness(
         "passed": passed,
         "verdict": "ready_for_seven_day_paper_test" if passed else "not_ready",
         "safety": {"paper_trading_only": True, "live_money": False},
+        "repository": _repository_payload(repository),
         "experiment": {
             "id": str(manifest.experiment_id),
             "name": manifest.name,
@@ -551,6 +580,7 @@ def write_soak_readiness_bundle(
         manifest_path.write_text(
             json.dumps(
                 {
+                    "soak_readiness_bundle_schema_version": (SOAK_READINESS_BUNDLE_SCHEMA_VERSION),
                     "report_id": report_id,
                     "report_schema_version": SOAK_READINESS_SCHEMA_VERSION,
                     "artifacts": {
@@ -570,6 +600,96 @@ def write_soak_readiness_bundle(
         json_path=target / "verdict.json",
         markdown_path=target / "verdict.md",
         manifest_path=target / "bundle-manifest.json",
+    )
+
+
+def load_verified_soak_readiness(directory: Path) -> tuple[dict[str, object], bool]:
+    json_path = directory / "verdict.json"
+    manifest_path = directory / "bundle-manifest.json"
+    report_value = json.loads(json_path.read_text(encoding="utf-8"))
+    manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(report_value, dict) or not isinstance(manifest_value, dict):
+        raise TypeError("soak readiness bundle files must contain JSON objects")
+    artifacts = manifest_value.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return cast(dict[str, object], report_value), False
+    expected_artifacts = {"verdict.json", "verdict.md"}
+    expected_directory = expected_artifacts | {"bundle-manifest.json"}
+    entries = tuple(directory.iterdir())
+    verified = (
+        manifest_value.get("soak_readiness_bundle_schema_version")
+        == SOAK_READINESS_BUNDLE_SCHEMA_VERSION
+        and manifest_value.get("report_schema_version") == SOAK_READINESS_SCHEMA_VERSION
+        and manifest_value.get("report_id") == report_value.get("report_id")
+        and set(artifacts) == expected_artifacts
+        and {path.name for path in entries} == expected_directory
+        and all(path.is_file() and not path.is_symlink() for path in entries)
+    )
+    for filename in expected_artifacts:
+        identity = artifacts.get(filename)
+        path = directory / filename
+        if (
+            not isinstance(identity, Mapping)
+            or not path.is_file()
+            or identity.get("sha256") != _sha256(path)
+            or identity.get("bytes") != path.stat().st_size
+        ):
+            verified = False
+    return cast(dict[str, object], report_value), verified
+
+
+def soak_readiness_evidence_passes(
+    report: Mapping[str, object],
+    *,
+    repository: RepositoryIdentity,
+    bundle_verified: bool,
+    evaluated_at: datetime,
+    maximum_age: timedelta = SOAK_READINESS_MAX_AGE,
+) -> bool:
+    if evaluated_at.tzinfo is None or evaluated_at.utcoffset() != timedelta(0):
+        raise ValueError("soak readiness evaluation time must be UTC-aware")
+    if maximum_age <= timedelta(0):
+        raise ValueError("soak readiness maximum age must be positive")
+    generated_value = report.get("generated_at")
+    if not isinstance(generated_value, str):
+        return False
+    try:
+        generated_at = datetime.fromisoformat(generated_value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if generated_at.tzinfo is None or generated_at.utcoffset() != timedelta(0):
+        return False
+    age = evaluated_at - generated_at
+    checks = report.get("checks")
+    soak = report.get("soak")
+    if (
+        not isinstance(checks, list)
+        or not all(isinstance(check, Mapping) for check in checks)
+        or not isinstance(soak, Mapping)
+    ):
+        return False
+    names = [cast(Mapping[str, object], check).get("name") for check in checks]
+    report_without_id = {key: value for key, value in report.items() if key != "report_id"}
+    elapsed_seconds = soak.get("elapsed_seconds")
+    required_seconds = soak.get("required_seconds")
+    return (
+        bundle_verified
+        and report.get("report_type") == "soak_readiness"
+        and report.get("report_schema_version") == SOAK_READINESS_SCHEMA_VERSION
+        and report.get("passed") is True
+        and report.get("verdict") == "ready_for_seven_day_paper_test"
+        and report.get("safety") == {"paper_trading_only": True, "live_money": False}
+        and report.get("repository") == _repository_payload(repository)
+        and names == list(SOAK_READINESS_REQUIRED_CHECKS)
+        and all(cast(Mapping[str, object], check).get("passed") is True for check in checks)
+        and isinstance(elapsed_seconds, int)
+        and not isinstance(elapsed_seconds, bool)
+        and elapsed_seconds >= int(SOAK_DURATION.total_seconds())
+        and isinstance(required_seconds, int)
+        and not isinstance(required_seconds, bool)
+        and required_seconds >= int(SOAK_DURATION.total_seconds())
+        and report.get("report_id") == content_hash(report_without_id)
+        and timedelta(0) <= age <= maximum_age
     )
 
 

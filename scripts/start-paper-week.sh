@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 3 || $# -gt 4 ]]; then
-  echo "usage: $0 MANIFEST RESTORE_VERIFICATION QUALIFICATION_BUNDLE [MISSION_CONTROL_PORT]" >&2
-  exit 64
-fi
-
 run_purpose="${MAAIS_RUN_PURPOSE:-seven_day}"
 if [[ "${run_purpose}" != "process_drill" && "${run_purpose}" != "soak" && "${run_purpose}" != "seven_day" ]]; then
   echo "MAAIS_RUN_PURPOSE must be process_drill, soak, or seven_day" >&2
   exit 64
+fi
+soak_readiness_bundle=""
+if [[ "${run_purpose}" == "seven_day" ]]; then
+  if [[ $# -lt 4 || $# -gt 5 ]]; then
+    echo "usage: $0 MANIFEST RESTORE_VERIFICATION QUALIFICATION_BUNDLE SOAK_READINESS_BUNDLE [MISSION_CONTROL_PORT]" >&2
+    exit 64
+  fi
+  soak_readiness_bundle="$(cd "$4" && pwd)"
+  mission_control_port="${5:-8000}"
+else
+  if [[ $# -lt 3 || $# -gt 4 ]]; then
+    echo "usage: $0 MANIFEST RESTORE_VERIFICATION QUALIFICATION_BUNDLE [MISSION_CONTROL_PORT]" >&2
+    exit 64
+  fi
+  mission_control_port="${4:-8000}"
 fi
 process_drill_bundle="${MAAIS_PROCESS_DRILL_BUNDLE:-}"
 if [[ "${run_purpose}" == "soak" ]]; then
@@ -26,7 +36,6 @@ source "${script_dir}/paper-process.sh"
 manifest_path="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 restore_path="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 qualification_path="$(cd "$3" && pwd)"
-mission_control_port="${4:-8000}"
 state_dir="${repository_root}/artifacts/run-state"
 log_dir="${state_dir}/logs"
 current_state="${state_dir}/current.json"
@@ -66,6 +75,9 @@ preflight_arguments=(
 )
 if [[ "${run_purpose}" == "soak" ]]; then
   preflight_arguments+=(--process-drills "${process_drill_bundle}")
+fi
+if [[ "${run_purpose}" == "seven_day" ]]; then
+  preflight_arguments+=(--soak-readiness "${soak_readiness_bundle}")
 fi
 RUN_MODE=paper_live uv run maais "${preflight_arguments[@]}" > "${preflight_path}"
 
@@ -222,6 +234,7 @@ jq -n \
   --arg qualification "${qualification_path}" \
   --arg run_purpose "${run_purpose}" \
   --arg process_drill_bundle "${process_drill_bundle}" \
+  --arg soak_readiness_bundle "${soak_readiness_bundle}" \
   --arg preflight "${preflight_path}" \
   --arg control_token_file "${control_token_file}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -236,7 +249,7 @@ jq -n \
   --arg dashboard_session "${dashboard_session}" \
   --arg awake_session "${awake_session}" \
   --argjson port "${mission_control_port}" \
-  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,qualification:$qualification,run_purpose:$run_purpose,process_drill_bundle:$process_drill_bundle,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
+  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,qualification:$qualification,run_purpose:$run_purpose,process_drill_bundle:$process_drill_bundle,soak_readiness_bundle:$soak_readiness_bundle,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
   > "${temporary_state}"
 mv "${temporary_state}" "${current_state}"
 state_created=true

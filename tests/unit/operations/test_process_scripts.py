@@ -219,6 +219,24 @@ paper_wait_for_start_window 5
     assert "missed the Berlin midnight start window" in result.stderr
 
 
+def test_seven_day_launcher_requires_an_explicit_soak_readiness_bundle() -> None:
+    result = subprocess.run(
+        [
+            str(REPOSITORY_ROOT / "scripts" / "start-paper-week.sh"),
+            "manifest.json",
+            "restore-verification.json",
+            "qualification-bundle",
+        ],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 64
+    assert "SOAK_READINESS_BUNDLE" in result.stderr
+
+
 def test_sleep_inhibitor_executes_caffeinate_for_worker_pid(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

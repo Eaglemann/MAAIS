@@ -64,6 +64,8 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/restore-drills/latest/restore-verification.json",
             "--qualification",
             "artifacts/qualification/latest",
+            "--soak-readiness",
+            "artifacts/readiness/latest",
         ]
     )
     qualify = parser.parse_args(
@@ -155,6 +157,7 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert preflight.repository == Path.cwd()
     assert preflight.minimum_free_gb == 5
     assert preflight.qualification == Path("artifacts/qualification/latest")
+    assert preflight.soak_readiness == Path("artifacts/readiness/latest")
     assert qualify.repository == Path.cwd()
     assert qualify.output == Path("artifacts/qualification")
     assert process_drills.repository == Path.cwd()
@@ -219,6 +222,40 @@ def test_qualification_uses_separate_test_database_environment_without_printing_
         "qualification": str(bundle / "qualification.json"),
         "report_id": "a" * 64,
     }
+
+
+def test_preflight_forwards_the_soak_readiness_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_preflight(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"passed": False}
+
+    soak_bundle = tmp_path / "soak-readiness"
+    monkeypatch.setattr("maais.cli.run_candidate_preflight", fake_preflight)
+
+    assert (
+        main(
+            [
+                "preflight",
+                "--manifest",
+                "manifest.json",
+                "--restore-verification",
+                "restore.json",
+                "--qualification",
+                "qualification",
+                "--soak-readiness",
+                str(soak_bundle),
+            ]
+        )
+        == 1
+    )
+    assert captured["soak_readiness_directory"] == soak_bundle
+    assert json.loads(capsys.readouterr().out) == {"passed": False}
 
 
 def test_process_drill_verdict_prints_only_the_frozen_bundle_identity(

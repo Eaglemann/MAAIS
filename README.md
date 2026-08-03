@@ -69,7 +69,9 @@ separate 24-hour soak pass.
 
 Disposable process drills and the 24-hour soak have separate purpose-bound
 launchers. The soak verdict rejects evidence from a drill run, any restart
-inside the soak, or a process-drill bundle from a different commit.
+inside the soak, or a process-drill bundle from a different commit. The
+seven-day launcher then requires that hash-verified verdict explicitly and
+rejects a failed, stale, incomplete, tampered, or different-commit bundle.
 
 - [Local setup](docs/runbooks/setup.md)
 - [Normal operations](docs/runbooks/operations.md)

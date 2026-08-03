@@ -4,6 +4,7 @@ from typing import cast
 
 from maais.config.modes import RunMode
 from maais.config.settings import Settings
+from maais.domain.json import content_hash
 from maais.experiments.prepare import RepositoryIdentity
 from maais.operations.preflight import evaluate_candidate_preflight
 from maais.operations.qualification import (
@@ -57,6 +58,52 @@ def _qualification(repository: RepositoryIdentity) -> dict[str, object]:
         results=results,
         generated_at=datetime(2026, 8, 3, tzinfo=timezone.utc),
     )
+
+
+def _soak_readiness(
+    repository: RepositoryIdentity,
+    *,
+    generated_at: datetime,
+) -> dict[str, object]:
+    report: dict[str, object] = {
+        "report_type": "soak_readiness",
+        "report_schema_version": 2,
+        "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
+        "passed": True,
+        "verdict": "ready_for_seven_day_paper_test",
+        "safety": {"paper_trading_only": True, "live_money": False},
+        "repository": {
+            "git_sha": repository.git_sha,
+            "worktree_hash": repository.worktree_hash,
+            "lock_hash": repository.lock_hash,
+            "schema_revision": repository.schema_revision,
+            "agent_implementation_hashes": dict(
+                sorted(repository.agent_implementation_hashes.items())
+            ),
+        },
+        "soak": {"elapsed_seconds": 86_400, "required_seconds": 86_400},
+        "checks": [
+            {"name": name, "passed": True, "detail": "verified"}
+            for name in (
+                "paper_only_safety",
+                "candidate_identity",
+                "postgres_cluster_identity",
+                "preflight_evidence",
+                "pre_soak_process_drills",
+                "minimum_duration",
+                "process_continuity",
+                "runtime_health",
+                "ledger_consistency",
+                "operational_state",
+                "decision_cardinality",
+                "required_data_quality",
+                "structured_logs",
+                "daily_report_reconciliation",
+            )
+        ],
+    }
+    report["report_id"] = content_hash(report)
+    return report
 
 
 def test_candidate_preflight_passes_only_when_every_gate_matches() -> None:
@@ -168,3 +215,105 @@ def test_candidate_preflight_explains_all_failed_gates() -> None:
         "fresh_qualification",
         "process_drill_gate",
     }.issubset(failed)
+
+
+def test_seven_day_preflight_rejects_missing_soak_readiness_evidence() -> None:
+    manifest = _live_manifest(schema_revision="0015", worktree_hash=None)
+    repository = _repository(manifest)
+
+    report = evaluate_candidate_preflight(
+        manifest=manifest,
+        repository=repository,
+        settings=Settings(run_mode=RunMode.PAPER_LIVE),
+        database_name="maais",
+        database_schema_revision="0015",
+        stored_manifest_hash=None,
+        ledger={"ok": True, "error_count": 0, "errors": []},
+        restore_verification=_restore_verification(),
+        dashboard_built=True,
+        free_disk_bytes=10 * 1024**3,
+        minimum_free_bytes=5 * 1024**3,
+        qualification=_qualification(repository),
+        qualification_bundle_verified=True,
+        evaluated_at=datetime(2026, 8, 3, 1, tzinfo=timezone.utc),
+        run_purpose="seven_day",
+        process_drill_evidence={"passed": False},
+        process_drill_evidence_verified=False,
+        soak_readiness_evidence={"passed": False},
+        soak_readiness_evidence_verified=False,
+    )
+
+    checks = cast(list[dict[str, object]], report["checks"])
+    soak_check = next(check for check in checks if check["name"] == "soak_readiness_gate")
+    assert report["passed"] is False
+    assert soak_check["passed"] is False
+
+
+def test_seven_day_preflight_rejects_stale_soak_readiness_evidence() -> None:
+    manifest = _live_manifest(schema_revision="0015", worktree_hash=None)
+    repository = _repository(manifest)
+
+    report = evaluate_candidate_preflight(
+        manifest=manifest,
+        repository=repository,
+        settings=Settings(run_mode=RunMode.PAPER_LIVE),
+        database_name="maais",
+        database_schema_revision="0015",
+        stored_manifest_hash=None,
+        ledger={"ok": True, "error_count": 0, "errors": []},
+        restore_verification=_restore_verification(),
+        dashboard_built=True,
+        free_disk_bytes=10 * 1024**3,
+        minimum_free_bytes=5 * 1024**3,
+        qualification=_qualification(repository),
+        qualification_bundle_verified=True,
+        evaluated_at=datetime(2026, 8, 4, 1, 0, 1, tzinfo=timezone.utc),
+        run_purpose="seven_day",
+        process_drill_evidence={"passed": False},
+        process_drill_evidence_verified=False,
+        soak_readiness_evidence=_soak_readiness(
+            repository,
+            generated_at=datetime(2026, 8, 3, 1, tzinfo=timezone.utc),
+        ),
+        soak_readiness_evidence_verified=True,
+    )
+
+    checks = cast(list[dict[str, object]], report["checks"])
+    soak_check = next(check for check in checks if check["name"] == "soak_readiness_gate")
+    assert report["passed"] is False
+    assert soak_check["passed"] is False
+
+
+def test_seven_day_preflight_accepts_fresh_exact_soak_readiness_evidence() -> None:
+    manifest = _live_manifest(schema_revision="0015", worktree_hash=None)
+    repository = _repository(manifest)
+
+    report = evaluate_candidate_preflight(
+        manifest=manifest,
+        repository=repository,
+        settings=Settings(run_mode=RunMode.PAPER_LIVE),
+        database_name="maais",
+        database_schema_revision="0015",
+        stored_manifest_hash=None,
+        ledger={"ok": True, "error_count": 0, "errors": []},
+        restore_verification=_restore_verification(),
+        dashboard_built=True,
+        free_disk_bytes=10 * 1024**3,
+        minimum_free_bytes=5 * 1024**3,
+        qualification=_qualification(repository),
+        qualification_bundle_verified=True,
+        evaluated_at=datetime(2026, 8, 3, 1, tzinfo=timezone.utc),
+        run_purpose="seven_day",
+        process_drill_evidence={"passed": False},
+        process_drill_evidence_verified=False,
+        soak_readiness_evidence=_soak_readiness(
+            repository,
+            generated_at=datetime(2026, 8, 3, tzinfo=timezone.utc),
+        ),
+        soak_readiness_evidence_verified=True,
+    )
+
+    checks = cast(list[dict[str, object]], report["checks"])
+    soak_check = next(check for check in checks if check["name"] == "soak_readiness_gate")
+    assert report["passed"] is True
+    assert soak_check["passed"] is True

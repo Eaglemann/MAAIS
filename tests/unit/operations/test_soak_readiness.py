@@ -8,7 +8,9 @@ import pytest
 
 from maais.config.modes import RunMode
 from maais.config.settings import Settings
+from maais.domain.json import content_hash
 from maais.experiments.prepare import RepositoryIdentity
+from maais.operations import soak_readiness as soak_readiness_module
 from maais.operations.health import evaluate_experiment_health
 from maais.operations.soak_readiness import (
     _health_state_from_overview,
@@ -302,6 +304,139 @@ def test_soak_readiness_bundle_is_immutable_and_hash_manifested(tmp_path: Path) 
     assert "ready_for_seven_day_paper_test" in paths.markdown_path.read_text()
     with pytest.raises(FileExistsError, match="already exists"):
         write_soak_readiness_bundle(report, tmp_path)
+
+
+def test_fresh_soak_bundle_verifies_for_the_exact_repository(tmp_path: Path) -> None:
+    inputs = _inputs()
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    paths = write_soak_readiness_bundle(report, tmp_path)
+
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=inputs["repository"],  # type: ignore[arg-type]
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=1),
+    )
+
+
+def test_soak_bundle_verification_rejects_a_tampered_artifact(tmp_path: Path) -> None:
+    report = evaluate_soak_readiness(**_inputs())  # type: ignore[arg-type]
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    with paths.markdown_path.open("a", encoding="utf-8") as handle:
+        handle.write("tampered\n")
+
+    _, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert bundle_verified is False
+
+
+def test_soak_readiness_evidence_expires_after_24_hours(tmp_path: Path) -> None:
+    inputs = _inputs()
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert not soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=inputs["repository"],  # type: ignore[arg-type]
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=24, seconds=1),
+    )
+
+
+def test_soak_readiness_evidence_rejects_repository_identity_drift(tmp_path: Path) -> None:
+    inputs = _inputs()
+    repository = inputs["repository"]
+    assert isinstance(repository, RepositoryIdentity)
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert not soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=replace(repository, git_sha="f" * 40),
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=1),
+    )
+
+
+def test_soak_readiness_evidence_rejects_a_missing_required_gate(tmp_path: Path) -> None:
+    inputs = _inputs()
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = report["checks"]
+    assert isinstance(checks, list)
+    report["checks"] = checks[:-1]
+    report["report_id"] = content_hash(
+        {key: value for key, value in report.items() if key != "report_id"}
+    )
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert not soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=inputs["repository"],  # type: ignore[arg-type]
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=1),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "report_type",
+        "report_schema_version",
+        "legacy_schema",
+        "verdict",
+        "safety",
+        "failed_gate",
+        "elapsed_seconds",
+        "required_seconds",
+        "report_id",
+    ),
+)
+def test_soak_readiness_evidence_rejects_semantically_invalid_verdicts(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    inputs = _inputs()
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    if mutation == "report_type":
+        report["report_type"] = "other"
+    elif mutation == "report_schema_version":
+        report["report_schema_version"] = 99
+    elif mutation == "legacy_schema":
+        report["report_schema_version"] = 1
+    elif mutation == "verdict":
+        report["verdict"] = "not_ready"
+    elif mutation == "safety":
+        report["safety"] = {"paper_trading_only": False, "live_money": True}
+    elif mutation == "failed_gate":
+        checks = report["checks"]
+        assert isinstance(checks, list) and isinstance(checks[0], dict)
+        checks[0]["passed"] = False
+    else:
+        soak = report["soak"]
+        assert isinstance(soak, dict)
+        if mutation == "elapsed_seconds":
+            soak["elapsed_seconds"] = 86_399
+        elif mutation == "required_seconds":
+            soak["required_seconds"] = 86_399
+    report["report_id"] = content_hash(
+        {key: value for key, value in report.items() if key != "report_id"}
+    )
+    if mutation == "report_id":
+        report["report_id"] = "f" * 64
+    paths = write_soak_readiness_bundle(report, tmp_path)
+    loaded, bundle_verified = soak_readiness_module.load_verified_soak_readiness(paths.directory)
+
+    assert not soak_readiness_module.soak_readiness_evidence_passes(
+        loaded,
+        repository=inputs["repository"],  # type: ignore[arg-type]
+        bundle_verified=bundle_verified,
+        evaluated_at=NOW + timedelta(hours=1),
+    )
 
 
 def test_log_audit_counts_every_failure_but_caps_embedded_samples(tmp_path: Path) -> None:

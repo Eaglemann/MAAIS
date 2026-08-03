@@ -40,14 +40,18 @@ bundle. Do not use `start-paper-week.sh` for this gate.
 
 ### Seven-day experiment
 
-Use the exact candidate manifest, passing restore-verification artifact, and the
-fresh qualification bundle printed by `maais qualify-candidate`:
+After the soak verdict passes, prepare a new week experiment manifest from the
+same clean candidate commit. The soak experiment remains immutable stopped
+evidence and is never restarted. Use the new manifest, passing
+restore-verification artifact, a qualification bundle no older than 24 hours,
+and the passing soak-readiness bundle no older than 24 hours:
 
 ```bash
 MAAIS_DOCKER_CONTEXT=desktop-linux scripts/start-paper-week.sh \
   artifacts/manifests/week-candidate-YYYY-MM-DD.json \
   artifacts/restore-drills/<drill>/restore-verification.json \
-  artifacts/qualification/<qualification-bundle>
+  artifacts/qualification/<qualification-bundle> \
+  artifacts/readiness/<soak-readiness-bundle>
 ```
 
 Use the context that owns the PostgreSQL port on this machine; `desktop-linux`
@@ -57,13 +61,14 @@ compare the container cluster, configured database endpoint, and recorded
 candidate system identifier. They fail closed on context drift or cluster
 replacement.
 
-The script starts PostgreSQL, applies migrations, verifies the exact-commit
-qualification and restore evidence in fail-closed preflight, starts Mission
-Control on localhost, starts the paper worker, waits for a running checkpoint
-plus active lease, starts a tracked OS sleep inhibitor, and starts the automatic
-Berlin-day close supervisor. The four processes run in named detached `tmux`
-sessions so they survive the launching terminal. Session names, process IDs,
-all three immutable inputs, preflight output, and logs are recorded under
+The script starts PostgreSQL, applies migrations, validates the restore result,
+and independently re-hashes the qualification and soak-readiness bundles.
+Preflight rejects a failed, stale, tampered, incomplete, or different-commit
+soak verdict before the official clock can start. It then starts Mission
+Control on localhost, the paper worker, a tracked OS sleep inhibitor, and the
+automatic Berlin-day close supervisor. The four processes run in named
+detached `tmux` sessions so they survive the launching terminal. Session names,
+process IDs, all immutable inputs, preflight output, and logs are recorded under
 `artifacts/run-state/`. Startup fails if `tmux` or both supported sleep
 inhibitors are unavailable.
 

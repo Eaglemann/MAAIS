@@ -181,6 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--manifest", type=Path, required=True)
     preflight.add_argument("--restore-verification", type=Path, required=True)
     preflight.add_argument("--qualification", type=Path, required=True)
+    preflight.add_argument("--soak-readiness", type=Path)
     preflight.add_argument(
         "--run-purpose",
         choices=("process_drill", "soak", "seven_day"),
@@ -430,6 +431,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 qualification_directory=arguments.qualification,
                 run_purpose=arguments.run_purpose,
                 process_drill_directory=arguments.process_drills,
+                soak_readiness_directory=arguments.soak_readiness,
                 repository_root=arguments.repository,
                 dashboard_directory=arguments.dashboard_dir,
                 minimum_free_gb=arguments.minimum_free_gb,
