@@ -158,6 +158,55 @@ cp "${worker_recovery_source}" "${work_directory}/worker-recovery.json"
 wait_for_post_recovery_cycle "${work_directory}/worker-recovery.json"
 capture_snapshot "${work_directory}/worker-after.json"
 
+experiment_id="$(jq -er '.experiment_id' "${state_path}")"
+drill_report_date="$(
+  cd "${repository_root}"
+  uv run python -c 'from datetime import datetime, timedelta; from zoneinfo import ZoneInfo; print((datetime.now(ZoneInfo("Europe/Berlin")).date() - timedelta(days=1)).isoformat())'
+)"
+daily_close_raw="${work_directory}/daily-close.raw.jsonl"
+daily_close_stderr="${work_directory}/daily-close.stderr.log"
+docker() {
+  echo "Docker is forbidden during the process-drill daily close" >&2
+  return 97
+}
+export -f docker
+if ! ENVIRONMENT=production RUN_MODE=paper_live \
+  "${script_dir}/daily-paper-ops.sh" "${experiment_id}" "${drill_report_date}" \
+  > "${daily_close_raw}" 2> "${daily_close_stderr}"; then
+  unset -f docker
+  cat "${daily_close_stderr}" >&2
+  exit 1
+fi
+unset -f docker
+backup_manifest_path="$(jq -ers '.[2].manifest' "${daily_close_raw}")"
+if [[ ! -f "${backup_manifest_path}" || -L "${backup_manifest_path}" ]]; then
+  echo "daily close did not produce a regular backup manifest" >&2
+  exit 1
+fi
+jq -s \
+  --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg experiment_id "${experiment_id}" \
+  --arg report_date "${drill_report_date}" \
+  --slurpfile state "${state_path}" \
+  --slurpfile backup_manifest "${backup_manifest_path}" \
+  'if length != 4 then
+     error("daily close must emit ledger, report, backup, and status evidence")
+   else
+     {
+       docker_disabled:true,
+       completed_at:$completed_at,
+       experiment_id:$experiment_id,
+       report_date:$report_date,
+       ledger:.[0],
+       report:.[1],
+       backup:.[2],
+       backup_manifest:$backup_manifest[0],
+       status:.[3],
+       run_state_report:([($state[0].daily_reports // [])[] | select(.report_date == $report_date)] | if length == 1 then .[0] else null end)
+     }
+   end' \
+  "${daily_close_raw}" > "${work_directory}/daily-close.json"
+
 (cd "${repository_root}" && uv run maais process-drill-verdict \
   --manifest "${manifest_path}" \
   --repository "${repository_root}" \
@@ -167,6 +216,7 @@ capture_snapshot "${work_directory}/worker-after.json"
   --worker-baseline "${work_directory}/worker-baseline.json" \
   --worker-recovery "${work_directory}/worker-recovery.json" \
   --worker-after "${work_directory}/worker-after.json" \
+  --daily-close "${work_directory}/daily-close.json" \
   --output "${repository_root}/artifacts/process-drills") \
   > "${work_directory}/verdict.json"
 

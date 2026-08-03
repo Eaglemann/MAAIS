@@ -21,8 +21,7 @@ docker_context="$(jq -er '.docker_context' "${current_state}")"
 postgres_system_identifier="$(jq -er '.postgres_system_identifier' "${current_state}")"
 current_postgres_system_identifier="$(
   cd "${repository_root}"
-  paper_assert_recorded_postgres_route \
-    "${docker_context}" \
+  paper_assert_recorded_configured_postgres_identity \
     "${postgres_system_identifier}"
 )"
 

@@ -173,6 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     process_drills.add_argument("--worker-baseline", type=Path, required=True)
     process_drills.add_argument("--worker-recovery", type=Path, required=True)
     process_drills.add_argument("--worker-after", type=Path, required=True)
+    process_drills.add_argument("--daily-close", type=Path, required=True)
     process_drills.add_argument("--output", type=Path, required=True)
     preflight = commands.add_parser(
         "preflight",
@@ -407,6 +408,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             worker_baseline_path=arguments.worker_baseline,
             worker_recovery_path=arguments.worker_recovery,
             worker_after_path=arguments.worker_after,
+            daily_close_path=arguments.daily_close,
             output_directory=arguments.output,
             generated_at=datetime.now(timezone.utc),
         )

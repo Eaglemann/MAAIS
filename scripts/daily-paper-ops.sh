@@ -28,12 +28,10 @@ if [[ "${state_experiment_id}" != "${experiment_id}" ]]; then
   echo "current paper-week state belongs to ${state_experiment_id}, not ${experiment_id}" >&2
   exit 1
 fi
-docker_context="$(jq -er '.docker_context' "${current_state}")"
 postgres_system_identifier="$(jq -er '.postgres_system_identifier' "${current_state}")"
 
 cd "${repository_root}"
-paper_assert_recorded_postgres_route \
-  "${docker_context}" \
+paper_assert_recorded_configured_postgres_identity \
   "${postgres_system_identifier}" >/dev/null
 operation_lock="${state_dir}/daily-${experiment_id}-${report_date}.lock"
 paper_acquire_operation_lock "${operation_lock}" "daily-paper-close"

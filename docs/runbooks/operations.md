@@ -22,8 +22,10 @@ projections, and passing ledgers. The worker fault is injected during seconds
 `10` through `15`, after the prior close cycle and early enough for lease
 takeover before the next close. The runner waits until post-recovery decisions
 are stable and no gap recovery remains active. The verdict rejects any open or
-operator-review incident after either recovery. It freezes every raw JSON record
-and report in a SHA-256 bundle under
+operator-review incident after either recovery. It then disables the Docker
+command and requires the runtime daily-close path to complete an immutable
+report, validated backup, and four-process health check. It freezes every raw
+JSON record and report in a SHA-256 bundle under
 `artifacts/process-drills/`, then stops the disposable run. A failure is evidence
 to investigate and cannot be used by the soak.
 
@@ -63,10 +65,11 @@ MAAIS_DOCKER_CONTEXT=desktop-linux scripts/start-paper-week.sh \
 
 Use the context that owns the PostgreSQL port on this machine; `desktop-linux`
 is the Docker Desktop context on macOS, while other installations may use
-`default` or another explicit name. Startup, status, daily close, and recovery
-compare the container cluster, configured database endpoint, and recorded
-candidate system identifier. They fail closed on context drift or cluster
-replacement.
+`default` or another explicit name. Startup and recovery compare the container
+cluster, configured database endpoint, and recorded candidate system identifier.
+Once the timed run is active, status and daily close do not invoke Docker: they
+compare the configured database endpoint directly with the system identifier
+frozen at startup. Every path fails closed on context drift or cluster replacement.
 
 The script starts PostgreSQL, applies migrations, validates the restore result,
 and independently re-hashes the qualification and soak-readiness bundles.

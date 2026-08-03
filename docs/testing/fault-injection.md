@@ -49,5 +49,9 @@ only during seconds `10` through `15`, after the prior 10-symbol close cycle and
 with enough time for expired-lease takeover before the next close. The verdict
 then waits for a stable, recovery-free post-recovery symbol cycle. Any open
 incident or operator-review incident in either recovery snapshot fails the
-verdict. The runner stops the disposable candidate after both drills. Neither
+verdict. Before freezing the bundle, the runner disables the Docker command and
+executes the same daily report, backup, and status path used at Berlin midnight.
+The verdict requires the immutable report pointer, valid ledger, backup paths,
+all four live processes, local API health, and the unchanged PostgreSQL system
+identifier. The runner stops the disposable candidate after both drills. Neither
 drill is performed inside the official 24-hour or seven-day measurement window.

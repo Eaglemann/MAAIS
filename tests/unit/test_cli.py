@@ -92,6 +92,8 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/drills/worker-recovery.json",
             "--worker-after",
             "artifacts/drills/worker-after.json",
+            "--daily-close",
+            "artifacts/drills/daily-close.json",
             "--output",
             "artifacts/process-drills",
         ]
@@ -292,6 +294,8 @@ def test_process_drill_verdict_prints_only_the_frozen_bundle_identity(
         "worker-recovery.json",
         "--worker-after",
         "worker-after.json",
+        "--daily-close",
+        "daily-close.json",
         "--output",
         str(tmp_path),
     ]

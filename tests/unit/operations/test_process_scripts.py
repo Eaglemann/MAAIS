@@ -471,6 +471,37 @@ paper_assert_recorded_postgres_route desktop-linux 666666
     assert result.stdout.strip() == "666666"
 
 
+def test_runtime_postgres_identity_rejects_replacement_without_docker() -> None:
+    result = _run_bash(
+        """
+docker() { printf 'docker must not be called\n' >&2; return 99; }
+paper_configured_postgres_identity() { printf '777777\n'; }
+paper_assert_recorded_configured_postgres_identity 888888
+"""
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == (
+        "configured PostgreSQL system_identifier 777777 differs from recorded "
+        "candidate system_identifier 888888"
+    )
+
+
+def test_runtime_postgres_identity_matches_without_docker() -> None:
+    result = _run_bash(
+        """
+docker() { printf 'docker must not be called\n' >&2; return 99; }
+paper_configured_postgres_identity() { printf '999999\n'; }
+paper_assert_recorded_configured_postgres_identity 999999
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "999999"
+    assert result.stderr == ""
+
+
 def test_operation_lock_rejects_a_concurrent_live_owner(tmp_path: Path) -> None:
     lock_directory = tmp_path / "daily.lock"
     result = _run_bash(

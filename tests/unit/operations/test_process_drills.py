@@ -122,6 +122,8 @@ def _inputs() -> dict[str, object]:
         epoch=2,
         decisions=110,
     )
+    report_id = "d" * 64
+    report_directory = "/tmp/process-drill-report"
     return {
         "manifest": manifest,
         "manifest_path": MANIFEST_PATH,
@@ -148,6 +150,48 @@ def _inputs() -> dict[str, object]:
             "after": {"overview": worker_after["overview"], "ledger": {"ok": True}},
         },
         "worker_after": worker_after,
+        "daily_close": {
+            "docker_disabled": True,
+            "completed_at": "2026-08-03T01:05:00Z",
+            "experiment_id": str(manifest.experiment_id),
+            "report_date": "2026-08-02",
+            "ledger": {"ok": True, "error_count": 0, "errors": []},
+            "report": {"report_id": report_id, "directory": report_directory},
+            "run_state_report": {
+                "report_date": "2026-08-02",
+                "report_id": report_id,
+                "directory": report_directory,
+            },
+            "backup": {
+                "directory": "/tmp/process-drill-backup",
+                "dump": "/tmp/process-drill-backup/database.dump",
+                "manifest": "/tmp/process-drill-backup/backup-manifest.json",
+            },
+            "backup_manifest": {
+                "backup_schema_version": 1,
+                "schema_revision": "0017",
+                "ledger": {"ok": True, "error_count": 0, "errors": []},
+                "dump": {
+                    "format": "postgresql_custom",
+                    "bytes": 1024,
+                    "sha256": "e" * 64,
+                },
+            },
+            "status": {
+                "experiment_id": str(manifest.experiment_id),
+                "postgres_system_identifier": "123456",
+                "worker_alive": True,
+                "dashboard_alive": True,
+                "scheduler_alive": True,
+                "awake_alive": True,
+                "database_health": {
+                    "healthy": True,
+                    "experiment_id": str(manifest.experiment_id),
+                },
+                "api_health": {"status": "ok"},
+                "overview": {"experiment": {"id": str(manifest.experiment_id)}},
+            },
+        },
         "generated_at": NOW,
     }
 
@@ -230,6 +274,19 @@ def test_process_drills_reject_operator_incidents_after_recovery() -> None:
     assert "incident_free_after_each_recovery" in failed
 
 
+def test_process_drills_reject_an_incomplete_daily_close() -> None:
+    inputs = _inputs()
+    daily_close = dict(inputs["daily_close"])  # type: ignore[arg-type]
+    daily_close["backup"] = {}
+    inputs["daily_close"] = daily_close
+
+    report = evaluate_process_drills(**inputs)  # type: ignore[arg-type]
+    failed = {check["name"] for check in report["checks"] if not check["passed"]}  # type: ignore[union-attr]
+
+    assert report["passed"] is False
+    assert "docker_free_daily_close" in failed
+
+
 def test_process_drill_bundle_hashes_report_and_every_raw_artifact(tmp_path: Path) -> None:
     inputs = _inputs()
     report = evaluate_process_drills(**inputs)  # type: ignore[arg-type]
@@ -241,6 +298,7 @@ def test_process_drill_bundle_hashes_report_and_every_raw_artifact(tmp_path: Pat
         "worker-baseline",
         "worker-recovery",
         "worker-after",
+        "daily-close",
     ):
         path = tmp_path / f"{name}.json"
         path.write_text(json.dumps(inputs[name.replace("-", "_")]), encoding="utf-8")

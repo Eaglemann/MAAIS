@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -17,7 +17,8 @@ from maais.experiments.manifest import ExperimentManifest
 from maais.experiments.prepare import RepositoryIdentity, capture_repository_identity
 from maais.live import load_manifest_file
 
-PROCESS_DRILL_SCHEMA_VERSION = 2
+PROCESS_DRILL_SCHEMA_VERSION = 3
+PROCESS_DRILL_BUNDLE_SCHEMA_VERSION = 2
 PROCESS_DRILL_CHECKS = (
     "candidate_identity",
     "disposable_run_purpose",
@@ -33,6 +34,7 @@ PROCESS_DRILL_CHECKS = (
     "ledger_consistency",
     "healthy_after_each_recovery",
     "incident_free_after_each_recovery",
+    "docker_free_daily_close",
 )
 PROCESS_DRILL_ARTIFACTS = (
     "dashboard-baseline.json",
@@ -41,6 +43,7 @@ PROCESS_DRILL_ARTIFACTS = (
     "worker-baseline.json",
     "worker-recovery.json",
     "worker-after.json",
+    "daily-close.json",
 )
 
 
@@ -150,6 +153,73 @@ def _monotonic(values: Sequence[int | None]) -> bool:
     )
 
 
+def _nonempty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _daily_close_ok(
+    evidence: Mapping[str, object],
+    *,
+    expected_experiment: str,
+    expected_schema_revision: str,
+) -> bool:
+    report_date = evidence.get("report_date")
+    ledger = _object(evidence, "ledger")
+    report = _object(evidence, "report")
+    recorded_report = _object(evidence, "run_state_report")
+    backup = _object(evidence, "backup")
+    backup_manifest = _object(evidence, "backup_manifest")
+    backup_dump = _object(backup_manifest, "dump")
+    backup_ledger = _object(backup_manifest, "ledger")
+    status = _object(evidence, "status")
+    database_health = _object(status, "database_health")
+    api_health = _object(status, "api_health")
+    overview_experiment = _object(_object(status, "overview"), "experiment")
+    postgres_identity = status.get("postgres_system_identifier")
+    report_id = report.get("report_id")
+    report_directory = report.get("directory")
+    try:
+        report_date_valid = (
+            isinstance(report_date, str)
+            and date.fromisoformat(report_date).isoformat() == report_date
+        )
+    except ValueError:
+        report_date_valid = False
+    return (
+        evidence.get("docker_disabled") is True
+        and evidence.get("experiment_id") == expected_experiment
+        and _parse_utc(evidence.get("completed_at")) is not None
+        and report_date_valid
+        and _ledger_ok(ledger)
+        and isinstance(report_id, str)
+        and len(report_id) == 64
+        and _nonempty_string(report_directory)
+        and recorded_report.get("report_date") == report_date
+        and recorded_report.get("report_id") == report_id
+        and recorded_report.get("directory") == report_directory
+        and all(_nonempty_string(backup.get(key)) for key in ("directory", "dump", "manifest"))
+        and backup_manifest.get("backup_schema_version") == 1
+        and backup_manifest.get("schema_revision") == expected_schema_revision
+        and _ledger_ok(backup_ledger)
+        and backup_dump.get("format") == "postgresql_custom"
+        and isinstance(backup_dump.get("bytes"), int)
+        and cast(int, backup_dump["bytes"]) > 0
+        and isinstance(backup_dump.get("sha256"), str)
+        and len(cast(str, backup_dump["sha256"])) == 64
+        and status.get("experiment_id") == expected_experiment
+        and all(
+            status.get(key) is True
+            for key in ("worker_alive", "dashboard_alive", "scheduler_alive", "awake_alive")
+        )
+        and isinstance(postgres_identity, str)
+        and postgres_identity.isdigit()
+        and database_health.get("healthy") is True
+        and database_health.get("experiment_id") == expected_experiment
+        and api_health.get("status") == "ok"
+        and overview_experiment.get("id") == expected_experiment
+    )
+
+
 def evaluate_process_drills(
     *,
     manifest: ExperimentManifest,
@@ -161,6 +231,7 @@ def evaluate_process_drills(
     worker_baseline: Mapping[str, object],
     worker_recovery: Mapping[str, object],
     worker_after: Mapping[str, object],
+    daily_close: Mapping[str, object],
     generated_at: datetime,
 ) -> dict[str, object]:
     """Evaluate process replacement without accepting screenshots or manual claims."""
@@ -200,13 +271,15 @@ def evaluate_process_drills(
         for recovery in (dashboard_recovery, worker_recovery)
     )
     captured = tuple(_parse_utc(snapshot.get("captured_at")) for snapshot in snapshots)
+    daily_close_completed = _parse_utc(daily_close.get("completed_at"))
     timeline_ok = (
         all(value is not None for value in captured)
+        and daily_close_completed is not None
         and all(
             cast(datetime, current) >= cast(datetime, previous)
             for previous, current in zip(captured, captured[1:])
         )
-        and cast(datetime, captured[-1]) <= generated_at
+        and cast(datetime, captured[-1]) <= daily_close_completed <= generated_at
     )
 
     dashboard_state = states[0]
@@ -284,6 +357,11 @@ def evaluate_process_drills(
         _object(_object(worker_recovery, "after"), "overview"),
     )
     incident_free = all(_overview_incident_free(overview) for overview in recovery_overviews)
+    daily_close_ok = _daily_close_ok(
+        daily_close,
+        expected_experiment=expected_experiment,
+        expected_schema_revision=repository.schema_revision,
+    )
 
     checks = [
         _check("candidate_identity", candidate_identity, "manifest matches the exact clean commit"),
@@ -347,6 +425,11 @@ def evaluate_process_drills(
             "incident_free_after_each_recovery",
             incident_free,
             "no open or operator-review incidents remain after either recovery",
+        ),
+        _check(
+            "docker_free_daily_close",
+            daily_close_ok,
+            "daily report, backup, and health completed while Docker was disabled",
         ),
     ]
     if tuple(check["name"] for check in checks) != PROCESS_DRILL_CHECKS:
@@ -428,7 +511,7 @@ def write_process_drill_bundle(
         manifest_path.write_text(
             json.dumps(
                 {
-                    "process_drill_bundle_schema_version": 1,
+                    "process_drill_bundle_schema_version": PROCESS_DRILL_BUNDLE_SCHEMA_VERSION,
                     "report_id": report_id,
                     "artifacts": {
                         path.name: {"sha256": _sha256(path), "bytes": path.stat().st_size}
@@ -463,7 +546,8 @@ def load_verified_process_drills(directory: Path) -> tuple[dict[str, object], bo
     expected_directory = expected_artifacts | {"bundle-manifest.json"}
     entries = tuple(directory.iterdir())
     verified = (
-        manifest_value.get("process_drill_bundle_schema_version") == 1
+        manifest_value.get("process_drill_bundle_schema_version")
+        == PROCESS_DRILL_BUNDLE_SCHEMA_VERSION
         and manifest_value.get("report_id") == report_value.get("report_id")
         and set(artifacts) == expected_artifacts
         and {path.name for path in entries} == expected_directory
@@ -492,6 +576,7 @@ def freeze_process_drill_evidence(
     worker_baseline_path: Path,
     worker_recovery_path: Path,
     worker_after_path: Path,
+    daily_close_path: Path,
     output_directory: Path,
     generated_at: datetime,
 ) -> tuple[ProcessDrillBundlePaths, dict[str, object]]:
@@ -503,6 +588,7 @@ def freeze_process_drill_evidence(
         "worker-baseline.json": worker_baseline_path,
         "worker-recovery.json": worker_recovery_path,
         "worker-after.json": worker_after_path,
+        "daily-close.json": daily_close_path,
     }
     values: dict[str, dict[str, object]] = {}
     for name, path in source_paths.items():
@@ -522,6 +608,7 @@ def freeze_process_drill_evidence(
         worker_baseline=values["worker-baseline.json"],
         worker_recovery=values["worker-recovery.json"],
         worker_after=values["worker-after.json"],
+        daily_close=values["daily-close.json"],
         generated_at=generated_at,
     )
     paths = write_process_drill_bundle(report, source_paths, output_directory)

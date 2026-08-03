@@ -77,7 +77,10 @@ timed run remains blocked until that bundle, the process fault drills, and the
 separate 24-hour soak pass.
 
 Disposable process drills and the 24-hour soak have separate purpose-bound
-launchers. The soak verdict rejects evidence from a drill run, any restart
+launchers. Each process drill also completes a real daily report, backup, and
+health cycle with the Docker command disabled; in-run status and daily-close
+checks compare the configured PostgreSQL system identifier directly with the
+frozen start identity. The soak verdict rejects evidence from a drill run, any restart
 inside the soak, a process-drill bundle from a different commit, incomplete
 reason/explanation metadata for any decision, or malformed/error output in any
 of the four supervised-service logs. The

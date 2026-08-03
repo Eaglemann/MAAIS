@@ -176,6 +176,26 @@ paper_configured_postgres_identity() {
   uv run maais database-identity | jq -er '.system_identifier'
 }
 
+paper_assert_recorded_configured_postgres_identity() {
+  local recorded_identity="$1"
+  local configured_identity
+
+  if [[ ! "${recorded_identity}" =~ ^[0-9]+$ ]]; then
+    echo "recorded candidate PostgreSQL system_identifier is invalid" >&2
+    return 1
+  fi
+  configured_identity="$(paper_configured_postgres_identity)" || return 1
+  if [[ ! "${configured_identity}" =~ ^[0-9]+$ ]]; then
+    echo "configured PostgreSQL returned an invalid system_identifier" >&2
+    return 1
+  fi
+  if [[ "${configured_identity}" != "${recorded_identity}" ]]; then
+    echo "configured PostgreSQL system_identifier ${configured_identity} differs from recorded candidate system_identifier ${recorded_identity}" >&2
+    return 1
+  fi
+  printf '%s\n' "${configured_identity}"
+}
+
 paper_assert_postgres_route() {
   local context="$1"
   local compose_identity

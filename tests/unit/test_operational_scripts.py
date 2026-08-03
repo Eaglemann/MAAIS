@@ -40,6 +40,10 @@ def test_disposable_process_drill_is_purpose_bound_and_freezes_recovery_evidence
     assert 'recover-paper-week.sh" worker' in drill_run
     assert "paper_wait_for_minute_window 10 15" in drill_run
     assert "wait_for_post_recovery_cycle" in drill_run
+    assert "export -f docker" in drill_run
+    assert 'daily-paper-ops.sh"' in drill_run
+    assert "daily-close.json" in drill_run
+    assert "--daily-close" in drill_run
     assert ".freshness.active_recoveries == 0" in drill_run
     assert ".operations.open_incidents == 0" in drill_run
     assert ".operations.review_incidents == 0" in drill_run
@@ -63,6 +67,7 @@ def test_recovery_script_is_fail_closed_and_audited() -> None:
 
 def test_daily_operations_atomically_record_the_immutable_report_bundle() -> None:
     daily_script = (REPOSITORY_ROOT / "scripts" / "daily-paper-ops.sh").read_text()
+    status_script = (REPOSITORY_ROOT / "scripts" / "status-paper-week.sh").read_text()
 
     assert 'current_state="${state_dir}/current.json"' in daily_script
     assert "report_directory=\"$(jq -er '.directory'" in daily_script
@@ -71,6 +76,10 @@ def test_daily_operations_atomically_record_the_immutable_report_bundle() -> Non
     assert 'mv "${temporary_state}" "${current_state}"' in daily_script
     assert "paper_acquire_operation_lock" in daily_script
     assert "--resume-existing" in daily_script
+    assert "paper_assert_recorded_configured_postgres_identity" in daily_script
+    assert "paper_assert_recorded_postgres_route" not in daily_script
+    assert "paper_assert_recorded_configured_postgres_identity" in status_script
+    assert "paper_assert_recorded_postgres_route" not in status_script
 
 
 def test_stop_script_uses_the_audited_stop_command_before_process_signals() -> None:
