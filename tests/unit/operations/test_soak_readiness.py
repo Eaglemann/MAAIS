@@ -51,7 +51,12 @@ def _inputs() -> dict[str, object]:
             "started_at": (NOW - timedelta(hours=24, minutes=1)).isoformat(),
             "docker_context": "desktop-linux",
             "postgres_system_identifier": "7669409277984608290",
-            "process_alive": {"worker": True, "dashboard": True, "awake": True},
+            "process_alive": {
+                "worker": True,
+                "dashboard": True,
+                "scheduler": True,
+                "awake": True,
+            },
         },
         "preflight": {
             "passed": True,

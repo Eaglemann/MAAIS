@@ -17,7 +17,7 @@ compare the container cluster, configured database endpoint, and recorded
 candidate system identifier. They fail closed on context drift or cluster
 replacement.
 
-The script starts PostgreSQL, applies migrations, runs fail-closed preflight, starts Mission Control on localhost, starts the paper worker, waits for a running checkpoint plus active lease, and starts a tracked OS sleep inhibitor. The three processes run in named detached `tmux` sessions so they survive the launching terminal. Session names, process IDs, immutable inputs, preflight output, and logs are recorded under `artifacts/run-state/`. Startup fails if `tmux` or both supported sleep inhibitors are unavailable.
+The script starts PostgreSQL, applies migrations, runs fail-closed preflight, starts Mission Control on localhost, starts the paper worker, waits for a running checkpoint plus active lease, starts a tracked OS sleep inhibitor, and starts the automatic Berlin-day close supervisor. The four processes run in named detached `tmux` sessions so they survive the launching terminal. Session names, process IDs, immutable inputs, preflight output, and logs are recorded under `artifacts/run-state/`. Startup fails if `tmux` or both supported sleep inhibitors are unavailable.
 
 Mission Control is available at [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
@@ -65,7 +65,8 @@ If an operator-review incident appears, follow `docs/runbooks/incidents.md`. Do 
 
 ## Daily close
 
-After a Berlin calendar day has ended, run:
+The supervised run closes each completed Berlin calendar day automatically. The following
+command remains the supported idempotent manual recovery path:
 
 ```bash
 scripts/daily-paper-ops.sh EXPERIMENT_ID YYYY-MM-DD

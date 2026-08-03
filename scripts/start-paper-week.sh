@@ -58,9 +58,16 @@ awake_log="${log_dir}/sleep-inhibitor-${session_suffix}.log"
 dashboard_pid=""
 worker_pid=""
 awake_pid=""
+scheduler_pid=""
+scheduler_session="maais-daily-${session_suffix}"
+scheduler_log="${log_dir}/daily-supervisor-${session_suffix}.log"
+state_created=false
 start_request_body="${state_dir}/.start-command-${session_suffix}.json"
 start_request_config="${state_dir}/.start-command-${session_suffix}.curl"
 cleanup_startup() {
+  if [[ "${scheduler_pid}" =~ ^[0-9]+$ ]]; then
+    paper_signal_process_tree "${scheduler_pid}"
+  fi
   if [[ "${worker_pid}" =~ ^[0-9]+$ ]]; then
     paper_signal_process_tree "${worker_pid}"
   fi
@@ -71,9 +78,13 @@ cleanup_startup() {
     kill -TERM "${dashboard_pid}" 2>/dev/null || true
   fi
   paper_stop_tmux_session "${awake_session}"
+  paper_stop_tmux_session "${scheduler_session}"
   paper_stop_tmux_session "${worker_session}"
   paper_stop_tmux_session "${dashboard_session}"
   rm -f "${start_request_body}" "${start_request_config}"
+  if [[ "${state_created}" == true ]]; then
+    rm -f "${current_state}"
+  fi
 }
 trap cleanup_startup ERR INT TERM
 
@@ -203,6 +214,27 @@ jq -n \
   '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
   > "${temporary_state}"
 mv "${temporary_state}" "${current_state}"
+state_created=true
+
+printf -v scheduler_command \
+  'cd %q && while ! jq -e --argjson pid "$$" '\''.scheduler_pid == $pid'\'' %q >/dev/null 2>&1; do sleep 0.1; done; exec env RUN_MODE=paper_live ENVIRONMENT=production uv run maais daily-supervisor --state %q --close-script %q >> %q 2>&1' \
+  "${repository_root}" "${current_state}" "${current_state}" "${script_dir}/daily-paper-ops.sh" "${scheduler_log}"
+paper_start_tmux_session "${scheduler_session}" "${scheduler_command}"
+scheduler_pid="${PAPER_TMUX_PANE_PID}"
+sleep 1
+if ! kill -0 "${scheduler_pid}" 2>/dev/null; then
+  echo "daily-close supervisor exited during startup; inspect ${scheduler_log}" >&2
+  cleanup_startup
+  exit 1
+fi
+
+temporary_state="${current_state}.scheduler.tmp"
+jq \
+  --argjson scheduler_pid "${scheduler_pid}" \
+  --arg scheduler_session "${scheduler_session}" \
+  '. + {"scheduler_pid":$scheduler_pid,"scheduler_session":$scheduler_session}' \
+  "${current_state}" > "${temporary_state}"
+mv "${temporary_state}" "${current_state}"
 
 trap - ERR INT TERM
-echo "paper week started: experiment=${experiment_id} worker_pid=${worker_pid} awake=${awake_kind}:${awake_pid} dashboard=http://127.0.0.1:${mission_control_port}"
+echo "paper run started: experiment=${experiment_id} worker_pid=${worker_pid} scheduler_pid=${scheduler_pid} awake=${awake_kind}:${awake_pid} dashboard=http://127.0.0.1:${mission_control_port}"

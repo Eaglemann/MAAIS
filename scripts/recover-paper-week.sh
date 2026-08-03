@@ -2,14 +2,14 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "usage: $0 dashboard|worker REASON" >&2
+  echo "usage: $0 dashboard|worker|scheduler REASON" >&2
   exit 64
 fi
 
 service="$1"
 reason="$2"
-if [[ "${service}" != "dashboard" && "${service}" != "worker" ]]; then
-  echo "service must be dashboard or worker" >&2
+if [[ "${service}" != "dashboard" && "${service}" != "worker" && "${service}" != "scheduler" ]]; then
+  echo "service must be dashboard, worker, or scheduler" >&2
   exit 64
 fi
 if [[ -z "${reason//[[:space:]]/}" ]]; then
@@ -36,14 +36,18 @@ control_token_file="$(jq -er '.control_token_file' "${current_state}")"
 worker_pid="$(jq -r '.worker_pid' "${current_state}")"
 dashboard_pid="$(jq -r '.dashboard_pid' "${current_state}")"
 awake_pid="$(jq -r '.awake_pid // empty' "${current_state}")"
+scheduler_pid="$(jq -r '.scheduler_pid // empty' "${current_state}")"
 worker_session="$(jq -r '.worker_session' "${current_state}")"
 dashboard_session="$(jq -r '.dashboard_session' "${current_state}")"
 awake_session="$(jq -r '.awake_session' "${current_state}")"
+scheduler_session="$(jq -r '.scheduler_session // empty' "${current_state}")"
 docker_context="$(jq -er '.docker_context' "${current_state}")"
 postgres_system_identifier="$(jq -er '.postgres_system_identifier' "${current_state}")"
 target_pid="${dashboard_pid}"
 if [[ "${service}" == "worker" ]]; then
   target_pid="${worker_pid}"
+elif [[ "${service}" == "scheduler" ]]; then
+  target_pid="${scheduler_pid}"
 fi
 if [[ ! "${target_pid}" =~ ^[0-9]+$ ]]; then
   echo "recorded ${service} PID is invalid" >&2
@@ -52,6 +56,15 @@ fi
 if kill -0 "${target_pid}" 2>/dev/null; then
   echo "refusing recovery while recorded ${service} PID ${target_pid} is alive" >&2
   exit 1
+fi
+if [[ "${service}" == "scheduler" ]]; then
+  if ! kill -0 "${worker_pid}" 2>/dev/null \
+    || ! kill -0 "${dashboard_pid}" 2>/dev/null \
+    || ! kill -0 "${awake_pid}" 2>/dev/null \
+    || ! curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
+    echo "worker, Mission Control, and sleep inhibitor must be healthy before scheduler recovery" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "${evidence_dir}"
@@ -67,6 +80,7 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 new_worker_pid="${worker_pid}"
 new_dashboard_pid="${dashboard_pid}"
 new_awake_pid="${awake_pid:-0}"
+new_scheduler_pid="${scheduler_pid:-0}"
 
 if [[ "${service}" == "dashboard" ]]; then
   paper_stop_tmux_session "${dashboard_session}"
@@ -92,7 +106,7 @@ if [[ "${service}" == "dashboard" ]]; then
     echo "Mission Control recovery failed; inspect ${dashboard_log}" >&2
     exit 1
   fi
-else
+elif [[ "${service}" == "worker" ]]; then
   if ! kill -0 "${dashboard_pid}" 2>/dev/null \
     || ! curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
     echo "Mission Control must be healthy before worker recovery" >&2
@@ -168,6 +182,25 @@ else
   fi
 fi
 
+if [[ ! "${new_scheduler_pid}" =~ ^[0-9]+$ ]] || ! kill -0 "${new_scheduler_pid}" 2>/dev/null; then
+  if [[ -z "${scheduler_session}" ]]; then
+    scheduler_session="maais-daily-${experiment_id%%-*}"
+  fi
+  paper_stop_tmux_session "${scheduler_session}"
+  scheduler_log="${state_dir}/logs/daily-supervisor-${experiment_id%%-*}.log"
+  printf -v scheduler_command \
+    'cd %q && while ! jq -e --argjson pid "$$" '\''.scheduler_pid == $pid'\'' %q >/dev/null 2>&1; do sleep 0.1; done; exec env RUN_MODE=paper_live ENVIRONMENT=production uv run maais daily-supervisor --state %q --close-script %q >> %q 2>&1' \
+    "${repository_root}" "${current_state}" "${current_state}" "${script_dir}/daily-paper-ops.sh" "${scheduler_log}"
+  paper_start_tmux_session "${scheduler_session}" "${scheduler_command}"
+  new_scheduler_pid="${PAPER_TMUX_PANE_PID}"
+  sleep 1
+  if ! kill -0 "${new_scheduler_pid}" 2>/dev/null; then
+    paper_stop_tmux_session "${scheduler_session}"
+    echo "daily-close supervisor recovery failed; inspect ${scheduler_log}" >&2
+    exit 1
+  fi
+fi
+
 after_overview="$(curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview")"
 after_ledger="$(uv run maais verify-ledger)"
 recovered_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -186,20 +219,23 @@ jq -n \
   --argjson worker_pid "${new_worker_pid}" \
   --argjson dashboard_pid "${new_dashboard_pid}" \
   --argjson awake_pid "${new_awake_pid}" \
+  --argjson scheduler_pid "${new_scheduler_pid}" \
   --argjson before_overview "${before_overview:-null}" \
   --argjson after_overview "${after_overview}" \
   --argjson before_ledger "${before_ledger}" \
   --argjson after_ledger "${after_ledger}" \
-  '{service:$service,reason:$reason,experiment_id:$experiment_id,manifest:$manifest,recovery_started_at:$recovery_started_at,recovered_at:$recovered_at,prior_pid:$prior_pid,current_pids:{worker:$worker_pid,dashboard:$dashboard_pid,awake:$awake_pid},before:{overview:$before_overview,ledger:$before_ledger},after:{overview:$after_overview,ledger:$after_ledger}}' \
+  '{service:$service,reason:$reason,experiment_id:$experiment_id,manifest:$manifest,recovery_started_at:$recovery_started_at,recovered_at:$recovered_at,prior_pid:$prior_pid,current_pids:{worker:$worker_pid,dashboard:$dashboard_pid,scheduler:$scheduler_pid,awake:$awake_pid},before:{overview:$before_overview,ledger:$before_ledger},after:{overview:$after_overview,ledger:$after_ledger}}' \
   > "${evidence_temporary}"
 
 jq \
   --argjson worker_pid "${new_worker_pid}" \
   --argjson dashboard_pid "${new_dashboard_pid}" \
   --argjson awake_pid "${new_awake_pid}" \
+  --argjson scheduler_pid "${new_scheduler_pid}" \
+  --arg scheduler_session "${scheduler_session}" \
   --arg recovered_at "${recovered_at}" \
   --arg evidence "${evidence_target}" \
-  '.worker_pid=$worker_pid | .dashboard_pid=$dashboard_pid | .awake_pid=$awake_pid | .last_recovery_at=$recovered_at | .last_recovery_evidence=$evidence' \
+  '.worker_pid=$worker_pid | .dashboard_pid=$dashboard_pid | .scheduler_pid=$scheduler_pid | .scheduler_session=$scheduler_session | .awake_pid=$awake_pid | .last_recovery_at=$recovered_at | .last_recovery_evidence=$evidence' \
   "${current_state}" > "${state_temporary}"
 mv "${evidence_temporary}" "${evidence_target}"
 mv "${state_temporary}" "${current_state}"

@@ -25,6 +25,21 @@ API/UI process with structured logging, verifies health and the ledger, and reco
 and new process identities plus before/after authoritative state. The worker must continue
 independently throughout the interruption.
 
+## Daily-close supervisor restart
+
+If the automatic daily-close supervisor exits while the worker and Mission Control remain
+healthy, run:
+
+```bash
+scripts/recover-paper-week.sh scheduler "REASON"
+```
+
+The replacement re-reads the authoritative run state and catches up only completed,
+contiguous Berlin days. A gap, duplicate report date, changed report identity, or failed
+report/backup/status command makes it exit again instead of skipping evidence. Any such
+recovery invalidates an official soak or seven-day candidate; retain the recovery artifact,
+fix the cause, and prepare a fresh candidate.
+
 ## Database restore drill
 
 Back up:

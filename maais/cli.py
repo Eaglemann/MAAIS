@@ -18,6 +18,7 @@ from maais.live import (
     run_live_paper_manifest,
 )
 from maais.operations.backups import backup_configured_database
+from maais.operations.daily_supervisor import supervise_daily_closes
 from maais.operations.database_identity import collect_configured_database_identity
 from maais.operations.final_reporting import (
     build_final_report_from_bundles,
@@ -115,6 +116,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="reuse the unique verified complete bundle after an interrupted daily close",
     )
+    daily_supervisor = commands.add_parser(
+        "daily-supervisor",
+        help="automatically close each completed Berlin day for the active paper run",
+    )
+    daily_supervisor.add_argument(
+        "--state",
+        type=Path,
+        default=Path("artifacts/run-state/current.json"),
+    )
+    daily_supervisor.add_argument(
+        "--close-script",
+        type=Path,
+        default=Path("scripts/daily-paper-ops.sh"),
+    )
+    daily_supervisor.add_argument("--poll-seconds", type=_positive_int, default=30)
     final_report = commands.add_parser(
         "final-report",
         help="verify and aggregate exactly seven immutable Berlin-day report bundles",
@@ -259,6 +275,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(reconciliation, dict):
             raise TypeError("daily report reconciliation must be an object")
         return 0 if reconciliation["ledger_ok"] is True else 1
+    if arguments.command == "daily-supervisor":
+        try:
+            supervise_daily_closes(
+                state_path=arguments.state,
+                close_script=arguments.close_script,
+                poll_seconds=arguments.poll_seconds,
+            )
+        except KeyboardInterrupt:
+            pass
+        return 0
     if arguments.command == "final-report":
         report = build_final_report_from_bundles(
             arguments.reports,

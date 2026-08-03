@@ -40,6 +40,7 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/reports",
         ]
     )
+    daily_supervisor = parser.parse_args(["daily-supervisor"])
     backup = parser.parse_args(["backup", "--output", "backups"])
     restore = parser.parse_args(
         [
@@ -115,6 +116,9 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert verify_ledger.command == "verify-ledger"
     assert report.report_date.isoformat() == "2026-08-02"
     assert report.output == Path("artifacts/reports")
+    assert daily_supervisor.state == Path("artifacts/run-state/current.json")
+    assert daily_supervisor.close_script == Path("scripts/daily-paper-ops.sh")
+    assert daily_supervisor.poll_seconds == 30
     assert backup.output == Path("backups")
     assert restore.backup == Path("backups/candidate")
     assert restore.target_database == "maais_week_restore"

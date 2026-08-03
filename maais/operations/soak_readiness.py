@@ -264,7 +264,13 @@ def evaluate_soak_readiness(
         and preflight.get("manifest_hash") == manifest.manifest_hash
     )
     process_passed = (
-        processes == {"worker": True, "dashboard": True, "awake": True}
+        processes
+        == {
+            "worker": True,
+            "dashboard": True,
+            "scheduler": True,
+            "awake": True,
+        }
         and run_state.get("last_recovery_at") is None
     )
     operation_passed = (
@@ -353,7 +359,8 @@ def evaluate_soak_readiness(
         _check(
             "process_continuity",
             process_passed,
-            "worker, dashboard, and sleep inhibitor are alive with no official-soak restart",
+            "worker, dashboard, daily-close supervisor, and sleep inhibitor are alive with "
+            "no official-soak restart",
         ),
         _check("runtime_health", health.get("healthy") is True, "database-backed health passed"),
         _check(
@@ -731,6 +738,7 @@ async def build_configured_soak_readiness(
         "process_alive": {
             "worker": _pid_alive(run_state.get("worker_pid")),
             "dashboard": _pid_alive(run_state.get("dashboard_pid")),
+            "scheduler": _pid_alive(run_state.get("scheduler_pid")),
             "awake": _pid_alive(run_state.get("awake_pid")),
         },
     }

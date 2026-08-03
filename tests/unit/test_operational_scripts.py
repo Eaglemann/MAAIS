@@ -19,6 +19,8 @@ def test_paper_services_start_with_structured_production_logging() -> None:
     assert '--config "${start_request_config}"' in start_script
     assert '"${command_status}" == "completed"' in start_script
     assert '"${experiment_status}" == "running"' in start_script
+    assert "uv run maais daily-supervisor" in start_script
+    assert '"scheduler_pid":$scheduler_pid' in start_script
 
 
 def test_recovery_script_is_fail_closed_and_audited() -> None:
@@ -29,6 +31,9 @@ def test_recovery_script_is_fail_closed_and_audited() -> None:
     assert "lease_epoch" in recovery_script
     assert "recovery-evidence" in recovery_script
     assert "ENVIRONMENT=production" in recovery_script
+    assert '"${service}" != "scheduler"' in recovery_script
+    assert "uv run maais daily-supervisor" in recovery_script
+    assert ".scheduler_pid=$scheduler_pid" in recovery_script
 
 
 def test_daily_operations_atomically_record_the_immutable_report_bundle() -> None:
@@ -52,4 +57,7 @@ def test_stop_script_uses_the_audited_stop_command_before_process_signals() -> N
     assert '"${command_status}" == "completed"' in stop_script
     assert stop_script.index('"command_type":"stop"') < stop_script.index(
         'paper_signal_process_tree "${worker_pid}"'
+    )
+    assert stop_script.index('paper_signal_process_tree "${scheduler_pid}"') < stop_script.index(
+        '"command_type":"stop"'
     )

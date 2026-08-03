@@ -16,6 +16,8 @@ experiment_id="$(jq -r '.experiment_id' "${current_state}")"
 worker_pid="$(jq -r '.worker_pid' "${current_state}")"
 dashboard_pid="$(jq -r '.dashboard_pid' "${current_state}")"
 awake_pid="$(jq -r '.awake_pid // empty' "${current_state}")"
+scheduler_pid="$(jq -r '.scheduler_pid // empty' "${current_state}")"
+scheduler_session="$(jq -r '.scheduler_session // empty' "${current_state}")"
 mission_control_port="$(jq -er '.mission_control_port' "${current_state}")"
 control_token_file="$(jq -er '.control_token_file' "${current_state}")"
 stop_request_body="${state_dir}/.stop-command-${experiment_id%%-*}.json"
@@ -24,6 +26,21 @@ cleanup_stop_request() {
   rm -f "${stop_request_body}" "${stop_request_config}"
 }
 trap cleanup_stop_request EXIT INT TERM
+
+if [[ "${scheduler_pid}" =~ ^[0-9]+$ ]] && kill -0 "${scheduler_pid}" 2>/dev/null; then
+  paper_signal_process_tree "${scheduler_pid}"
+  for _attempt in $(seq 1 30); do
+    kill -0 "${scheduler_pid}" 2>/dev/null || break
+    sleep 1
+  done
+fi
+if [[ "${scheduler_pid}" =~ ^[0-9]+$ ]] && kill -0 "${scheduler_pid}" 2>/dev/null; then
+  echo "daily-close supervisor did not stop; refusing to race the final close" >&2
+  exit 1
+fi
+if [[ -n "${scheduler_session}" ]]; then
+  paper_stop_tmux_session "${scheduler_session}"
+fi
 
 if kill -0 "${worker_pid}" 2>/dev/null; then
   if ! kill -0 "${dashboard_pid}" 2>/dev/null \
