@@ -16,7 +16,7 @@ from typing import cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from maais.api.queries import MissionControlQueryService
@@ -40,7 +40,7 @@ from maais.operations.process_drills import (
     process_drill_evidence_passes,
 )
 from maais.operations.reporting import berlin_daily_window
-from maais.operations.verification import ledger_consistency_payload
+from maais.operations.verification import establish_read_only_snapshot, ledger_consistency_payload
 
 UTC = timezone.utc
 SOAK_DURATION = timedelta(hours=24)
@@ -687,9 +687,7 @@ async def _database_soak_state(
     try:
         async with factory() as session:
             async with session.begin():
-                await session.execute(
-                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-                )
+                await establish_read_only_snapshot(session)
                 overview_model = await MissionControlQueryService(session).get_overview(
                     experiment_id
                 )

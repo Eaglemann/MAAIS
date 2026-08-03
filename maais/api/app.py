@@ -52,6 +52,7 @@ from maais.db.repositories.operator_commands import (
 )
 from maais.db.unit_of_work import UnitOfWork
 from maais.operations.operator_commands import CommandStatus, OperatorCommand
+from maais.operations.verification import establish_read_only_snapshot
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -107,7 +108,7 @@ def create_app(
             application.state.session_factory = factory
         async with factory() as session:
             async with session.begin():
-                await session.execute(text("SET TRANSACTION READ ONLY"))
+                await establish_read_only_snapshot(session)
                 yield session
 
     async def require_control_token(
@@ -353,7 +354,7 @@ def create_app(
                     application.state.session_factory = factory
                 async with factory() as session:
                     async with session.begin():
-                        await session.execute(text("SET TRANSACTION READ ONLY"))
+                        await establish_read_only_snapshot(session)
                         page = await _outbox_cursor_page(
                             session,
                             after_cursor=cursor,

@@ -8,6 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from maais.config.settings import get_settings
 from maais.db.replay import LedgerConsistencyReport, verify_ledger_consistency
 
+_READ_ONLY_SNAPSHOT = text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+
+
+async def establish_read_only_snapshot(session: AsyncSession) -> None:
+    """Pin one stable PostgreSQL snapshot for a multi-statement operational read."""
+    await session.execute(_READ_ONLY_SNAPSHOT)
+
 
 def ledger_consistency_payload(report: LedgerConsistencyReport) -> dict[str, object]:
     """Serialize a consistency report without losing aggregate identity."""
@@ -29,7 +36,7 @@ async def verify_ledger_with_factory(
     """Verify all event/projection invariants inside a read-only transaction."""
     async with session_factory() as session:
         async with session.begin():
-            await session.execute(text("SET TRANSACTION READ ONLY"))
+            await establish_read_only_snapshot(session)
             report = await verify_ledger_consistency(session)
     return ledger_consistency_payload(report)
 

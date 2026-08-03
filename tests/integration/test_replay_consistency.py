@@ -1,27 +1,62 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+import asyncio
+from datetime import date, datetime, timedelta, timezone
+from functools import partial
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, select, update
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from maais.config.modes import RunMode
+from maais.config.settings import get_settings
 from maais.db.models.execution import OrderIntentModel
-from maais.db.models.ledger import EventStreamModel, OutboxEventModel
-from maais.db.replay import rebuild_experiment_projection, verify_ledger_consistency
+from maais.db.models.ledger import DomainEventModel, EventStreamModel, OutboxEventModel
+from maais.db.replay import (
+    LedgerConsistencyError,
+    LedgerConsistencyReport,
+    rebuild_experiment_projection,
+    verify_ledger_consistency,
+)
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import ExperimentStatus
 from maais.experiments.service import ExperimentLifecycle
 from maais.operations.backups import collect_backup_metadata
+from maais.operations.health import collect_configured_experiment_health
 from maais.operations.operator_commands import CommandType, OperatorCommand
-from maais.operations.reporting import build_daily_report
+from maais.operations.reporting import build_configured_daily_report, build_daily_report
 from maais.operations.verification import verify_ledger_with_factory
 from tests.integration.test_decision_lineage import _prepare_bundle
 from tests.integration.test_paper_execution_repository import _record
 
 pytestmark = pytest.mark.integration
+
+
+async def _snapshot_consistency_probe(
+    session: AsyncSession,
+    *,
+    first_read_complete: asyncio.Event,
+    concurrent_write_complete: asyncio.Event,
+) -> LedgerConsistencyReport:
+    first_count = int(await session.scalar(select(func.count()).select_from(DomainEventModel)) or 0)
+    first_read_complete.set()
+    await asyncio.wait_for(concurrent_write_complete.wait(), timeout=5)
+    second_count = int(
+        await session.scalar(select(func.count()).select_from(DomainEventModel)) or 0
+    )
+    if second_count == first_count:
+        return LedgerConsistencyReport(())
+    return LedgerConsistencyReport(
+        (
+            LedgerConsistencyError(
+                code="snapshot_changed",
+                aggregate_type=None,
+                aggregate_id=None,
+                details=f"first_count={first_count}, second_count={second_count}",
+            ),
+        )
+    )
 
 
 async def test_consistency_report_accepts_valid_ledger(
@@ -48,6 +83,165 @@ async def test_operator_verification_returns_serializable_valid_result(
     result = await verify_ledger_with_factory(async_sessionmaker(db_engine, expire_on_commit=False))
 
     assert result == {"ok": True, "error_count": 0, "errors": []}
+
+
+async def test_operator_verification_keeps_one_snapshot_during_concurrent_write(
+    monkeypatch: pytest.MonkeyPatch,
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    _manifest, bundle = await _prepare_bundle(uow_factory)
+    first_read_complete = asyncio.Event()
+    concurrent_write_complete = asyncio.Event()
+
+    monkeypatch.setattr(
+        "maais.operations.verification.verify_ledger_consistency",
+        partial(
+            _snapshot_consistency_probe,
+            first_read_complete=first_read_complete,
+            concurrent_write_complete=concurrent_write_complete,
+        ),
+    )
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    verification_task = asyncio.create_task(verify_ledger_with_factory(factory))
+
+    await asyncio.wait_for(first_read_complete.wait(), timeout=5)
+    try:
+        async with uow_factory.begin() as uow:
+            await uow.decisions.record_bundle(bundle)
+    finally:
+        concurrent_write_complete.set()
+
+    result = await verification_task
+
+    assert result == {"ok": True, "error_count": 0, "errors": []}
+
+
+async def test_health_verification_keeps_one_snapshot_during_concurrent_write(
+    monkeypatch: pytest.MonkeyPatch,
+    uow_factory: UnitOfWork,
+    test_database_url: str,
+) -> None:
+    manifest, bundle = await _prepare_bundle(uow_factory)
+    first_read_complete = asyncio.Event()
+    concurrent_write_complete = asyncio.Event()
+    settings = get_settings().model_copy(update={"database_url": test_database_url})
+
+    monkeypatch.setattr(
+        "maais.operations.health.get_settings",
+        lambda: settings,
+    )
+    monkeypatch.setattr(
+        "maais.operations.health.verify_ledger_consistency",
+        partial(
+            _snapshot_consistency_probe,
+            first_read_complete=first_read_complete,
+            concurrent_write_complete=concurrent_write_complete,
+        ),
+    )
+    health_task = asyncio.create_task(
+        collect_configured_experiment_health(
+            manifest.experiment_id,
+            maximum_lag=timedelta(seconds=180),
+            allow_stopped=False,
+            send_alert=False,
+        )
+    )
+
+    await asyncio.wait_for(first_read_complete.wait(), timeout=5)
+    try:
+        async with uow_factory.begin() as uow:
+            await uow.decisions.record_bundle(bundle)
+    finally:
+        concurrent_write_complete.set()
+
+    result = await health_task
+    checks = result["checks"]
+    assert isinstance(checks, list)
+    ledger_check = next(check for check in checks if check["name"] == "ledger_consistency")
+
+    assert ledger_check == {
+        "name": "ledger_consistency",
+        "passed": True,
+        "detail": "ledger errors=0",
+    }
+
+
+async def test_daily_report_keeps_one_snapshot_during_concurrent_write(
+    monkeypatch: pytest.MonkeyPatch,
+    uow_factory: UnitOfWork,
+    test_database_url: str,
+) -> None:
+    manifest, bundle = await _prepare_bundle(uow_factory, mode=RunMode.PAPER_LIVE)
+    first_read_complete = asyncio.Event()
+    concurrent_write_complete = asyncio.Event()
+    settings = get_settings().model_copy(update={"database_url": test_database_url})
+
+    async def build_snapshot_probe(session, *_args, **_kwargs) -> dict[str, object]:
+        result = await _snapshot_consistency_probe(
+            session,
+            first_read_complete=first_read_complete,
+            concurrent_write_complete=concurrent_write_complete,
+        )
+        return {"snapshot_stable": result.ok}
+
+    monkeypatch.setattr(
+        "maais.operations.reporting.get_settings",
+        lambda: settings,
+    )
+    monkeypatch.setattr(
+        "maais.operations.reporting.build_daily_report",
+        build_snapshot_probe,
+    )
+    report_task = asyncio.create_task(
+        build_configured_daily_report(
+            manifest.experiment_id,
+            date(2026, 8, 2),
+            generated_at=datetime(2026, 8, 3, 0, 5, tzinfo=timezone.utc),
+        )
+    )
+
+    await asyncio.wait_for(first_read_complete.wait(), timeout=5)
+    try:
+        async with uow_factory.begin() as uow:
+            await uow.decisions.record_bundle(bundle)
+    finally:
+        concurrent_write_complete.set()
+
+    report = await report_task
+
+    assert report == {"snapshot_stable": True}
+
+
+async def test_backup_metadata_keeps_one_snapshot_during_concurrent_write(
+    monkeypatch: pytest.MonkeyPatch,
+    uow_factory: UnitOfWork,
+    test_database_url: str,
+) -> None:
+    _manifest, bundle = await _prepare_bundle(uow_factory)
+    first_read_complete = asyncio.Event()
+    concurrent_write_complete = asyncio.Event()
+
+    monkeypatch.setattr(
+        "maais.operations.backups.verify_ledger_consistency",
+        partial(
+            _snapshot_consistency_probe,
+            first_read_complete=first_read_complete,
+            concurrent_write_complete=concurrent_write_complete,
+        ),
+    )
+    backup_task = asyncio.create_task(collect_backup_metadata(test_database_url))
+
+    await asyncio.wait_for(first_read_complete.wait(), timeout=5)
+    try:
+        async with uow_factory.begin() as uow:
+            await uow.decisions.record_bundle(bundle)
+    finally:
+        concurrent_write_complete.set()
+
+    metadata = await backup_task
+
+    assert metadata.ledger == {"ok": True, "error_count": 0, "errors": []}
 
 
 async def test_daily_report_reconciles_complete_decision_lineage(

@@ -16,7 +16,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import duckdb
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from maais.config.settings import get_settings
@@ -44,6 +44,7 @@ from maais.db.models.operations import (
 )
 from maais.db.replay import verify_ledger_consistency
 from maais.domain.json import content_hash, to_json_data
+from maais.operations.verification import establish_read_only_snapshot
 
 BERLIN = ZoneInfo("Europe/Berlin")
 UTC = timezone.utc
@@ -1101,7 +1102,7 @@ async def build_configured_daily_report(
     try:
         async with factory() as session:
             async with session.begin():
-                await session.execute(text("SET TRANSACTION READ ONLY"))
+                await establish_read_only_snapshot(session)
                 report = await build_daily_report(
                     session,
                     experiment_id,

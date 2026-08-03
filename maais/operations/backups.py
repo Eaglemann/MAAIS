@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from maais.config.settings import get_settings
 from maais.db.replay import verify_ledger_consistency
 from maais.domain.json import content_hash, to_json_data
-from maais.operations.verification import ledger_consistency_payload
+from maais.operations.verification import establish_read_only_snapshot, ledger_consistency_payload
 
 UTC = timezone.utc
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -201,7 +201,7 @@ async def collect_backup_metadata(database_url: str) -> BackupMetadata:
     try:
         async with factory() as session:
             async with session.begin():
-                await session.execute(text("SET TRANSACTION READ ONLY"))
+                await establish_read_only_snapshot(session)
                 database_name = str(await session.scalar(text("SELECT current_database()")))
                 schema_revision = str(
                     await session.scalar(text("SELECT version_num FROM alembic_version"))

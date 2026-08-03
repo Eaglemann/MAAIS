@@ -28,7 +28,7 @@ from maais.operations.qualification import (
     load_verified_qualification,
     qualification_evidence_passes,
 )
-from maais.operations.verification import ledger_consistency_payload
+from maais.operations.verification import establish_read_only_snapshot, ledger_consistency_payload
 
 UTC = timezone.utc
 
@@ -214,7 +214,7 @@ async def _database_preflight_state(
     try:
         async with factory() as session:
             async with session.begin():
-                await session.execute(text("SET TRANSACTION READ ONLY"))
+                await establish_read_only_snapshot(session)
                 database_name = str(await session.scalar(text("SELECT current_database()")))
                 schema_revision = str(
                     await session.scalar(text("SELECT version_num FROM alembic_version"))

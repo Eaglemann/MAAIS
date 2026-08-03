@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from maais.api.queries import MissionControlQueryService
@@ -14,7 +13,7 @@ from maais.config.settings import get_settings
 from maais.db.replay import verify_ledger_consistency
 from maais.domain.json import to_json_data
 from maais.monitoring.alerting import AlertDispatcher
-from maais.operations.verification import ledger_consistency_payload
+from maais.operations.verification import establish_read_only_snapshot, ledger_consistency_payload
 
 UTC = timezone.utc
 
@@ -157,7 +156,7 @@ async def collect_configured_experiment_health(
     try:
         async with factory() as session:
             async with session.begin():
-                await session.execute(text("SET TRANSACTION READ ONLY"))
+                await establish_read_only_snapshot(session)
                 overview = await MissionControlQueryService(session).get_overview(experiment_id)
                 ledger = ledger_consistency_payload(await verify_ledger_consistency(session))
         state = {
