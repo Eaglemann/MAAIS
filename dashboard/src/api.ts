@@ -174,7 +174,7 @@ export function startResumableEventFeed({
   reconnectDelayMs = 1_500,
 }: {
   initialCursor: number;
-  onEvents: (events: OutboxCursorEvent[]) => void;
+  onEvents: () => void;
   onCursor: (cursor: number) => void;
   onStatus: (status: EventFeedStatus) => void;
   reconnectDelayMs?: number;
@@ -182,19 +182,19 @@ export function startResumableEventFeed({
   let cursor = Math.max(0, Math.trunc(initialCursor));
   let stopped = false;
   let reconnectTimer: number | null = null;
+  let invalidationTimer: number | null = null;
   let socket: WebSocket | null = null;
   const controller = new AbortController();
 
-  function acceptPage(page: OutboxCursorPage) {
+  function acceptPage(page: OutboxCursorPage): boolean {
     if (page.items.length === 0 && page.next_cursor < cursor) {
       cursor = page.next_cursor;
       onCursor(cursor);
-      return;
+      return true;
     }
     const unseen = page.items
       .filter((event) => event.cursor > cursor)
       .sort((left, right) => left.cursor - right.cursor);
-    if (unseen.length > 0) onEvents(unseen);
     const next = Math.max(
       cursor,
       page.next_cursor,
@@ -204,6 +204,15 @@ export function startResumableEventFeed({
       cursor = next;
       onCursor(cursor);
     }
+    return unseen.length > 0;
+  }
+
+  function invalidateAfterBurst() {
+    if (invalidationTimer !== null) window.clearTimeout(invalidationTimer);
+    invalidationTimer = window.setTimeout(() => {
+      invalidationTimer = null;
+      onEvents();
+    }, 2_000);
   }
 
   function scheduleReconnect() {
@@ -220,11 +229,17 @@ export function startResumableEventFeed({
     onStatus("catching_up");
     try {
       let page: OutboxCursorPage;
+      let snapshotInvalidated = false;
       do {
         page = await getEventPage(cursor, controller.signal);
         if (stopped) return;
-        acceptPage(page);
+        snapshotInvalidated = acceptPage(page) || snapshotInvalidated;
       } while (page.has_more);
+      if (snapshotInvalidated) {
+        if (invalidationTimer !== null) window.clearTimeout(invalidationTimer);
+        invalidationTimer = null;
+        onEvents();
+      }
 
       const nextSocket = new WebSocket(eventStreamUrl(cursor));
       socket = nextSocket;
@@ -237,7 +252,7 @@ export function startResumableEventFeed({
           const payload = JSON.parse(String(message.data)) as
             | ({ type: "events" } & OutboxCursorPage)
             | { type: "heartbeat"; next_cursor: number };
-          if (payload.type === "events") acceptPage(payload);
+          if (payload.type === "events" && acceptPage(payload)) invalidateAfterBurst();
         } catch {
           nextSocket.close();
         }
@@ -257,6 +272,7 @@ export function startResumableEventFeed({
     stopped = true;
     controller.abort();
     if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+    if (invalidationTimer !== null) window.clearTimeout(invalidationTimer);
     if (socket !== null) {
       socket.onclose = null;
       socket.close();

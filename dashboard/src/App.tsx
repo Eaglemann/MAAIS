@@ -554,19 +554,22 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedId) return;
-    let initialCursor = 0;
+    let initialCursor = Number.MAX_SAFE_INTEGER;
     try {
-      const stored = Number(window.sessionStorage.getItem("maais.event_cursor.v1") ?? 0);
-      if (Number.isSafeInteger(stored) && stored >= 0) initialCursor = stored;
+      const storedValue = window.sessionStorage.getItem("maais.event_cursor.v2");
+      const stored = storedValue === null ? null : Number(storedValue);
+      if (stored !== null && Number.isSafeInteger(stored) && stored >= 0) {
+        initialCursor = stored;
+      }
     } catch {
-      // Catch-up from zero remains safe when browser storage is unavailable.
+      // A head synchronization remains safe when browser storage is unavailable.
     }
     return startResumableEventFeed({
       initialCursor,
       onEvents: () => void refresh(),
       onCursor: (cursor) => {
         try {
-          window.sessionStorage.setItem("maais.event_cursor.v1", String(cursor));
+          window.sessionStorage.setItem("maais.event_cursor.v2", String(cursor));
         } catch {
           // The in-memory cursor still makes this connection gap-free.
         }
