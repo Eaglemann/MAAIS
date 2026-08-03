@@ -8,7 +8,7 @@ import json
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
@@ -38,6 +38,7 @@ _EXPERIMENT_IDENTITY = (
     "schema_revision",
     "config_hash",
     "manifest_hash",
+    "started_at",
 )
 
 
@@ -206,6 +207,7 @@ def _verify_daily_report(
     experiment = _object(report.get("experiment"), "daily report experiment")
     if experiment.get("id") != str(experiment_id) or experiment.get("mode") != "paper_live":
         raise FinalReportValidationError("daily report experiment identity is invalid")
+    _parse_utc(experiment.get("started_at"), "daily report experiment.started_at")
     window = _object(report.get("window"), "daily report window")
     if window.get("timezone") != "Europe/Berlin" or window.get("cutoff_utc") != window.get(
         "end_utc"
@@ -423,6 +425,16 @@ def build_final_report_from_bundles(
         reports.append(report)
 
     assert experiment_identity is not None
+    experiment_started_at = _parse_utc(
+        experiment_identity.get("started_at"),
+        "daily report experiment.started_at",
+    )
+    first_window = berlin_daily_window(start_date)
+    start_delay = experiment_started_at - first_window.start_utc
+    if not timedelta(0) <= start_delay < timedelta(minutes=1):
+        raise FinalReportValidationError(
+            "official seven-day experiment did not start within the first Berlin minute"
+        )
     for previous, current in zip(reports, reports[1:]):
         previous_account = _object(previous.get("account"), "account")
         current_account = _object(current.get("account"), "account")

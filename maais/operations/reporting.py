@@ -831,6 +831,9 @@ async def build_daily_report(
             "schema_revision": experiment.schema_revision,
             "config_hash": experiment.config_hash,
             "manifest_hash": experiment.manifest_hash,
+            "started_at": _iso(experiment.started_at)
+            if experiment.started_at is not None
+            else None,
         },
         "window": {
             "timezone": "Europe/Berlin",

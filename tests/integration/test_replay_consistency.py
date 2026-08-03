@@ -125,6 +125,7 @@ async def test_daily_report_reconciles_complete_decision_lineage(
     assert report["reconciliation"]["ledger_ok"] is True  # type: ignore[index]
     assert len(report["reconciliation"]["report_hash"]) == 64  # type: ignore[index]
     assert report["report_schema_version"] == 2
+    assert report["experiment"]["started_at"] is None  # type: ignore[index]
     assert report["operator_actions"] == {
         "events": 3,
         "requests": 1,

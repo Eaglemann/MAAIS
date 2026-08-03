@@ -291,10 +291,67 @@ paper_start_wait_seconds() {
   printf '%s\n' "$((60 - current_value))"
 }
 
+paper_wait_for_berlin_midnight_start_window() {
+  local maximum_start_second="$1"
+  local maximum_wait_seconds=600
+  local current_time
+  local current_hour
+  local current_minute
+  local current_second
+  local seconds_since_midnight
+  local wait_seconds
+
+  if [[ ! "${maximum_start_second}" =~ ^([0-9]|1[0-5])$ ]]; then
+    echo "Berlin midnight start window requires maximum second 0-15" >&2
+    return 64
+  fi
+
+  current_time="$(TZ=Europe/Berlin date +%H:%M:%S)" || return 1
+  if [[ ! "${current_time}" =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$ ]]; then
+    echo "could not read the current Europe/Berlin time" >&2
+    return 1
+  fi
+  IFS=: read -r current_hour current_minute current_second <<<"${current_time}"
+  if ((10#${current_hour} == 0 && 10#${current_minute} == 0 \
+    && 10#${current_second} <= 10#${maximum_start_second})); then
+    return 0
+  fi
+
+  seconds_since_midnight=$((
+    10#${current_hour} * 3600 + 10#${current_minute} * 60 + 10#${current_second}
+  ))
+  wait_seconds=$((86400 - seconds_since_midnight))
+  if ((wait_seconds > maximum_wait_seconds)); then
+    echo "seven-day paper trading must begin at Berlin midnight; prepare the launch within 10 minutes before 00:00" >&2
+    return 1
+  fi
+
+  echo "aligning seven-day activation to Berlin midnight: wait=${wait_seconds}s" >&2
+  sleep "${wait_seconds}" || return 1
+  current_time="$(TZ=Europe/Berlin date +%H:%M:%S)" || return 1
+  if [[ ! "${current_time}" =~ ^00:00:([0-5][0-9])$ \
+    || 10#${BASH_REMATCH[1]} -gt 10#${maximum_start_second} ]]; then
+    echo "seven-day paper trading missed the Berlin midnight start window" >&2
+    return 1
+  fi
+}
+
 paper_wait_for_start_window() {
   local maximum_start_second="$1"
   local current_second
   local wait_seconds
+
+  case "${MAAIS_RUN_PURPOSE:-seven_day}" in
+    seven_day)
+      paper_wait_for_berlin_midnight_start_window "${maximum_start_second}"
+      return
+      ;;
+    process_drill | soak) ;;
+    *)
+      echo "MAAIS_RUN_PURPOSE must be process_drill, soak, or seven_day" >&2
+      return 64
+      ;;
+  esac
 
   current_second="$(date -u +%S)" || return 1
   wait_seconds="$(

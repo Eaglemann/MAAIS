@@ -21,6 +21,11 @@ BERLIN = ZoneInfo("Europe/Berlin")
 def _daily_report(report_date: date, index: int) -> dict[str, object]:
     start_local = datetime.combine(report_date, time.min, BERLIN)
     end_local = start_local + timedelta(days=1)
+    experiment_start_local = datetime.combine(
+        report_date - timedelta(days=index),
+        time.min,
+        BERLIN,
+    ) + timedelta(seconds=3)
     starting_equity = 10_000 + index
     ending_equity = starting_equity + 1
     return {
@@ -48,6 +53,9 @@ def _daily_report(report_date: date, index: int) -> dict[str, object]:
             "schema_revision": "0015",
             "config_hash": "d" * 64,
             "manifest_hash": "e" * 64,
+            "started_at": experiment_start_local.astimezone(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
         },
         "window": {
             "timezone": "Europe/Berlin",
@@ -370,6 +378,26 @@ def test_final_report_rejects_a_mislabeled_berlin_day_window(tmp_path: Path) -> 
         write_daily_report_bundle(report, tmp_path)
 
     with pytest.raises(ValueError, match="Berlin window mismatch"):
+        build_final_report_from_bundles(
+            tmp_path,
+            experiment_id=EXPERIMENT_ID,
+            start_date=start_date,
+            days=7,
+            generated_at=datetime(2026, 8, 10, 0, 5, tzinfo=timezone.utc),
+        )
+
+
+def test_final_report_rejects_a_partial_first_calendar_day(tmp_path: Path) -> None:
+    start_date = date(2026, 8, 3)
+    late_start = datetime(2026, 8, 3, 12, tzinfo=BERLIN).astimezone(timezone.utc)
+    for index in range(7):
+        report = _daily_report(start_date + timedelta(days=index), index)
+        experiment = report["experiment"]
+        assert isinstance(experiment, dict)
+        experiment["started_at"] = late_start.isoformat().replace("+00:00", "Z")
+        write_daily_report_bundle(report, tmp_path)
+
+    with pytest.raises(ValueError, match="did not start within the first Berlin minute"):
         build_final_report_from_bundles(
             tmp_path,
             experiment_id=EXPERIMENT_ID,

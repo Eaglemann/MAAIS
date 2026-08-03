@@ -51,7 +51,10 @@ investigate, never permission to begin the week.
 
 Start the official clock at a Berlin midnight. This produces exactly seven complete,
 contiguous Berlin-day bundles without treating a partial first or last calendar day as a
-full experimental day.
+full experimental day. Invoke the prepared seven-day launcher during the final ten minutes
+before midnight; it waits only for that immediate boundary and fails closed if activation is
+outside seconds `00` through `05` or wakes late. Soak and process-drill launches continue to
+align to the next safe minute instead.
 
 After the seventh Berlin day has ended, keep the worker running while generating that
 day's bundle, then freeze the final aggregate:

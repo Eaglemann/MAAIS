@@ -121,6 +121,7 @@ done
 def test_start_window_waits_when_the_current_minute_is_too_close_to_close() -> None:
     result = _run_bash(
         """
+MAAIS_RUN_PURPOSE=soak
 date() { printf '52\n'; }
 sleep() { printf 'slept=%s\n' "$1"; }
 paper_wait_for_start_window 5
@@ -130,6 +131,92 @@ paper_wait_for_start_window 5
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["slept=8"]
     assert "aligning paper activation to a safe minute boundary" in result.stderr
+
+
+def test_seven_day_start_waits_for_the_next_berlin_midnight() -> None:
+    result = _run_bash(
+        """
+slept=false
+date() {
+  if [[ "${slept}" == false ]]; then
+    printf '23:59:58\n'
+  else
+    printf '00:00:00\n'
+  fi
+}
+sleep() {
+  printf 'slept=%s\n' "$1"
+  slept=true
+}
+paper_wait_for_start_window 5
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["slept=2"]
+    assert "aligning seven-day activation to Berlin midnight" in result.stderr
+
+
+def test_seven_day_start_accepts_only_the_first_five_seconds_at_midnight() -> None:
+    result = _run_bash(
+        """
+date() { printf '00:00:03\n'; }
+sleep() { printf 'unexpected-sleep=%s\n' "$1"; return 99; }
+paper_wait_for_start_window 5
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
+def test_seven_day_start_fails_closed_outside_the_bounded_midnight_window() -> None:
+    result = _run_bash(
+        """
+date() { printf '00:00:06\n'; }
+sleep() { printf 'unexpected-sleep=%s\n' "$1"; return 99; }
+paper_wait_for_start_window 5
+"""
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "must begin at Berlin midnight" in result.stderr
+
+
+def test_seven_day_start_never_waits_more_than_ten_minutes() -> None:
+    result = _run_bash(
+        """
+date() { printf '23:49:59\n'; }
+sleep() { printf 'unexpected-sleep=%s\n' "$1"; return 99; }
+paper_wait_for_start_window 5
+"""
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "within 10 minutes before 00:00" in result.stderr
+
+
+def test_seven_day_start_fails_if_the_wait_wakes_after_the_start_window() -> None:
+    result = _run_bash(
+        """
+slept=false
+date() {
+  if [[ "${slept}" == false ]]; then
+    printf '23:59:59\n'
+  else
+    printf '00:00:06\n'
+  fi
+}
+sleep() { slept=true; }
+paper_wait_for_start_window 5
+"""
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "missed the Berlin midnight start window" in result.stderr
 
 
 def test_sleep_inhibitor_executes_caffeinate_for_worker_pid(tmp_path: Path) -> None:
