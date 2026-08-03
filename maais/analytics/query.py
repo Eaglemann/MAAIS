@@ -124,11 +124,17 @@ async def load_research_dataset(
         )
     ).all()
 
-    bar_statement = select(MarketFrameModel).where(MarketFrameModel.experiment_id == experiment_id)
+    bar_statement = select(
+        MarketFrameModel.symbol,
+        MarketFrameModel.bar_close_at,
+        MarketFrameModel.high,
+        MarketFrameModel.low,
+        MarketFrameModel.close,
+    ).where(MarketFrameModel.experiment_id == experiment_id)
     if cutoff is not None:
         bar_statement = bar_statement.where(MarketFrameModel.bar_close_at < cutoff)
     bars = (
-        await session.scalars(
+        await session.execute(
             bar_statement.order_by(MarketFrameModel.symbol, MarketFrameModel.bar_close_at)
         )
     ).all()

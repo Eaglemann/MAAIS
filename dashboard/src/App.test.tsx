@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -217,6 +217,38 @@ describe("Mission Control event synchronization", () => {
       expect.stringContaining(`/events?after_cursor=${Number.MAX_SAFE_INTEGER}`),
       expect.any(Object),
     );
+  });
+
+  it("does not recompute full research analytics for every durable event", async () => {
+    vi.spyOn(api, "listExperiments").mockResolvedValue([EVENT_FEED_EXPERIMENT]);
+    const overview = vi.spyOn(api, "getOverview").mockResolvedValue({
+      ...EVENT_FEED_EXPERIMENT,
+      positions: [],
+      pending_orders: [],
+      incidents: [],
+    });
+    vi.spyOn(api, "listDecisions").mockResolvedValue({
+      items: [], limit: 200, has_more: false, next_before_at: null, next_before_id: null,
+    });
+    vi.spyOn(api, "listTrades").mockResolvedValue({
+      items: [], limit: 200, has_more: false, next_before_at: null, next_before_id: null,
+    });
+    vi.spyOn(api, "listCommands").mockResolvedValue({ items: [], limit: 100 });
+    const research = vi.spyOn(api, "getResearch").mockResolvedValue(EMPTY_RESEARCH);
+    let invalidate: (() => void) | undefined;
+    vi.spyOn(api, "startResumableEventFeed").mockImplementation((options) => {
+      invalidate = options.onEvents;
+      return () => undefined;
+    });
+
+    render(<App />);
+    await waitFor(() => expect(research).toHaveBeenCalledTimes(1));
+    const initialOverviewCalls = overview.mock.calls.length;
+
+    act(() => invalidate?.());
+
+    await waitFor(() => expect(overview.mock.calls.length).toBeGreaterThan(initialOverviewCalls));
+    expect(research).toHaveBeenCalledTimes(1);
   });
 });
 

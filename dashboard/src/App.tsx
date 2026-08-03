@@ -590,21 +590,18 @@ export default function App() {
         nextTrades,
         nextExperiments,
         nextCommands,
-        nextResearch,
       ] = await Promise.all([
         getOverview(selectedId, signal),
         listDecisions(selectedId, filters, decisionCursor, signal),
         listTrades(selectedId, tradeFilters, tradeCursor, signal),
         listExperiments(signal),
         listCommands(selectedId, signal),
-        getResearch(selectedId, signal),
       ]);
       setOverview(nextOverview);
       setDecisionPage(nextDecisions);
       setTradePage(nextTrades);
       setExperiments(nextExperiments);
       setCommands(nextCommands);
-      setResearch(nextResearch);
       setLastUpdated(new Date().toISOString());
       setError(null);
     } catch (reason: unknown) {
@@ -613,6 +610,15 @@ export default function App() {
       if (!signal?.aborted) setLoading(false);
     }
   }, [decisionCursor, filters, selectedId, tradeCursor, tradeFilters]);
+
+  const refreshResearch = useCallback(async (signal?: AbortSignal) => {
+    if (!selectedId) return;
+    try {
+      setResearch(await getResearch(selectedId, signal));
+    } catch (reason: unknown) {
+      if (!signal?.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -625,6 +631,17 @@ export default function App() {
       controller.abort();
     };
   }, [refresh, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const controller = new AbortController();
+    void refreshResearch(controller.signal);
+    const interval = window.setInterval(() => void refreshResearch(controller.signal), 300_000);
+    return () => {
+      window.clearInterval(interval);
+      controller.abort();
+    };
+  }, [refreshResearch, selectedId]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -800,7 +817,10 @@ export default function App() {
                 ))}
               </select>
             </label>
-            <button className="refresh-button" type="button" onClick={() => void refresh()}>
+            <button className="refresh-button" type="button" onClick={() => {
+              void refresh();
+              void refreshResearch();
+            }}>
               <span className={loading ? "refresh-icon refresh-icon--spinning" : "refresh-icon"}>↻</span>
               Refresh
             </button>
