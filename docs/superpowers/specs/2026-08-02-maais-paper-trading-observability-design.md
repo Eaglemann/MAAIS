@@ -9,7 +9,7 @@
 
 MAAIS will become a professional single-operator quantitative-trading workstation that supports the complete strategy lifecycle:
 
-`research -> deterministic replay -> walk-forward evaluation -> live-data paper trading -> controlled testnet smoke tests -> future pilot -> production`
+`research -> deterministic replay -> walk-forward evaluation -> live-data paper trading -> optional controlled testnet smoke tests -> future pilot -> production`
 
 This design covers the work required to make the repository ready for a trustworthy seven-day live-data paper-trading experiment with complete decision visibility. It does not claim that a successful week proves profitability or production readiness.
 
@@ -647,7 +647,7 @@ The final seven-day report aggregates daily snapshots without recomputing or rew
 
 ### Phase 6 - Preflight and seven-day candidate
 
-- Freeze configuration, run deterministic historical replay, restore drill, Testnet smoke tests, and 24-hour live-data soak.
+- Freeze configuration, run deterministic historical replay, production-endpoint safety tests, restore drill, and a 24-hour live-data soak. Demo/Testnet protocol smoke is optional, separately evidenced, and never a paper-readiness credential gate.
 - Only after all gates pass is the system declared ready to begin the seven-day paper experiment.
 
 ### Phase 7 - Seven-day paper experiment

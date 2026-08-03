@@ -461,9 +461,13 @@ export default function App() {
       .then((items) => {
         setExperiments(items);
         setSelectedId((current) => current || items[0]?.experiment.id || "");
+        if (items.length === 0) setLoading(false);
       })
       .catch((reason: unknown) => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+        if (!controller.signal.aborted) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+          setLoading(false);
+        }
       });
     return () => controller.abort();
   }, []);

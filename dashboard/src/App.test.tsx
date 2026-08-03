@@ -5,7 +5,8 @@ import "@testing-library/jest-dom/vitest";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { OperatorConsole, ResearchLab, TradeTable } from "./App";
+import * as api from "./api";
+import App, { OperatorConsole, ResearchLab, TradeTable } from "./App";
 import type {
   JsonRecord,
   OperatorCommandPage,
@@ -14,7 +15,21 @@ import type {
   TradePage,
 } from "./types";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("Mission Control startup", () => {
+  it("shows the clean-database empty state after the first experiment query", async () => {
+    vi.spyOn(api, "listExperiments").mockResolvedValue([]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "No paper experiments yet" }))
+      .toBeInTheDocument();
+  });
+});
 
 const PAGE: TradePage = {
   items: [

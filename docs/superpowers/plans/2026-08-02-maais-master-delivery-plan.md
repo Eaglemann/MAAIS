@@ -117,7 +117,7 @@
 | Phase 3 - Orchestrator | Complete validated live/replay pipeline and recovery cursors | Dashboard preflight |
 | Phase 4 - Mission Control | Query/control API, dashboard, reports, exports | Operator test |
 | Phase 5 - Resilience | Fault injection, backup/restore, metrics, runbooks | Soak |
-| Phase 6 - Preflight | Deterministic replay, Testnet smoke, 24-hour live-data soak | Seven-day run |
+| Phase 6 - Preflight | Deterministic replay, endpoint-safety proof, 24-hour live-data soak | Seven-day run |
 | Phase 7 - Experiment | Seven continuous days and final reconciled report | Goal completion |
 
 ## Phase 0 - Baseline Safety and Repository Health
@@ -252,7 +252,7 @@ The phase brief below fixes scope and acceptance criteria. Its implementation-gr
 
 - [ ] Freeze official code commit, configuration, fee schedule, symbol filters, weights, strategy, and fill policy.
 - [ ] Run complete historical deterministic replay and archive artifacts.
-- [ ] Run Binance Demo/Testnet create/query/cancel/reduce-only protocol smoke tests with isolated credentials.
+- [ ] Prove the paper dependency graph cannot construct authenticated execution and the candidate environment contains no exchange credentials. Optional Demo/Testnet protocol smoke remains outside the paper-readiness gate.
 - [ ] Run backup and restore drill on the candidate.
 - [ ] Run 24 continuous hours of public live data with paper broker and all reports.
 - [ ] Audit decision cardinality, data gaps, recovery, event/projection consistency, account reconciliation, counterfactual isolation, dashboard/report equality, errors, and incidents.

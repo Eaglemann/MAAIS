@@ -61,3 +61,13 @@ def test_stop_script_uses_the_audited_stop_command_before_process_signals() -> N
     assert stop_script.index('paper_signal_process_tree "${scheduler_pid}"') < stop_script.index(
         '"command_type":"stop"'
     )
+
+
+def test_browser_smoke_uses_a_real_local_browser_and_fails_on_console_errors() -> None:
+    browser_script = (REPOSITORY_ROOT / "scripts" / "browser-smoke.sh").read_text()
+
+    assert "playwright-cli" in browser_script
+    assert "vite preview --host 127.0.0.1" in browser_script
+    assert "No paper experiments yet" in browser_script
+    assert "console error --json" in browser_script
+    assert "Errors: 0, Warnings: 0" in browser_script
