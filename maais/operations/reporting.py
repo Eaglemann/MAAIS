@@ -20,6 +20,7 @@ import duckdb
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from maais.analytics.query import load_research_dataset
 from maais.config.paper_candidate import OFFICIAL_MARGIN_POLICY, OFFICIAL_MODEL_LIMITATIONS
 from maais.config.settings import get_settings
 from maais.db.models.accounts import AccountSnapshotModel, FundingEntryModel, PositionModel
@@ -51,7 +52,7 @@ from maais.operations.verification import establish_read_only_snapshot
 BERLIN = ZoneInfo("Europe/Berlin")
 UTC = timezone.utc
 ZERO = Decimal("0")
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 _PENDING_ORDER_STATUSES = ("created", "authorized", "accepted", "partially_filled")
 _OPEN_COUNTERFACTUAL_STATUSES = ("pending", "open")
 
@@ -828,6 +829,12 @@ async def build_daily_report(
         "start_snapshot_at": start_account["snapshot_at"],
         "end_snapshot_at": end_account["snapshot_at"],
     }
+    research_dataset = await load_research_dataset(session, experiment, cutoff=cutoff)
+    analytics = {
+        "scope": "experiment_to_cutoff",
+        "as_of": research_dataset.analytics_as_of,
+        **research_dataset.analytics,
+    }
     report: dict[str, object] = {
         "report_type": "daily",
         "report_schema_version": REPORT_SCHEMA_VERSION,
@@ -863,6 +870,7 @@ async def build_daily_report(
             "cutoff_utc": _iso(cutoff),
         },
         "account": account,
+        "analytics": analytics,
         "model_assumptions": _report_model_assumptions(experiment.manifest_json),
         "decisions": {
             "total": len(decision_rows),
@@ -1091,14 +1099,17 @@ async def build_daily_report(
             "ledger_error_codes": _counts([error.code for error in ledger.errors]),
             "authoritative_record_count": len(evidence),
             "authoritative_hash": authoritative_hash,
+            "analytics_hash": content_hash(analytics),
         },
     }
     report_id = content_hash(
         {
+            "report_schema_version": REPORT_SCHEMA_VERSION,
             "experiment_id": experiment_id,
             "report_date": report_date.isoformat(),
             "cutoff": cutoff,
             "authoritative_hash": authoritative_hash,
+            "analytics_hash": content_hash(analytics),
         }
     )
     report["report_id"] = report_id
@@ -1178,6 +1189,13 @@ def _operator_action_trail(rows: object) -> str:
 def render_daily_report_markdown(report: dict[str, object]) -> str:
     experiment = cast(dict[str, object], report["experiment"])
     account = cast(dict[str, object], report["account"])
+    analytics = cast(dict[str, object], report["analytics"])
+    performance = cast(dict[str, object], analytics["performance"])
+    calibration = cast(dict[str, object], analytics["calibration"])
+    consensus_calibration = cast(dict[str, object], calibration.get("consensus", {}))
+    benchmarks = cast(dict[str, object], analytics["benchmarks"])
+    buy_and_hold = cast(dict[str, object], benchmarks.get("buy_and_hold", {}))
+    flat_cash = cast(dict[str, object], benchmarks.get("flat_cash", {}))
     assumptions = cast(dict[str, object], report["model_assumptions"])
     margin = cast(dict[str, object], assumptions["margin"])
     decisions = cast(dict[str, object], report["decisions"])
@@ -1210,6 +1228,23 @@ Generated: `{report["generated_at"]}`
 | Fees | {account["fees"]} |
 | Funding | {account["funding"]} |
 | Maximum drawdown | {account["maximum_drawdown"]} |
+
+## Performance analytics (experiment to cutoff)
+
+| Metric | Value |
+| --- | ---: |
+| Closed trade allocations | {performance["closed_trade_allocations"]} |
+| Win rate | {performance["win_rate"]} |
+| Average win | {performance["average_win"]} |
+| Average loss | {performance["average_loss"]} |
+| Expectancy | {performance["expectancy"]} |
+| Profit factor | {performance["profit_factor"]} |
+| Average R multiple | {performance["average_r_multiple"]} |
+| Maximum favorable excursion | {performance["maximum_favorable_excursion"]} |
+| Maximum adverse excursion | {performance["maximum_adverse_excursion"]} |
+| Consensus Brier score | {consensus_calibration.get("brier_score", "—")} |
+| Buy and hold ending equity | {buy_and_hold.get("ending_equity", "—")} |
+| Flat cash ending equity | {flat_cash.get("ending_equity", "—")} |
 
 ## Model assumptions and limitations
 

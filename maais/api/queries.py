@@ -9,14 +9,7 @@ from uuid import UUID
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from maais.analytics.research import (
-    AnalyticsBar,
-    AnalyticsCounterfactual,
-    AnalyticsFill,
-    AnalyticsSensitivity,
-    AnalyticsSnapshot,
-    build_research_analytics,
-)
+from maais.analytics.query import load_research_dataset
 from maais.api.schemas import (
     AccountOverview,
     AuditEvent,
@@ -38,12 +31,7 @@ from maais.api.schemas import (
     TradePage,
 )
 from maais.config.paper_candidate import OFFICIAL_MARGIN_POLICY, OFFICIAL_MODEL_LIMITATIONS
-from maais.db.models.accounts import (
-    AccountSnapshotModel,
-    ExitPlanModel,
-    PositionLotModel,
-    PositionModel,
-)
+from maais.db.models.accounts import AccountSnapshotModel, PositionModel
 from maais.db.models.counterfactuals import CounterfactualModel
 from maais.db.models.decisions import (
     AgentEvaluationModel,
@@ -53,12 +41,7 @@ from maais.db.models.decisions import (
     MarketFrameModel,
     TradeProposalModel,
 )
-from maais.db.models.execution import (
-    ExecutionSensitivityModel,
-    FillModel,
-    OrderEventModel,
-    OrderIntentModel,
-)
+from maais.db.models.execution import FillModel, OrderEventModel, OrderIntentModel
 from maais.db.models.experiments import AgentVersionModel, ExperimentModel
 from maais.db.models.ledger import DomainEventModel
 from maais.db.models.operations import (
@@ -659,272 +642,11 @@ class MissionControlQueryService:
         if not 1 <= limit_per_kind <= 1000:
             raise ValueError("research limit must be between 1 and 1000")
         experiment = await self._experiment(experiment_id)
-        counterfactuals = (
-            await self._session.scalars(
-                select(CounterfactualModel)
-                .where(CounterfactualModel.experiment_id == experiment_id)
-                .order_by(CounterfactualModel.created_at.desc(), CounterfactualModel.id)
-            )
-        ).all()
-        sensitivity_rows = (
-            await self._session.execute(
-                select(
-                    ExecutionSensitivityModel,
-                    OrderIntentModel,
-                    TradeProposalModel,
-                )
-                .join(
-                    OrderIntentModel,
-                    OrderIntentModel.id == ExecutionSensitivityModel.order_intent_id,
-                )
-                .join(
-                    TradeProposalModel,
-                    TradeProposalModel.id == OrderIntentModel.proposal_id,
-                )
-                .where(OrderIntentModel.experiment_id == experiment_id)
-                .order_by(
-                    ExecutionSensitivityModel.calculated_at.desc(),
-                    ExecutionSensitivityModel.order_intent_id,
-                    ExecutionSensitivityModel.scenario,
-                )
-            )
-        ).all()
-        snapshots = (
-            await self._session.scalars(
-                select(AccountSnapshotModel)
-                .where(AccountSnapshotModel.experiment_id == experiment_id)
-                .order_by(AccountSnapshotModel.snapshot_at, AccountSnapshotModel.account_version)
-            )
-        ).all()
-        bars = (
-            await self._session.scalars(
-                select(MarketFrameModel)
-                .where(MarketFrameModel.experiment_id == experiment_id)
-                .order_by(MarketFrameModel.symbol, MarketFrameModel.bar_close_at)
-            )
-        ).all()
-        execution_rows = (
-            await self._session.execute(
-                select(
-                    FillModel,
-                    OrderIntentModel,
-                    TradeProposalModel,
-                    DecisionCycleModel,
-                    DecisionSummaryModel,
-                )
-                .join(OrderIntentModel, OrderIntentModel.id == FillModel.order_intent_id)
-                .join(TradeProposalModel, TradeProposalModel.id == OrderIntentModel.proposal_id)
-                .join(
-                    DecisionCycleModel,
-                    DecisionCycleModel.id == TradeProposalModel.decision_cycle_id,
-                )
-                .outerjoin(
-                    DecisionSummaryModel,
-                    DecisionSummaryModel.decision_cycle_id == DecisionCycleModel.id,
-                )
-                .where(OrderIntentModel.experiment_id == experiment_id)
-                .order_by(FillModel.fill_at, FillModel.id)
-            )
-        ).all()
-        cycle_ids = {proposal.decision_cycle_id for _, _, proposal, _, _ in execution_rows} | {
-            row.decision_cycle_id for row in counterfactuals
-        }
-        agent_rows = (
-            (
-                await self._session.execute(
-                    select(AgentEvaluationModel, AgentVersionModel)
-                    .join(
-                        AgentVersionModel,
-                        AgentVersionModel.id == AgentEvaluationModel.agent_version_id,
-                    )
-                    .where(AgentEvaluationModel.decision_cycle_id.in_(cycle_ids))
-                    .order_by(
-                        AgentEvaluationModel.decision_cycle_id,
-                        AgentVersionModel.agent_name,
-                    )
-                )
-            ).all()
-            if cycle_ids
-            else []
-        )
-        agents_by_cycle: dict[UUID, list[tuple[AgentEvaluationModel, AgentVersionModel]]] = {}
-        for evaluation, version in agent_rows:
-            agents_by_cycle.setdefault(evaluation.decision_cycle_id, []).append(
-                (evaluation, version)
-            )
-
-        def prediction_context(
-            cycle_id: UUID,
-            direction: str,
-        ) -> tuple[tuple[str, ...], dict[str, Decimal]]:
-            coalition: list[str] = []
-            probabilities: dict[str, Decimal] = {}
-            for evaluation, version in agents_by_cycle.get(cycle_id, ()):
-                if not evaluation.enabled or not evaluation.compatible:
-                    continue
-                if evaluation.direction == direction:
-                    coalition.append(version.agent_name)
-                    probability = evaluation.probability
-                elif evaluation.direction == "neutral":
-                    probability = Decimal("0.5")
-                else:
-                    probability = Decimal("1") - evaluation.probability
-                probabilities[version.agent_name] = probability
-            return tuple(sorted(coalition)), probabilities
-
-        lot_position_rows = (
-            await self._session.execute(
-                select(PositionLotModel.opening_fill_id, PositionLotModel.position_id)
-                .join(PositionModel, PositionModel.id == PositionLotModel.position_id)
-                .where(PositionModel.experiment_id == experiment_id)
-            )
-        ).all()
-        position_by_opening_fill = {
-            opening_fill_id: position_id for opening_fill_id, position_id in lot_position_rows
-        }
-        exit_rows = (
-            await self._session.execute(
-                select(
-                    ExitPlanModel.position_id,
-                    ExitPlanModel.trigger_reason,
-                    ExitPlanModel.triggered_at,
-                )
-                .join(PositionModel, PositionModel.id == ExitPlanModel.position_id)
-                .where(
-                    PositionModel.experiment_id == experiment_id,
-                    ExitPlanModel.trigger_reason.is_not(None),
-                )
-                .order_by(ExitPlanModel.triggered_at)
-            )
-        ).all()
-        exits_by_position: dict[UUID, list[tuple[datetime, str]]] = {}
-        for position_id, reason, triggered_at in exit_rows:
-            if reason is not None and triggered_at is not None:
-                exits_by_position.setdefault(position_id, []).append((triggered_at, reason))
-
-        latest_opening_position: dict[str, UUID] = {}
-        analytic_fills: list[AnalyticsFill] = []
-        for fill, order, proposal, decision, summary in execution_rows:
-            coalition, probabilities = prediction_context(
-                proposal.decision_cycle_id,
-                proposal.direction,
-            )
-            exit_reason = None
-            if order.position_effect == "open":
-                position_id = position_by_opening_fill.get(fill.id)
-                if position_id is not None:
-                    latest_opening_position[order.symbol] = position_id
-            else:
-                position_id = latest_opening_position.get(order.symbol)
-                candidates = exits_by_position.get(position_id, ()) if position_id else ()
-                exit_reason = next(
-                    (
-                        reason
-                        for triggered_at, reason in reversed(candidates)
-                        if triggered_at <= fill.fill_at
-                    ),
-                    None,
-                )
-            analytic_fills.append(
-                AnalyticsFill(
-                    id=fill.id,
-                    symbol=order.symbol,
-                    side=order.side,
-                    position_effect=order.position_effect,
-                    quantity=fill.quantity,
-                    price=fill.price,
-                    fee=fill.fee,
-                    fill_at=fill.fill_at,
-                    direction=proposal.direction,
-                    decision_cycle_id=proposal.decision_cycle_id,
-                    strategy_version_id=decision.strategy_version_id,
-                    regime=decision.regime,
-                    risk_at_stop=proposal.risk_at_stop,
-                    approved_quantity=proposal.approved_quantity,
-                    consensus_probability=(
-                        summary.consensus_probability if summary is not None else None
-                    ),
-                    coalition=coalition,
-                    agent_probabilities=probabilities,
-                    exit_reason=exit_reason,
-                )
-            )
-
-        summary_by_cycle = {
-            decision.id: summary
-            for _, _, _, decision, summary in execution_rows
-            if summary is not None
-        }
-        missing_summary_ids = {
-            row.decision_cycle_id
-            for row in counterfactuals
-            if row.decision_cycle_id not in summary_by_cycle
-        }
-        if missing_summary_ids:
-            missing_summaries = (
-                await self._session.scalars(
-                    select(DecisionSummaryModel).where(
-                        DecisionSummaryModel.decision_cycle_id.in_(missing_summary_ids)
-                    )
-                )
-            ).all()
-            summary_by_cycle.update(
-                {summary.decision_cycle_id: summary for summary in missing_summaries}
-            )
-        analytic_counterfactuals: list[AnalyticsCounterfactual] = []
-        for row in counterfactuals:
-            _, probabilities = prediction_context(row.decision_cycle_id, row.direction)
-            summary = summary_by_cycle.get(row.decision_cycle_id)
-            analytic_counterfactuals.append(
-                AnalyticsCounterfactual(
-                    rejection_gate=row.rejection_gate,
-                    status=row.status,
-                    hypothetical_pnl=row.hypothetical_pnl,
-                    consensus_probability=(
-                        summary.consensus_probability if summary is not None else None
-                    ),
-                    agent_probabilities=probabilities,
-                )
-            )
-        analytics = build_research_analytics(
-            initial_capital=experiment.initial_capital,
-            snapshots=(
-                AnalyticsSnapshot(
-                    snapshot_at=row.snapshot_at,
-                    equity=row.equity,
-                    drawdown=row.drawdown,
-                    realized_pnl=row.realized_pnl,
-                    unrealized_pnl=row.unrealized_pnl,
-                    fees=row.fees,
-                    funding=row.funding,
-                )
-                for row in snapshots
-            ),
-            fills=analytic_fills,
-            bars=(
-                AnalyticsBar(
-                    symbol=row.symbol,
-                    bar_close_at=row.bar_close_at,
-                    high=row.high,
-                    low=row.low,
-                    close=row.close,
-                )
-                for row in bars
-            ),
-            counterfactuals=analytic_counterfactuals,
-            sensitivities=(
-                AnalyticsSensitivity(
-                    scenario=sensitivity.scenario,
-                    execution_cost=_optional_decimal(sensitivity.outcome_json.get("execution_cost"))
-                    or Decimal("0"),
-                    marked_pnl=_optional_decimal(sensitivity.outcome_json.get("marked_pnl"))
-                    or Decimal("0"),
-                )
-                for sensitivity, _, _ in sensitivity_rows
-            ),
-        )
+        dataset = await load_research_dataset(self._session, experiment)
+        analytics = dataset.analytics
+        counterfactuals = dataset.counterfactuals
         return ResearchLabView(
-            analytics_as_of=snapshots[-1].snapshot_at if snapshots else None,
+            analytics_as_of=dataset.analytics_as_of,
             equity_curve=tuple(cast(list[dict[str, object]], analytics["equity_curve"])),
             cost_waterfall=cast(Mapping[str, object], analytics["cost_waterfall"]),
             performance=cast(Mapping[str, object], analytics["performance"]),
@@ -965,16 +687,16 @@ class MissionControlQueryService:
             ),
             execution_sensitivities=tuple(
                 ResearchExecutionSensitivity(
-                    id=sensitivity.id,
-                    order_intent_id=order.id,
-                    proposal_id=proposal.id,
-                    decision_cycle_id=proposal.decision_cycle_id,
-                    symbol=order.symbol,
-                    scenario=sensitivity.scenario,
-                    calculated_at=sensitivity.calculated_at,
-                    outcome=sensitivity.outcome_json,
+                    id=row.id,
+                    order_intent_id=row.order_intent_id,
+                    proposal_id=row.proposal_id,
+                    decision_cycle_id=row.decision_cycle_id,
+                    symbol=row.symbol,
+                    scenario=row.scenario,
+                    calculated_at=row.calculated_at,
+                    outcome=row.outcome,
                 )
-                for sensitivity, order, proposal in sensitivity_rows[:limit_per_kind]
+                for row in dataset.execution_sensitivities[:limit_per_kind]
             ),
             limit_per_kind=limit_per_kind,
         )

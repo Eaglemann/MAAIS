@@ -16,7 +16,7 @@ def _report() -> dict[str, object]:
     return {
         "report_id": "a" * 64,
         "report_type": "daily",
-        "report_schema_version": 2,
+        "report_schema_version": 3,
         "report_date": "2026-08-02",
         "generated_at": "2026-08-03T00:05:00Z",
         "experiment": {
@@ -54,6 +54,37 @@ def _report() -> dict[str, object]:
                 "exchange_liquidation_parity": False,
             },
             "limitations": ["exchange_liquidation_behavior_not_modeled"],
+        },
+        "analytics": {
+            "scope": "experiment_to_cutoff",
+            "as_of": "2026-08-02T22:00:00Z",
+            "cost_waterfall": {
+                "gross_realized_pnl": "15",
+                "fees": "-1",
+                "funding": "0",
+                "unrealized_pnl": "-1.5",
+                "net_change": "12.5",
+                "ending_equity": "10012.5",
+                "reconciles": True,
+            },
+            "performance": {
+                "closed_trade_allocations": 3,
+                "win_rate": "0.6666666667",
+                "average_win": "8",
+                "average_loss": "-3.5",
+                "expectancy": "4.1666666667",
+                "profit_factor": "4.5714285714",
+                "average_r_multiple": "1.2",
+                "maximum_favorable_excursion": "15",
+                "maximum_adverse_excursion": "4",
+            },
+            "attribution": {},
+            "calibration": {"consensus": {"sample_size": 3, "brier_score": "0.18"}},
+            "gate_value": {"resolved_sample_size": 2},
+            "benchmarks": {
+                "buy_and_hold": {"status": "available", "ending_equity": "10008"},
+                "flat_cash": {"status": "available", "ending_equity": "10000"},
+            },
         },
         "decisions": {
             "total": 100,
@@ -167,6 +198,9 @@ def test_daily_report_markdown_surfaces_safety_and_reconciliation() -> None:
     assert "Maintenance margin rate | 0.005" in rendered
     assert "Liquidation price model | NOT MODELED" in rendered
     assert "Exchange liquidation parity | NO" in rendered
+    assert "Closed trade allocations | 3" in rendered
+    assert "Consensus Brier score | 0.18" in rendered
+    assert "Buy and hold ending equity | 10008" in rendered
 
 
 def test_report_bundle_is_immutable_and_contains_json_and_markdown(tmp_path: Path) -> None:

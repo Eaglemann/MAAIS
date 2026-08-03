@@ -1,11 +1,13 @@
 import json
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from maais.domain.json import content_hash
 from maais.operations.final_reporting import (
     build_final_report_from_bundles,
     resolve_existing_daily_report_bundle,
@@ -28,10 +30,10 @@ def _daily_report(report_date: date, index: int) -> dict[str, object]:
     ) + timedelta(seconds=3)
     starting_equity = 10_000 + index
     ending_equity = starting_equity + 1
-    return {
+    report: dict[str, object] = {
         "report_id": f"{index + 1:064x}",
         "report_type": "daily",
-        "report_schema_version": 2,
+        "report_schema_version": 3,
         "report_date": report_date.isoformat(),
         "generated_at": (end_local.astimezone(timezone.utc) + timedelta(minutes=5))
         .isoformat()
@@ -147,6 +149,74 @@ def _daily_report(report_date: date, index: int) -> dict[str, object]:
             "by_rejection_gate": {"expected_value": 1},
             "resolved_pnl": "-0.5",
         },
+        "analytics": {
+            "scope": "experiment_to_cutoff",
+            "as_of": end_local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "equity_curve": [],
+            "cost_waterfall": {
+                "initial_capital": "10000",
+                "gross_realized_pnl": str(Decimal(index + 1) * Decimal("1.09")),
+                "fees": str(-Decimal(index + 1) / Decimal("10")),
+                "funding": str(Decimal(index + 1) / Decimal("100")),
+                "unrealized_pnl": "0",
+                "net_change": str(index + 1),
+                "ending_equity": str(10001 + index),
+                "reconciles": True,
+            },
+            "performance": {
+                "basis": "fifo_closed_fill_allocations_net_of_open_and_close_fees_ex_funding",
+                "closed_trade_allocations": index + 1,
+                "wins": index + 1,
+                "losses": 0,
+                "breakeven": 0,
+                "win_rate": "1",
+                "average_win": "1",
+                "average_loss": None,
+                "expectancy": "1",
+                "profit_factor": None,
+                "average_r_multiple": "1",
+                "maximum_favorable_excursion": "2",
+                "maximum_adverse_excursion": "0.5",
+            },
+            "attribution": {
+                "by_symbol": [
+                    {
+                        "key": "BTCUSDT",
+                        "trades": index + 1,
+                        "wins": index + 1,
+                        "losses": 0,
+                        "win_rate": "1",
+                        "net_pnl_ex_funding": str(index + 1),
+                        "expectancy": "1",
+                    }
+                ]
+            },
+            "calibration": {
+                "consensus": {
+                    "sample_size": index + 1,
+                    "brier_score": "0.2",
+                    "mean_probability": "0.7",
+                    "observed_win_rate": "1",
+                }
+            },
+            "gate_value": {
+                "interpretation": "positive_avoided_pnl_means_the_rejection_avoided_a_loss",
+                "resolved_sample_size": index + 1,
+                "by_gate": [],
+            },
+            "cost_sensitivity": {},
+            "benchmarks": {
+                "buy_and_hold": {"status": "available", "ending_equity": "10010"},
+                "flat_cash": {"status": "available", "ending_equity": "10000"},
+            },
+            "availability": {
+                "closed_trade_metrics": {
+                    "status": "available",
+                    "reason": None,
+                    "sample_size": index + 1,
+                }
+            },
+        },
         "operations": {
             "incidents_detected": 0,
             "incidents_by_severity": {},
@@ -202,6 +272,10 @@ def _daily_report(report_date: date, index: int) -> dict[str, object]:
         "decision_index": [],
         "execution_index": [],
     }
+    reconciliation = report["reconciliation"]
+    assert isinstance(reconciliation, dict)
+    reconciliation["analytics_hash"] = content_hash(report["analytics"])
+    return report
 
 
 def _write_week(directory: Path, start_date: date) -> None:
@@ -290,7 +364,7 @@ def test_final_report_verifies_and_aggregates_exactly_seven_contiguous_days(
     )
 
     assert report["report_type"] == "final"
-    assert report["report_schema_version"] == 2
+    assert report["report_schema_version"] == 3
     assert report["period"] == {
         "timezone": "Europe/Berlin",
         "start_date": "2026-08-03",
@@ -321,6 +395,9 @@ def test_final_report_verifies_and_aggregates_exactly_seven_contiguous_days(
     }
     assert report["decisions"]["total"] == 70  # type: ignore[index]
     assert report["execution"]["fills"] == 7  # type: ignore[index]
+    assert report["analytics"]["scope"] == "experiment_to_cutoff"  # type: ignore[index]
+    assert report["analytics"]["performance"]["closed_trade_allocations"] == 7  # type: ignore[index]
+    assert report["analytics"]["calibration"]["consensus"]["brier_score"] == "0.2"  # type: ignore[index]
     assert report["operator_actions"] == {
         "events": 7,
         "requests": 7,
@@ -363,6 +440,8 @@ def test_final_report_bundle_is_immutable_and_self_verifying(tmp_path: Path) -> 
     assert "Liquidation price model | NOT MODELED" in paths.markdown_path.read_text(
         encoding="utf-8"
     )
+    assert "Closed trade allocations | 7" in paths.markdown_path.read_text(encoding="utf-8")
+    assert "Consensus Brier score | 0.2" in paths.markdown_path.read_text(encoding="utf-8")
     with pytest.raises(FileExistsError, match="final report bundle already exists"):
         write_final_report_bundle(report, output_directory)
 
@@ -381,6 +460,56 @@ def test_final_report_rejects_equity_discontinuity_between_daily_snapshots(
         write_daily_report_bundle(report, tmp_path)
 
     with pytest.raises(ValueError, match="equity discontinuity"):
+        build_final_report_from_bundles(
+            tmp_path,
+            experiment_id=EXPERIMENT_ID,
+            start_date=start_date,
+            days=7,
+            generated_at=datetime(2026, 8, 10, 0, 5, tzinfo=timezone.utc),
+        )
+
+
+def test_final_report_rejects_an_invalid_daily_analytics_identity(tmp_path: Path) -> None:
+    start_date = date(2026, 8, 3)
+    for index in range(7):
+        report = _daily_report(start_date + timedelta(days=index), index)
+        if index == 3:
+            analytics = report["analytics"]
+            reconciliation = report["reconciliation"]
+            assert isinstance(analytics, dict)
+            assert isinstance(reconciliation, dict)
+            waterfall = analytics["cost_waterfall"]
+            assert isinstance(waterfall, dict)
+            waterfall["gross_realized_pnl"] = "999"
+            reconciliation["analytics_hash"] = content_hash(analytics)
+        write_daily_report_bundle(report, tmp_path)
+
+    with pytest.raises(ValueError, match="analytics identity is invalid"):
+        build_final_report_from_bundles(
+            tmp_path,
+            experiment_id=EXPERIMENT_ID,
+            start_date=start_date,
+            days=7,
+            generated_at=datetime(2026, 8, 10, 0, 5, tzinfo=timezone.utc),
+        )
+
+
+def test_final_report_rejects_regressed_cumulative_trade_analytics(tmp_path: Path) -> None:
+    start_date = date(2026, 8, 3)
+    for index in range(7):
+        report = _daily_report(start_date + timedelta(days=index), index)
+        if index == 3:
+            analytics = report["analytics"]
+            reconciliation = report["reconciliation"]
+            assert isinstance(analytics, dict)
+            assert isinstance(reconciliation, dict)
+            performance = analytics["performance"]
+            assert isinstance(performance, dict)
+            performance["closed_trade_allocations"] = 0
+            reconciliation["analytics_hash"] = content_hash(analytics)
+        write_daily_report_bundle(report, tmp_path)
+
+    with pytest.raises(ValueError, match="cumulative trade analytics regressed"):
         build_final_report_from_bundles(
             tmp_path,
             experiment_id=EXPERIMENT_ID,

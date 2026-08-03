@@ -18,7 +18,7 @@ from maais.config.paper_candidate import OFFICIAL_MARGIN_POLICY, OFFICIAL_MODEL_
 from maais.domain.json import content_hash, to_json_data
 from maais.operations.reporting import REPORT_SCHEMA_VERSION, berlin_daily_window
 
-FINAL_REPORT_SCHEMA_VERSION = 2
+FINAL_REPORT_SCHEMA_VERSION = 3
 _DAILY_ARTIFACTS = frozenset(
     {
         "report.json",
@@ -219,6 +219,31 @@ def _verify_daily_report(
         raise FinalReportValidationError("daily report violates the paper-only safety boundary")
     if _model_assumptions(report) != _EXPECTED_MODEL_ASSUMPTIONS:
         raise FinalReportValidationError("daily report model assumptions are unsupported")
+    analytics = _object(report.get("analytics"), "daily report analytics")
+    if analytics.get("scope") != "experiment_to_cutoff":
+        raise FinalReportValidationError("daily report analytics scope is unsupported")
+    cost_waterfall = _object(
+        analytics.get("cost_waterfall"), "daily report analytics cost waterfall"
+    )
+    if cost_waterfall.get("reconciles") is not True:
+        raise FinalReportValidationError("daily report analytics does not reconcile")
+    initial_capital = _decimal(cost_waterfall.get("initial_capital"), "analytics initial_capital")
+    gross_realized = _decimal(
+        cost_waterfall.get("gross_realized_pnl"), "analytics gross_realized_pnl"
+    )
+    fees = _decimal(cost_waterfall.get("fees"), "analytics fees")
+    funding = _decimal(cost_waterfall.get("funding"), "analytics funding")
+    unrealized = _decimal(cost_waterfall.get("unrealized_pnl"), "analytics unrealized_pnl")
+    ending_equity = _decimal(cost_waterfall.get("ending_equity"), "analytics ending_equity")
+    if initial_capital + gross_realized + fees + funding + unrealized != ending_equity:
+        raise FinalReportValidationError("daily report analytics identity is invalid")
+    _object(analytics.get("performance"), "daily report analytics performance")
+    _object(analytics.get("attribution"), "daily report analytics attribution")
+    _object(analytics.get("calibration"), "daily report analytics calibration")
+    _object(analytics.get("benchmarks"), "daily report analytics benchmarks")
+    reconciliation = _object(report.get("reconciliation"), "daily report reconciliation")
+    if reconciliation.get("analytics_hash") != content_hash(analytics):
+        raise FinalReportValidationError("daily report analytics hash is invalid")
     experiment = _object(report.get("experiment"), "daily report experiment")
     if experiment.get("id") != str(experiment_id) or experiment.get("mode") != "paper_live":
         raise FinalReportValidationError("daily report experiment identity is invalid")
@@ -486,6 +511,28 @@ def build_final_report_from_bundles(
         "peak_risk_at_stop": _maximum_decimal(reports, "account", "peak_risk_at_stop"),
         "peak_used_margin": _maximum_decimal(reports, "account", "peak_used_margin"),
     }
+    cumulative_trade_counts: list[int] = []
+    for daily_report in reports:
+        daily_analytics = _object(daily_report.get("analytics"), "daily report analytics")
+        performance = _object(
+            daily_analytics.get("performance"), "daily report analytics performance"
+        )
+        count = performance.get("closed_trade_allocations")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise FinalReportValidationError(
+                "daily report closed_trade_allocations must be a nonnegative integer"
+            )
+        cumulative_trade_counts.append(count)
+    if cumulative_trade_counts != sorted(cumulative_trade_counts):
+        raise FinalReportValidationError("daily cumulative trade analytics regressed")
+    analytics = _object(reports[-1].get("analytics"), "final daily analytics")
+    final_cost_waterfall = _object(
+        analytics.get("cost_waterfall"), "final daily analytics cost waterfall"
+    )
+    if _decimal(final_cost_waterfall.get("ending_equity"), "analytics ending_equity") != (
+        ending_equity
+    ):
+        raise FinalReportValidationError("final analytics ending equity does not reconcile")
     end_date = start_date.fromordinal(start_date.toordinal() + days - 1)
     report: dict[str, object] = {
         "report_type": "final",
@@ -504,6 +551,7 @@ def build_final_report_from_bundles(
             "calendar_days": days,
         },
         "account": account,
+        "analytics": analytics,
         "model_assumptions": model_assumptions,
         "decisions": {
             "total": _sum_integers(reports, "decisions", "total"),
@@ -708,6 +756,15 @@ def render_final_report_markdown(report: dict[str, object]) -> str:
     experiment = _object(report.get("experiment"), "final report experiment")
     period = _object(report.get("period"), "final report period")
     account = _object(report.get("account"), "final report account")
+    analytics = _object(report.get("analytics"), "final report analytics")
+    performance = _object(analytics.get("performance"), "final report performance")
+    calibration = _object(analytics.get("calibration"), "final report calibration")
+    consensus_calibration = _object(
+        calibration.get("consensus"), "final report consensus calibration"
+    )
+    benchmarks = _object(analytics.get("benchmarks"), "final report benchmarks")
+    buy_and_hold = _object(benchmarks.get("buy_and_hold"), "buy and hold benchmark")
+    flat_cash = _object(benchmarks.get("flat_cash"), "flat cash benchmark")
     assumptions = _object(report.get("model_assumptions"), "final report model assumptions")
     margin = _object(assumptions.get("margin"), "final report margin assumptions")
     decisions = _object(report.get("decisions"), "final report decisions")
@@ -746,6 +803,23 @@ Generated: `{report["generated_at"]}`
 | Funding | {account["funding"]} |
 | Maximum drawdown | {account["maximum_drawdown"]} |
 | Peak exposure | {account["peak_exposure"]} |
+
+## Performance analytics
+
+| Metric | Value |
+|---|---:|
+| Closed trade allocations | {performance["closed_trade_allocations"]} |
+| Win rate | {performance["win_rate"]} |
+| Average win | {performance["average_win"]} |
+| Average loss | {performance["average_loss"]} |
+| Expectancy | {performance["expectancy"]} |
+| Profit factor | {performance["profit_factor"]} |
+| Average R multiple | {performance["average_r_multiple"]} |
+| Maximum favorable excursion | {performance["maximum_favorable_excursion"]} |
+| Maximum adverse excursion | {performance["maximum_adverse_excursion"]} |
+| Consensus Brier score | {consensus_calibration["brier_score"]} |
+| Buy and hold ending equity | {buy_and_hold.get("ending_equity", "—")} |
+| Flat cash ending equity | {flat_cash.get("ending_equity", "—")} |
 
 ## Model assumptions and limitations
 

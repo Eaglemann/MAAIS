@@ -435,7 +435,10 @@ async def test_daily_report_reconciles_complete_decision_lineage(
     assert report["account"]["ending_equity"] == "10000"  # type: ignore[index]
     assert report["reconciliation"]["ledger_ok"] is True  # type: ignore[index]
     assert len(report["reconciliation"]["report_hash"]) == 64  # type: ignore[index]
-    assert report["report_schema_version"] == 2
+    assert report["report_schema_version"] == 3
+    assert report["analytics"]["scope"] == "experiment_to_cutoff"  # type: ignore[index]
+    assert report["analytics"]["cost_waterfall"]["reconciles"] is True  # type: ignore[index]
+    assert report["analytics"]["performance"]["closed_trade_allocations"] == 0  # type: ignore[index]
     assert report["experiment"]["started_at"] is None  # type: ignore[index]
     assert report["model_assumptions"] == {
         "margin": {
