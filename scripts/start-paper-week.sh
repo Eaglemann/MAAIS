@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
-  echo "usage: $0 MANIFEST RESTORE_VERIFICATION [MISSION_CONTROL_PORT]" >&2
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+  echo "usage: $0 MANIFEST RESTORE_VERIFICATION QUALIFICATION_BUNDLE [MISSION_CONTROL_PORT]" >&2
   exit 64
 fi
 
@@ -11,7 +11,8 @@ repository_root="$(cd "${script_dir}/.." && pwd)"
 source "${script_dir}/paper-process.sh"
 manifest_path="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 restore_path="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
-mission_control_port="${3:-8000}"
+qualification_path="$(cd "$3" && pwd)"
+mission_control_port="${4:-8000}"
 state_dir="${repository_root}/artifacts/run-state"
 log_dir="${state_dir}/logs"
 current_state="${state_dir}/current.json"
@@ -43,6 +44,7 @@ preflight_path="${state_dir}/preflight-$(date -u +%Y%m%dT%H%M%SZ).json"
 RUN_MODE=paper_live uv run maais preflight \
   --manifest "${manifest_path}" \
   --restore-verification "${restore_path}" \
+  --qualification "${qualification_path}" \
   --repository "${repository_root}" \
   --dashboard-dir "${repository_root}/dashboard/dist" \
   > "${preflight_path}"
@@ -197,6 +199,7 @@ jq -n \
   --arg experiment_id "${experiment_id}" \
   --arg manifest "${manifest_path}" \
   --arg restore_verification "${restore_path}" \
+  --arg qualification "${qualification_path}" \
   --arg preflight "${preflight_path}" \
   --arg control_token_file "${control_token_file}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -211,7 +214,7 @@ jq -n \
   --arg dashboard_session "${dashboard_session}" \
   --arg awake_session "${awake_session}" \
   --argjson port "${mission_control_port}" \
-  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
+  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,qualification:$qualification,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
   > "${temporary_state}"
 mv "${temporary_state}" "${current_state}"
 state_created=true

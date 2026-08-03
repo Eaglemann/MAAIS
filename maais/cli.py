@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -31,6 +32,7 @@ from maais.operations.incident_management import (
     apply_configured_incident_action,
 )
 from maais.operations.preflight import run_candidate_preflight
+from maais.operations.qualification import run_candidate_qualification
 from maais.operations.reporting import (
     build_configured_daily_report,
     write_daily_report_bundle,
@@ -152,12 +154,19 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--target-database", required=True)
     restore.add_argument("--confirm-target", required=True)
     restore.add_argument("--output", type=Path, required=True)
+    qualify = commands.add_parser(
+        "qualify-candidate",
+        help="run and freeze every quality gate for the exact clean candidate commit",
+    )
+    qualify.add_argument("--repository", type=Path, default=Path.cwd())
+    qualify.add_argument("--output", type=Path, required=True)
     preflight = commands.add_parser(
         "preflight",
         help="evaluate all local gates for an official timed paper candidate",
     )
     preflight.add_argument("--manifest", type=Path, required=True)
     preflight.add_argument("--restore-verification", type=Path, required=True)
+    preflight.add_argument("--qualification", type=Path, required=True)
     preflight.add_argument("--repository", type=Path, default=Path.cwd())
     preflight.add_argument("--dashboard-dir", type=Path, default=Path("dashboard/dist"))
     preflight.add_argument("--minimum-free-gb", type=_positive_int, default=5)
@@ -341,11 +350,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0 if passed else 1
+    if arguments.command == "qualify-candidate":
+        test_database_url = (
+            os.environ.get("MAAIS_TEST_DATABASE_URL") or settings.maais_test_database_url
+        )
+        if not test_database_url:
+            raise ValueError(
+                "MAAIS_TEST_DATABASE_URL is required and must name a PostgreSQL _test database"
+            )
+        paths, report = run_candidate_qualification(
+            repository_root=arguments.repository,
+            output_directory=arguments.output,
+            test_database_url=test_database_url,
+        )
+        print(
+            json.dumps(
+                {
+                    "passed": report["passed"],
+                    "report_id": report["report_id"],
+                    "directory": str(paths.directory),
+                    "qualification": str(paths.report_path),
+                    "bundle_manifest": str(paths.manifest_path),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0 if report["passed"] is True else 1
     if arguments.command == "preflight":
         report = asyncio.run(
             run_candidate_preflight(
                 manifest_path=arguments.manifest,
                 restore_verification_path=arguments.restore_verification,
+                qualification_directory=arguments.qualification,
                 repository_root=arguments.repository,
                 dashboard_directory=arguments.dashboard_dir,
                 minimum_free_gb=arguments.minimum_free_gb,

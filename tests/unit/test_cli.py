@@ -62,6 +62,15 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/manifests/week.json",
             "--restore-verification",
             "artifacts/restore-drills/latest/restore-verification.json",
+            "--qualification",
+            "artifacts/qualification/latest",
+        ]
+    )
+    qualify = parser.parse_args(
+        [
+            "qualify-candidate",
+            "--output",
+            "artifacts/qualification",
         ]
     )
     health = parser.parse_args(
@@ -124,6 +133,9 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert restore.target_database == "maais_week_restore"
     assert preflight.repository == Path.cwd()
     assert preflight.minimum_free_gb == 5
+    assert preflight.qualification == Path("artifacts/qualification/latest")
+    assert qualify.repository == Path.cwd()
+    assert qualify.output == Path("artifacts/qualification")
     assert health.maximum_lag_seconds == 180
     assert not health.allow_stopped
     assert soak_verdict.state == Path("artifacts/run-state/current.json")
@@ -148,6 +160,42 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
                 "reviewed",
             ]
         )
+
+
+def test_qualification_uses_separate_test_database_environment_without_printing_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = "postgresql+psycopg://localhost:5432/maais_test"
+    bundle = tmp_path / "qualification-bundle"
+    captured: dict[str, object] = {}
+
+    def fake_qualification(**kwargs: object):
+        captured.update(kwargs)
+        return (
+            SimpleNamespace(
+                directory=bundle,
+                report_path=bundle / "qualification.json",
+                manifest_path=bundle / "bundle-manifest.json",
+            ),
+            {"passed": True, "report_id": "a" * 64},
+        )
+
+    monkeypatch.setenv("MAAIS_TEST_DATABASE_URL", database_url)
+    monkeypatch.setattr("maais.cli.run_candidate_qualification", fake_qualification)
+
+    assert main(["qualify-candidate", "--output", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert captured["test_database_url"] == database_url
+    assert database_url not in output
+    assert json.loads(output) == {
+        "bundle_manifest": str(bundle / "bundle-manifest.json"),
+        "directory": str(bundle),
+        "passed": True,
+        "qualification": str(bundle / "qualification.json"),
+        "report_id": "a" * 64,
+    }
 
 
 def test_verify_ledger_prints_machine_readable_result_and_returns_success(

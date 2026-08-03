@@ -21,6 +21,9 @@ def test_paper_services_start_with_structured_production_logging() -> None:
     assert '"${experiment_status}" == "running"' in start_script
     assert "uv run maais daily-supervisor" in start_script
     assert '"scheduler_pid":$scheduler_pid' in start_script
+    assert "MANIFEST RESTORE_VERIFICATION QUALIFICATION_BUNDLE" in start_script
+    assert '--qualification "${qualification_path}"' in start_script
+    assert "qualification:$qualification" in start_script
 
 
 def test_recovery_script_is_fail_closed_and_audited() -> None:

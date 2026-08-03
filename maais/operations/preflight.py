@@ -20,6 +20,10 @@ from maais.experiments.manifest import ExperimentManifest
 from maais.experiments.prepare import RepositoryIdentity, capture_repository_identity
 from maais.experiments.runtime_policy import LivePaperPolicy, RuntimePolicyError
 from maais.live import load_manifest_file
+from maais.operations.qualification import (
+    load_verified_qualification,
+    qualification_evidence_passes,
+)
 from maais.operations.verification import ledger_consistency_payload
 
 UTC = timezone.utc
@@ -42,6 +46,9 @@ def evaluate_candidate_preflight(
     dashboard_built: bool,
     free_disk_bytes: int,
     minimum_free_bytes: int,
+    qualification: dict[str, object],
+    qualification_bundle_verified: bool,
+    evaluated_at: datetime,
 ) -> dict[str, object]:
     """Evaluate every local, identity, safety, and recovery prerequisite."""
     runtime_policy_error: str | None = None
@@ -63,6 +70,12 @@ def evaluate_candidate_preflight(
         and isinstance(restore_verification.get("ledger"), dict)
         and cast(dict[str, object], restore_verification["ledger"]).get("ok") is True
         and restored_schema_values.get("restored") == manifest.schema_revision
+    )
+    qualification_passed = qualification_evidence_passes(
+        qualification,
+        repository=repository,
+        bundle_verified=qualification_bundle_verified,
+        evaluated_at=evaluated_at,
     )
     checks = [
         _check(
@@ -142,11 +155,23 @@ def evaluate_candidate_preflight(
             free_disk_bytes >= minimum_free_bytes,
             f"free_bytes={free_disk_bytes} required_bytes={minimum_free_bytes}",
         ),
+        _check(
+            "fresh_qualification",
+            qualification_passed,
+            (
+                "immutable qualification bundle is verified, fresh, complete, and matches "
+                "repository"
+                if qualification_passed
+                else "qualification bundle is missing, stale, incomplete, tampered, or does "
+                "not match the exact clean repository"
+            ),
+        ),
     ]
     return {
         "passed": all(check["passed"] is True for check in checks),
         "experiment_id": str(manifest.experiment_id),
         "manifest_hash": manifest.manifest_hash,
+        "qualification_report_id": qualification.get("report_id"),
         "safety": {"paper_trading_only": True, "live_money": False},
         "checks": checks,
     }
@@ -179,6 +204,7 @@ async def run_candidate_preflight(
     *,
     manifest_path: Path,
     restore_verification_path: Path,
+    qualification_directory: Path,
     repository_root: Path,
     dashboard_directory: Path,
     minimum_free_gb: int,
@@ -192,6 +218,8 @@ async def run_candidate_preflight(
     restore_value = json.loads(restore_verification_path.read_text(encoding="utf-8"))
     if not isinstance(restore_value, dict):
         raise TypeError("restore verification must contain a JSON object")
+    qualification, qualification_verified = load_verified_qualification(qualification_directory)
+    evaluated_at = datetime.now(UTC)
     database_name, schema_revision, stored_manifest_hash, ledger = database_state
     report = evaluate_candidate_preflight(
         manifest=manifest,
@@ -205,7 +233,11 @@ async def run_candidate_preflight(
         dashboard_built=(dashboard_directory / "index.html").is_file(),
         free_disk_bytes=shutil.disk_usage(repository_root).free,
         minimum_free_bytes=minimum_free_gb * 1024**3,
+        qualification=qualification,
+        qualification_bundle_verified=qualification_verified,
+        evaluated_at=evaluated_at,
     )
-    report["evaluated_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    report["evaluated_at"] = evaluated_at.isoformat().replace("+00:00", "Z")
     report["restore_verification_path"] = str(restore_verification_path.resolve())
+    report["qualification_directory"] = str(qualification_directory.resolve())
     return report

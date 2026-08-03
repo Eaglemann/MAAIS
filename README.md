@@ -23,8 +23,9 @@ Futures and are never used to calculate official paper P&L.
 
 ## Local setup
 
-Requirements: Python 3.12, `uv`, Docker Desktop with Compose, and PostgreSQL
-client tools.
+Requirements: Python 3.12, `uv`, Docker Desktop with Compose, PostgreSQL
+client tools, Node/npm, `tmux`, `jq`, `curl`, and a local Chromium-compatible
+browser installed through the pinned Playwright CLI.
 
 ```bash
 cp .env.template .env
@@ -39,6 +40,10 @@ If more than one local container engine is installed, keep
 `MAAIS_DOCKER_CONTEXT` explicit. Timed-run startup compares the Compose
 PostgreSQL `system_identifier` with the database reached by the application and
 fails closed if they are different.
+
+MAAIS needs access to the local Docker engine, not Docker Hub credentials or a
+Docker credential-helper keychain entry. The Compose image is public. Do not
+approve an unexpected credential request for this paper workflow.
 
 ## Verification
 
@@ -55,11 +60,12 @@ uv run pytest -q
 
 The operational CLI now includes ledger verification, immutable daily reports,
 analysis-ready CSV/Parquet exports, a hash-verified seven-day final aggregator,
-validated backups, suffix-constrained restore drills, and candidate preflight. The
+validated backups, suffix-constrained restore drills, an immutable exact-commit
+qualification bundle, and candidate preflight. The
 daily close is concurrency-locked and safely resumes its unique verified bundle after an
 interrupted state update. The
-timed run remains blocked until the full test/fault-injection suite and 24-hour soak
-pass.
+timed run remains blocked until that bundle, the process fault drills, and the
+separate 24-hour soak pass.
 
 - [Local setup](docs/runbooks/setup.md)
 - [Normal operations](docs/runbooks/operations.md)

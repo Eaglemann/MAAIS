@@ -256,7 +256,8 @@ The phase brief below fixes scope and acceptance criteria. Its implementation-gr
 - [ ] Run backup and restore drill on the candidate.
 - [ ] Run 24 continuous hours of public live data with paper broker and all reports.
 - [ ] Audit decision cardinality, data gaps, recovery, event/projection consistency, account reconciliation, counterfactual isolation, dashboard/report equality, errors, and incidents.
-- [ ] Produce signed preflight evidence manifest and readiness verdict.
+- [x] Produce an immutable exact-commit qualification evidence bundle required by preflight.
+- [ ] Produce the post-soak readiness verdict.
 
 ### Definition of done
 

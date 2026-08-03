@@ -5,7 +5,9 @@
 The seven-day clock starts only after all of the following have fresh evidence:
 
 - clean committed candidate and immutable manifest;
-- full unit, PostgreSQL integration, static, secret, dependency, frontend, and browser checks;
+- a hash-verified qualification bundle no older than 24 hours, tied to the exact
+  clean repository identity, containing passing unit, PostgreSQL integration,
+  branch-coverage, static, secret, dependency, frontend, and real-browser checks;
 - deterministic replay and fault-injection suite;
 - validated database backup and passing restore drill;
 - 24-hour live-data soak with no unexplained state, duplicates, unhandled exceptions, or unrecovered gaps;
@@ -74,7 +76,8 @@ The week evaluates operational correctness, data quality, decision traceability,
 
 ## Exit evidence
 
-Retain the manifest, preflight output, run-state/logs, seven daily report bundles, the
+Retain the qualification bundle and every hashed check log, manifest, preflight
+output, run-state/logs, seven daily report bundles, the
 immutable final report bundle, daily backups, incident notes, restart evidence, final
 ledger verification, and restored-backup verification. Aggregate only frozen daily
 snapshots; do not rewrite them.

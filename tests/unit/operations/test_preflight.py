@@ -1,9 +1,16 @@
 from dataclasses import replace
+from datetime import datetime, timezone
+from typing import cast
 
 from maais.config.modes import RunMode
 from maais.config.settings import Settings
 from maais.experiments.prepare import RepositoryIdentity
 from maais.operations.preflight import evaluate_candidate_preflight
+from maais.operations.qualification import (
+    REQUIRED_QUALIFICATION_CHECKS,
+    QualificationCheckResult,
+    build_qualification_report,
+)
 from tests.unit.experiments.test_runtime_policy import _live_manifest
 
 
@@ -31,12 +38,34 @@ def _restore_verification() -> dict[str, object]:
     }
 
 
+def _qualification(repository: RepositoryIdentity) -> dict[str, object]:
+    results = tuple(
+        QualificationCheckResult(
+            name=name,
+            command=("verify", name),
+            exit_code=0,
+            duration_seconds=1,
+            output_file=f"{name}.log",
+            output_sha256="a" * 64,
+            output_bytes=1,
+        )
+        for name in REQUIRED_QUALIFICATION_CHECKS
+    )
+    return build_qualification_report(
+        repository_before=repository,
+        repository_after=repository,
+        results=results,
+        generated_at=datetime(2026, 8, 3, tzinfo=timezone.utc),
+    )
+
+
 def test_candidate_preflight_passes_only_when_every_gate_matches() -> None:
     manifest = _live_manifest(schema_revision="0015", worktree_hash=None)
+    repository = _repository(manifest)
 
     report = evaluate_candidate_preflight(
         manifest=manifest,
-        repository=_repository(manifest),
+        repository=repository,
         settings=Settings(run_mode=RunMode.PAPER_LIVE),
         database_name="maais",
         database_schema_revision="0015",
@@ -46,10 +75,14 @@ def test_candidate_preflight_passes_only_when_every_gate_matches() -> None:
         dashboard_built=True,
         free_disk_bytes=10 * 1024**3,
         minimum_free_bytes=5 * 1024**3,
+        qualification=_qualification(repository),
+        qualification_bundle_verified=True,
+        evaluated_at=datetime(2026, 8, 3, 1, tzinfo=timezone.utc),
     )
 
     assert report["passed"] is True
-    assert all(check["passed"] for check in report["checks"])  # type: ignore[union-attr]
+    checks = cast(list[dict[str, object]], report["checks"])
+    assert all(check["passed"] for check in checks)
     assert report["safety"] == {"paper_trading_only": True, "live_money": False}
 
 
@@ -59,10 +92,11 @@ def test_candidate_preflight_rejects_manifest_that_runtime_would_reject() -> Non
         manifest,
         fee_policy={"maker": "0.0002", "taker": "0.0005"},
     )
+    repository = _repository(manifest)
 
     report = evaluate_candidate_preflight(
         manifest=manifest,
-        repository=_repository(manifest),
+        repository=repository,
         settings=Settings(run_mode=RunMode.PAPER_LIVE),
         database_name="maais",
         database_schema_revision="0015",
@@ -72,11 +106,16 @@ def test_candidate_preflight_rejects_manifest_that_runtime_would_reject() -> Non
         dashboard_built=True,
         free_disk_bytes=10 * 1024**3,
         minimum_free_bytes=5 * 1024**3,
+        qualification=_qualification(repository),
+        qualification_bundle_verified=True,
+        evaluated_at=datetime(2026, 8, 3, 1, tzinfo=timezone.utc),
     )
 
-    runtime_check = next(check for check in report["checks"] if check["name"] == "runtime_policy")
+    checks = cast(list[dict[str, object]], report["checks"])
+    runtime_check = next(check for check in checks if check["name"] == "runtime_policy")
     assert report["passed"] is False
     assert runtime_check["passed"] is False
+    assert isinstance(runtime_check["detail"], str)
     assert "venue" in runtime_check["detail"]
 
 
@@ -99,9 +138,13 @@ def test_candidate_preflight_explains_all_failed_gates() -> None:
         dashboard_built=False,
         free_disk_bytes=1,
         minimum_free_bytes=5 * 1024**3,
+        qualification=_qualification(_repository(manifest)),
+        qualification_bundle_verified=False,
+        evaluated_at=datetime(2026, 8, 5, tzinfo=timezone.utc),
     )
 
-    failed = {check["name"] for check in report["checks"] if not check["passed"]}  # type: ignore[union-attr]
+    checks = cast(list[dict[str, object]], report["checks"])
+    failed = {check["name"] for check in checks if not check["passed"]}
     assert report["passed"] is False
     assert {
         "repository_clean",
@@ -113,4 +156,5 @@ def test_candidate_preflight_explains_all_failed_gates() -> None:
         "restore_drill",
         "dashboard_build",
         "free_disk",
+        "fresh_qualification",
     }.issubset(failed)

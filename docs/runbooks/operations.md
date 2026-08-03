@@ -2,12 +2,14 @@
 
 ## Start
 
-Use the exact candidate manifest and a passing restore-verification artifact:
+Use the exact candidate manifest, passing restore-verification artifact, and the
+fresh qualification bundle printed by `maais qualify-candidate`:
 
 ```bash
 MAAIS_DOCKER_CONTEXT=desktop-linux scripts/start-paper-week.sh \
   artifacts/manifests/week-candidate-YYYY-MM-DD.json \
-  artifacts/restore-drills/<drill>/restore-verification.json
+  artifacts/restore-drills/<drill>/restore-verification.json \
+  artifacts/qualification/<qualification-bundle>
 ```
 
 Use the context that owns the PostgreSQL port on this machine; `desktop-linux`
@@ -17,7 +19,15 @@ compare the container cluster, configured database endpoint, and recorded
 candidate system identifier. They fail closed on context drift or cluster
 replacement.
 
-The script starts PostgreSQL, applies migrations, runs fail-closed preflight, starts Mission Control on localhost, starts the paper worker, waits for a running checkpoint plus active lease, starts a tracked OS sleep inhibitor, and starts the automatic Berlin-day close supervisor. The four processes run in named detached `tmux` sessions so they survive the launching terminal. Session names, process IDs, immutable inputs, preflight output, and logs are recorded under `artifacts/run-state/`. Startup fails if `tmux` or both supported sleep inhibitors are unavailable.
+The script starts PostgreSQL, applies migrations, verifies the exact-commit
+qualification and restore evidence in fail-closed preflight, starts Mission
+Control on localhost, starts the paper worker, waits for a running checkpoint
+plus active lease, starts a tracked OS sleep inhibitor, and starts the automatic
+Berlin-day close supervisor. The four processes run in named detached `tmux`
+sessions so they survive the launching terminal. Session names, process IDs,
+all three immutable inputs, preflight output, and logs are recorded under
+`artifacts/run-state/`. Startup fails if `tmux` or both supported sleep
+inhibitors are unavailable.
 
 Mission Control is available at [http://127.0.0.1:8000](http://127.0.0.1:8000).
 

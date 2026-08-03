@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         "postgresql+psycopg://maais:maais@"  # pragma: allowlist secret
         "localhost:5432/maais"
     )
+    maais_test_database_url: str = ""
     duckdb_path: str = "./data/maais.duckdb"
     kafka_bootstrap_servers: str = "localhost:9092"
     log_level: str = "INFO"
