@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from uuid import UUID
 
 import pytest
 from sqlalchemy import delete, select, update
@@ -14,6 +15,7 @@ from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import ExperimentStatus
 from maais.experiments.service import ExperimentLifecycle
 from maais.operations.backups import collect_backup_metadata
+from maais.operations.operator_commands import CommandType, OperatorCommand
 from maais.operations.reporting import build_daily_report
 from maais.operations.verification import verify_ledger_with_factory
 from tests.integration.test_decision_lineage import _prepare_bundle
@@ -54,6 +56,33 @@ async def test_daily_report_reconciles_complete_decision_lineage(
     manifest, bundle = await _prepare_bundle(uow_factory, mode=RunMode.PAPER_LIVE)
     async with uow_factory.begin() as uow:
         await uow.decisions.record_bundle(bundle)
+        command = OperatorCommand.request(
+            command_id=UUID("99999999-9999-4999-8999-999999999999"),
+            experiment_id=manifest.experiment_id,
+            command_type=CommandType.PAUSE,
+            idempotency_key="daily-report-pause-0001",
+            actor="local_operator",
+            reason="inspect an unexpected concentration before continuing",
+            payload={"source": "mission_control"},
+            confirmation="CONFIRM PAUSE",
+            requested_at=datetime(2026, 8, 2, 12, 1, tzinfo=timezone.utc),
+        )
+        await uow.commands.enqueue(command)
+        await uow.commands.claim_next(
+            manifest.experiment_id,
+            worker_id="paper_worker:daily-report",
+            accepted_at=datetime(2026, 8, 2, 12, 1, 1, tzinfo=timezone.utc),
+        )
+        await uow.commands.complete(
+            command.command_id,
+            worker_id="paper_worker:daily-report",
+            completed_at=datetime(2026, 8, 2, 12, 1, 2, tzinfo=timezone.utc),
+            result={
+                "experiment_status": "paused",
+                "kill_switch_active": True,
+                "control_version": 2,
+            },
+        )
     generated_at = datetime(2026, 8, 3, 0, 5, tzinfo=timezone.utc)
 
     async with uow_factory.begin() as uow:
@@ -95,6 +124,34 @@ async def test_daily_report_reconciles_complete_decision_lineage(
     assert report["account"]["ending_equity"] == "10000"  # type: ignore[index]
     assert report["reconciliation"]["ledger_ok"] is True  # type: ignore[index]
     assert len(report["reconciliation"]["report_hash"]) == 64  # type: ignore[index]
+    assert report["report_schema_version"] == 2
+    assert report["operator_actions"] == {
+        "events": 3,
+        "requests": 1,
+        "rejections": 0,
+        "recoveries": 0,
+        "by_event_type": {
+            "operator_command.accepted": 1,
+            "operator_command.completed": 1,
+            "operator_command.requested": 1,
+        },
+        "by_command_type": {"pause": 3},
+        "by_status": {"accepted": 1, "completed": 1, "requested": 1},
+    }
+    action_trail = report["operator_action_index"]  # type: ignore[assignment]
+    assert [item["event_type"] for item in action_trail] == [  # type: ignore[index]
+        "operator_command.requested",
+        "operator_command.accepted",
+        "operator_command.completed",
+    ]
+    terminal = action_trail[-1]  # type: ignore[index]
+    assert terminal["reason"] == "inspect an unexpected concentration before continuing"
+    assert terminal["accepted_by"] == "paper_worker:daily-report"
+    assert terminal["result"] == {
+        "control_version": 2,
+        "experiment_status": "paused",
+        "kill_switch_active": True,
+    }
 
 
 async def test_backup_inventory_reconciles_database_before_dump(

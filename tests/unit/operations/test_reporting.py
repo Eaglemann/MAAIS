@@ -16,6 +16,7 @@ def _report() -> dict[str, object]:
     return {
         "report_id": "a" * 64,
         "report_type": "daily",
+        "report_schema_version": 2,
         "report_date": "2026-08-02",
         "generated_at": "2026-08-03T00:05:00Z",
         "experiment": {
@@ -93,6 +94,37 @@ def _report() -> dict[str, object]:
             "pending_orders": 0,
             "unresolved_counterfactuals": 0,
         },
+        "operator_actions": {
+            "events": 3,
+            "requests": 1,
+            "rejections": 0,
+            "recoveries": 0,
+            "by_event_type": {
+                "operator_command.requested": 1,
+                "operator_command.accepted": 1,
+                "operator_command.completed": 1,
+            },
+            "by_command_type": {"pause": 3},
+            "by_status": {"requested": 1, "accepted": 1, "completed": 1},
+        },
+        "operator_action_index": [
+            {
+                "global_position": 10,
+                "command_id": "44444444-4444-4444-8444-444444444444",
+                "event_type": "operator_command.completed",
+                "event_at": "2026-08-02T12:01:02Z",
+                "command_type": "pause",
+                "status": "completed",
+                "actor": "local_operator",
+                "reason": "inspect unexpected signal concentration",
+                "payload": {"source": "mission_control"},
+                "operator_confirmed": True,
+                "request_hash": "9" * 64,
+                "accepted_by": "paper_worker:test",
+                "result": {"experiment_status": "paused"},
+                "version": 3,
+            }
+        ],
         "reconciliation": {
             "ledger_ok": True,
             "ledger_error_count": 0,
@@ -119,6 +151,9 @@ def test_daily_report_markdown_surfaces_safety_and_reconciliation() -> None:
     assert "Ledger consistency | PASS" in rendered
     assert "insufficient_history" in rendered
     assert "10012.5" in rendered
+    assert "Operator action trail" in rendered
+    assert "inspect unexpected signal concentration" in rendered
+    assert "paper_worker:test" in rendered
 
 
 def test_report_bundle_is_immutable_and_contains_json_and_markdown(tmp_path: Path) -> None:

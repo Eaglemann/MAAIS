@@ -15,9 +15,9 @@ from typing import cast
 from uuid import UUID
 
 from maais.domain.json import content_hash, to_json_data
-from maais.operations.reporting import berlin_daily_window
+from maais.operations.reporting import REPORT_SCHEMA_VERSION, berlin_daily_window
 
-FINAL_REPORT_SCHEMA_VERSION = 1
+FINAL_REPORT_SCHEMA_VERSION = 2
 _DAILY_ARTIFACTS = frozenset(
     {
         "report.json",
@@ -189,7 +189,7 @@ def _verify_daily_report(
 ) -> None:
     if (
         report.get("report_type") != "daily"
-        or report.get("report_schema_version") != 1
+        or report.get("report_schema_version") != REPORT_SCHEMA_VERSION
         or report.get("report_date") != expected_date.isoformat()
         or report.get("complete_day") is not True
     ):
@@ -238,6 +238,19 @@ def _verify_daily_report(
         raise FinalReportValidationError(
             f"daily account net change mismatch: {expected_date.isoformat()}"
         )
+    operator_actions = _object(report.get("operator_actions"), "daily operator actions")
+    action_index = report.get("operator_action_index")
+    if not isinstance(action_index, list):
+        raise FinalReportValidationError("daily operator action index must be a list")
+    event_count = _integer(operator_actions.get("events"), "operator_actions.events")
+    if event_count != len(action_index):
+        raise FinalReportValidationError("daily operator action index is incomplete")
+    for key in ("requests", "rejections", "recoveries"):
+        if _integer(operator_actions.get(key), f"operator_actions.{key}") > event_count:
+            raise FinalReportValidationError(f"operator_actions.{key} exceeds event count")
+    _object(operator_actions.get("by_event_type"), "operator_actions.by_event_type")
+    _object(operator_actions.get("by_command_type"), "operator_actions.by_command_type")
+    _object(operator_actions.get("by_status"), "operator_actions.by_status")
 
 
 def verify_daily_report_bundle(
@@ -257,6 +270,7 @@ def verify_daily_report_bundle(
     )
     reconciliation = _object(report.get("reconciliation"), "daily report reconciliation")
     decisions = _object(report.get("decisions"), "daily report decisions")
+    operator_actions = _object(report.get("operator_actions"), "daily operator actions")
     return {
         **bundle_evidence,
         "passed": True,
@@ -270,6 +284,9 @@ def verify_daily_report_bundle(
         "authoritative_hash": reconciliation.get("authoritative_hash"),
         "report_hash": reconciliation.get("report_hash"),
         "decision_cycles": _integer(decisions.get("total"), "decisions.total"),
+        "operator_action_events": _integer(
+            operator_actions.get("events"), "operator_actions.events"
+        ),
     }
 
 
@@ -520,6 +537,15 @@ def build_final_report_from_bundles(
             "recoveries_by_status": _sum_counts(reports, "operations", "recoveries_by_status"),
             "worker_restarts": _sum_integers(reports, "operations", "worker_restarts"),
         },
+        "operator_actions": {
+            "events": _sum_integers(reports, "operator_actions", "events"),
+            "requests": _sum_integers(reports, "operator_actions", "requests"),
+            "rejections": _sum_integers(reports, "operator_actions", "rejections"),
+            "recoveries": _sum_integers(reports, "operator_actions", "recoveries"),
+            "by_event_type": _sum_counts(reports, "operator_actions", "by_event_type"),
+            "by_command_type": _sum_counts(reports, "operator_actions", "by_command_type"),
+            "by_status": _sum_counts(reports, "operator_actions", "by_status"),
+        },
         "daily_reports": evidence_rows,
         "reconciliation": {
             "verified_daily_bundles": len(reports),
@@ -648,6 +674,7 @@ def render_final_report_markdown(report: dict[str, object]) -> str:
     decisions = _object(report.get("decisions"), "final report decisions")
     execution = _object(report.get("execution"), "final report execution")
     operations = _object(report.get("operations"), "final report operations")
+    operator_actions = _object(report.get("operator_actions"), "final operator actions")
     reconciliation = _object(report.get("reconciliation"), "final report reconciliation")
     daily_reports = report.get("daily_reports")
     if not isinstance(daily_reports, list):
@@ -713,6 +740,10 @@ Total cycles: **{decisions["total"]}**
 | Recoveries started | {operations["recoveries_started"]} |
 | Worker starts/restarts | {operations["worker_restarts"]} |
 | Required data-quality failures | {operations["data_quality_failed_required"]} |
+| Operator lifecycle events | {operator_actions["events"]} |
+| Operator requests | {operator_actions["requests"]} |
+| Operator rejections | {operator_actions["rejections"]} |
+| Operator crash recoveries | {operator_actions["recoveries"]} |
 | Verified daily bundles | {reconciliation["verified_daily_bundles"]} |
 | All daily ledgers passed | {reconciliation["all_daily_ledgers_ok"]} |
 | Daily evidence chain | `{reconciliation["daily_evidence_chain_hash"]}` |

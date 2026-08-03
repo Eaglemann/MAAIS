@@ -37,6 +37,7 @@ from maais.db.models.operations import (
     IncidentModel,
     MarketCursorModel,
     MarketRecoveryRunModel,
+    OperatorCommandModel,
     TradingControlModel,
     WorkerCheckpointModel,
     WorkerLeaseModel,
@@ -47,7 +48,7 @@ from maais.domain.json import content_hash, to_json_data
 BERLIN = ZoneInfo("Europe/Berlin")
 UTC = timezone.utc
 ZERO = Decimal("0")
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 _PENDING_ORDER_STATUSES = ("created", "authorized", "accepted", "partially_filled")
 _OPEN_COUNTERFACTUAL_STATUSES = ("pending", "open")
 
@@ -435,6 +436,33 @@ async def build_daily_report(
             .order_by(DomainEventModel.global_position)
         )
     ).all()
+    operator_action_rows = (
+        await session.execute(
+            select(
+                DomainEventModel.id,
+                DomainEventModel.global_position,
+                DomainEventModel.aggregate_id,
+                DomainEventModel.stream_version,
+                DomainEventModel.event_type,
+                DomainEventModel.event_version,
+                DomainEventModel.payload_json,
+                DomainEventModel.metadata_json,
+                DomainEventModel.occurred_at,
+                DomainEventModel.recorded_at,
+            )
+            .join(
+                OperatorCommandModel,
+                OperatorCommandModel.id == DomainEventModel.aggregate_id,
+            )
+            .where(
+                DomainEventModel.aggregate_type == "operator_command",
+                OperatorCommandModel.experiment_id == experiment_id,
+                DomainEventModel.occurred_at >= window.start_utc,
+                DomainEventModel.occurred_at < cutoff,
+            )
+            .order_by(DomainEventModel.global_position)
+        )
+    ).all()
 
     start_snapshot = await _snapshot_at_or_before(session, experiment_id, window.start_utc)
     end_snapshot = await _snapshot_at_or_before(session, experiment_id, cutoff)
@@ -681,6 +709,24 @@ async def build_daily_report(
             {"stream_version": row.stream_version},
         )
         for row in restart_rows
+    )
+    evidence.extend(
+        _row_evidence(
+            "operator_action",
+            row.id,
+            {
+                "global_position": row.global_position,
+                "command_id": row.aggregate_id,
+                "stream_version": row.stream_version,
+                "event_type": row.event_type,
+                "event_version": row.event_version,
+                "payload": row.payload_json,
+                "metadata": row.metadata_json,
+                "occurred_at": row.occurred_at,
+                "recorded_at": row.recorded_at,
+            },
+        )
+        for row in operator_action_rows
     )
     if checkpoint is not None:
         evidence.append(
@@ -948,6 +994,53 @@ async def build_daily_report(
             "recoveries_by_status": _counts([row.status for row in recovery_rows]),
             "worker_restarts": len(restart_rows),
         },
+        "operator_actions": {
+            "events": len(operator_action_rows),
+            "requests": sum(
+                1 for row in operator_action_rows if row.event_type == "operator_command.requested"
+            ),
+            "rejections": sum(
+                1 for row in operator_action_rows if row.event_type == "operator_command.rejected"
+            ),
+            "recoveries": sum(
+                1 for row in operator_action_rows if row.event_type == "operator_command.recovered"
+            ),
+            "by_event_type": _counts([row.event_type for row in operator_action_rows]),
+            "by_command_type": _counts(
+                [str(row.payload_json.get("command_type")) for row in operator_action_rows]
+            ),
+            "by_status": _counts(
+                [str(row.payload_json.get("status")) for row in operator_action_rows]
+            ),
+        },
+        "operator_action_index": [
+            {
+                "event_id": row.id,
+                "global_position": row.global_position,
+                "command_id": row.aggregate_id,
+                "stream_version": row.stream_version,
+                "event_type": row.event_type,
+                "event_version": row.event_version,
+                "event_at": row.occurred_at,
+                "recorded_at": row.recorded_at,
+                "command_type": row.payload_json.get("command_type"),
+                "status": row.payload_json.get("status"),
+                "idempotency_key": row.payload_json.get("idempotency_key"),
+                "actor": row.payload_json.get("actor"),
+                "reason": row.payload_json.get("reason"),
+                "payload": row.payload_json.get("payload"),
+                "operator_confirmed": row.payload_json.get("operator_confirmed"),
+                "request_hash": row.payload_json.get("request_hash"),
+                "requested_at": row.payload_json.get("requested_at"),
+                "accepted_at": row.payload_json.get("accepted_at"),
+                "accepted_by": row.payload_json.get("accepted_by"),
+                "completed_at": row.payload_json.get("completed_at"),
+                "result": row.payload_json.get("result"),
+                "version": row.payload_json.get("version"),
+                "metadata": row.metadata_json,
+            }
+            for row in operator_action_rows
+        ],
         "runtime_snapshot": {
             "as_of": _iso(generated_at),
             "worker_status": checkpoint.status if checkpoint is not None else None,
@@ -1023,12 +1116,49 @@ def _markdown_table(values: dict[str, object]) -> str:
     return "\n".join(f"| {key} | {value} |" for key, value in values.items())
 
 
+def _markdown_cell(value: object) -> str:
+    if isinstance(value, (dict, list)):
+        rendered = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    else:
+        rendered = str(value if value is not None else "—")
+    return rendered.replace("|", "\\|").replace("\n", " ")
+
+
+def _operator_action_trail(rows: object) -> str:
+    if not isinstance(rows, list) or not rows:
+        return "| _No operator actions_ |  |  |  |  |  |  |  |"
+    rendered: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rendered.append(
+            "| {event_at} | {command_type} | {event_type} | {actor} | {accepted_by} | "
+            "{reason} | `{request_hash}` | {result} |".format(
+                **{
+                    key: _markdown_cell(row.get(key))
+                    for key in (
+                        "event_at",
+                        "command_type",
+                        "event_type",
+                        "actor",
+                        "accepted_by",
+                        "reason",
+                        "request_hash",
+                        "result",
+                    )
+                }
+            )
+        )
+    return "\n".join(rendered) if rendered else "| _No operator actions_ |  |  |  |  |  |  |  |"
+
+
 def render_daily_report_markdown(report: dict[str, object]) -> str:
     experiment = cast(dict[str, object], report["experiment"])
     account = cast(dict[str, object], report["account"])
     decisions = cast(dict[str, object], report["decisions"])
     execution = cast(dict[str, object], report["execution"])
     operations = cast(dict[str, object], report["operations"])
+    operator_actions = cast(dict[str, object], report["operator_actions"])
     runtime = cast(dict[str, object], report["runtime_snapshot"])
     reconciliation = cast(dict[str, object], report["reconciliation"])
     reasons = cast(dict[str, object], decisions.get("by_reason", {}))
@@ -1096,6 +1226,21 @@ Total decisions: **{decisions["total"]}**
 | Kill switch active | {runtime["kill_switch_active"]} |
 | Open positions | {runtime["open_positions"]} |
 | Pending orders | {runtime["pending_orders"]} |
+
+## Operator actions
+
+| Metric | Value |
+| --- | ---: |
+| Lifecycle events | {operator_actions["events"]} |
+| Requests | {operator_actions["requests"]} |
+| Rejections | {operator_actions["rejections"]} |
+| Crash recoveries | {operator_actions["recoveries"]} |
+
+### Operator action trail
+
+| Event time | Command | Lifecycle | Actor | Worker | Reason | Request hash | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+{_operator_action_trail(report.get("operator_action_index"))}
 
 ## Reconciliation
 

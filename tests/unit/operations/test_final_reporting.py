@@ -26,7 +26,7 @@ def _daily_report(report_date: date, index: int) -> dict[str, object]:
     return {
         "report_id": f"{index + 1:064x}",
         "report_type": "daily",
-        "report_schema_version": 1,
+        "report_schema_version": 2,
         "report_date": report_date.isoformat(),
         "generated_at": (end_local.astimezone(timezone.utc) + timedelta(minutes=5))
         .isoformat()
@@ -147,6 +147,33 @@ def _daily_report(report_date: date, index: int) -> dict[str, object]:
             "pending_orders": 0,
             "unresolved_counterfactuals": 0,
         },
+        "operator_actions": {
+            "events": 1,
+            "requests": 1,
+            "rejections": 1 if index == 0 else 0,
+            "recoveries": 0,
+            "by_event_type": {"operator_command.requested": 1},
+            "by_command_type": {"pause": 1},
+            "by_status": {"requested": 1},
+        },
+        "operator_action_index": [
+            {
+                "global_position": index + 1,
+                "command_id": f"{index + 100:032x}",
+                "event_type": "operator_command.requested",
+                "event_at": (start_local + timedelta(hours=12)).isoformat(),
+                "command_type": "pause",
+                "status": "requested",
+                "actor": "local_operator",
+                "reason": "daily fixture operator reason",
+                "payload": {},
+                "operator_confirmed": True,
+                "request_hash": f"{index + 200:064x}",
+                "accepted_by": None,
+                "result": None,
+                "version": 1,
+            }
+        ],
         "reconciliation": {
             "ledger_ok": True,
             "ledger_error_count": 0,
@@ -182,6 +209,7 @@ def test_daily_report_bundle_exposes_verified_soak_evidence(tmp_path: Path) -> N
     assert evidence["report_date"] == "2026-08-03"
     assert evidence["experiment_id"] == str(EXPERIMENT_ID)
     assert evidence["decision_cycles"] == 10
+    assert evidence["operator_action_events"] == 1
     assert evidence["ledger_ok"] is True
 
 
@@ -244,6 +272,7 @@ def test_final_report_verifies_and_aggregates_exactly_seven_contiguous_days(
     )
 
     assert report["report_type"] == "final"
+    assert report["report_schema_version"] == 2
     assert report["period"] == {
         "timezone": "Europe/Berlin",
         "start_date": "2026-08-03",
@@ -264,6 +293,15 @@ def test_final_report_verifies_and_aggregates_exactly_seven_contiguous_days(
     }
     assert report["decisions"]["total"] == 70  # type: ignore[index]
     assert report["execution"]["fills"] == 7  # type: ignore[index]
+    assert report["operator_actions"] == {
+        "events": 7,
+        "requests": 7,
+        "rejections": 1,
+        "recoveries": 0,
+        "by_event_type": {"operator_command.requested": 7},
+        "by_command_type": {"pause": 7},
+        "by_status": {"requested": 7},
+    }
     assert len(report["daily_reports"]) == 7  # type: ignore[arg-type]
     assert report["reconciliation"]["verified_daily_bundles"] == 7  # type: ignore[index]
 
