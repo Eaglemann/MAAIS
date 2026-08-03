@@ -92,6 +92,9 @@ rejects a failed, stale, incomplete, tampered, or different-commit bundle.
 
 ## Design and delivery
 
+- [Current architecture](ARCHITECTURE.md)
+- [Mission Control API](API_ENDPOINTS.md)
+- [Database schema](DATABASE_SCHEMA.md)
 - [Paper-trading and observability design](docs/superpowers/specs/2026-08-02-maais-paper-trading-observability-design.md)
 - [Master delivery plan](docs/superpowers/plans/2026-08-02-maais-master-delivery-plan.md)
 - [Phase 0 safety plan](docs/superpowers/plans/2026-08-02-maais-phase-0-baseline-safety.md)
