@@ -3,11 +3,10 @@
 MAAIS is a local, auditable multi-agent research and paper-trading platform for
 USDT perpetual markets.
 
-> **Current status:** The component prototype is **not yet ready for the seven-day paper experiment**.
-> The paper broker, authoritative event ledger,
-> live orchestrator, Mission Control dashboard, recovery drills, and 24-hour
-> soak gate are being completed under the plans linked below. No live-money
-> execution is in scope.
+> **Current status:** The platform implementation is complete, but it is **not yet ready for the seven-day paper experiment** until a fresh exact-commit 24-hour
+> soak and immutable readiness verdict pass. The paper broker, authoritative event
+> ledger, live orchestrator, Mission Control dashboard, reporting, backup/restore,
+> and process drills are implemented. No live-money execution is in scope.
 
 ## Safety boundary
 
@@ -33,8 +32,9 @@ model; it cannot establish live-exchange parity or durable profitability.
 ## Local setup
 
 Requirements: Python 3.12, `uv`, Docker Desktop with Compose, PostgreSQL
-client tools, Node/npm, `tmux`, `jq`, `curl`, and a local Chromium-compatible
-browser installed through the pinned Playwright CLI.
+client tools, Node 22/npm, `tmux`, `jq`, `curl`, at least 20 GiB free host disk,
+and a local Chromium-compatible browser installed through the pinned Playwright
+CLI.
 
 ```bash
 cp .env.template .env

@@ -1,14 +1,16 @@
-# ORCHESTRATOR.md — Development Process
+# ORCHESTRATOR.md — Historical Development Record
 
-> Historical batch mechanics remain useful, but the current paper-platform
-> build is governed by the approved 2026-08-02 design and master delivery plan.
+> **HISTORICAL ONLY — DO NOT USE THIS FILE AS RUNTIME OR IMPLEMENTATION
+> INSTRUCTIONS.** Historical live-money and production-order text below is
+> superseded. MAAIS supports replay, public-data local paper trading, and optional
+> Binance Demo/Testnet protocol smoke tests only; it has no live-money mode. Use
+> `AGENTS.md`, `README.md`, and `docs/runbooks/` for current instructions.
 
-## CURRENT NEXT ACTION
+## CURRENT AUTHORITY
 
-Execute Phase 0 baseline safety: explicit runtime modes, Demo/Testnet-only
-authenticated execution, fail-closed legacy authorization, reproducible
-PostgreSQL, and enforced quality/security checks. Phase completion authorizes
-planning the next platform phase; it does not authorize a timed experiment.
+The historical batches in this file have been superseded by the implemented
+paper platform and its exact-commit qualification, recovery, process-drill,
+24-hour soak, and seven-day preflight gates. This record authorizes no run.
 
 ---
 
@@ -204,9 +206,11 @@ PROPOSE → APPROVE → BUILD → TEST → SHIP → LOG → NEXT
 
 ---
 
-### BATCH 7 — Execution Engine (Layer 6)
+### BATCH 7 — Execution Engine (Layer 6, historical and superseded)
 
-**Goal:** Connect to Binance Futures and execute orders.
+**Historical goal:** Connect to Binance Futures and execute orders. This was not
+carried into the supported runtime: official execution is local paper only and
+authenticated exchange access is limited to optional Demo/Testnet smoke tests.
 
 **Questions to answer before this batch:**
 - Order types to support (market, limit, conditional)?
@@ -291,7 +295,7 @@ PROPOSE → APPROVE → BUILD → TEST → SHIP → LOG → NEXT
 | 5 | Infrastructure? | CLOSED | Local |
 | 6 | Testing framework? | CLOSED | pytest |
 | 7 | Database? | CLOSED | PostgreSQL |
-| 8 | Paper trading or live? | CLOSED | Live from day one |
+| 8 | Paper trading or live? | SUPERSEDED | Local paper only; no live-money mode |
 | 9 | Position sizing formula? | CLOSED | Half-Kelly + vol norm + 1–2% cap |
 | 10 | Correlation thresholds? | CLOSED | 0.30 / 0.60 / 0.70 tiers |
 | 11 | Z-score threshold? | CLOSED | \|Z\| > 3 |
@@ -314,7 +318,7 @@ PROPOSE → APPROVE → BUILD → TEST → SHIP → LOG → NEXT
 
 ---
 
-## CURRENT STATUS
+## HISTORICAL STATUS SNAPSHOT
 
 ```
 Active Batch:    None — Batch 8 complete, ready for Batch 9

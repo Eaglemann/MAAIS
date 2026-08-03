@@ -1,5 +1,11 @@
 # MAAIS Paper Platform Master Delivery Plan
 
+> **Status note (2026-08-03):** This is the implementation plan and acceptance
+> history, not a current file map or readiness report. Several planned paths were
+> consolidated during implementation and unchecked boxes are not authoritative.
+> Current agent/operator instructions live in `AGENTS.md`, `README.md`, and
+> `docs/runbooks/`; readiness is proved only by fresh immutable candidate evidence.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build and verify the complete local MAAIS live-data paper-trading platform, Mission Control audit dashboard, recovery system, and seven-day experiment preflight defined in the design specification.

@@ -1,5 +1,9 @@
 # BEHAVIOURS.md — System Constraints
 
+> **Historical source extraction, not current operator instructions.** Use
+> `AGENTS.md`, `README.md`, and `docs/runbooks/` for the implemented paper-only
+> runtime. Any production or live-money interpretation is superseded.
+>
 > **CRITICAL:** This file contains ONLY constraints explicitly stated in the MAAIS v21.1 PDF.
 > NO assumptions. NO interpretations. NO additions.
 > Every rule here is a direct, verbatim-faithful extraction from the source document.

@@ -1,5 +1,9 @@
 # MAAIS v21.1 — MASTER ROADMAP
 
+> **Historical source roadmap, not current status or runtime instructions.** Use
+> `AGENTS.md`, `README.md`, and `docs/runbooks/` for the implemented paper-only
+> platform and its evidence gates. Any live-money text is superseded.
+>
 > Multi-Agent Adversarial Inference System
 > Institutional-Grade Quantitative Trading Architecture
 > Source: MAAIS v21.1.pdf

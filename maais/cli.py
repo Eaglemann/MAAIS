@@ -190,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--process-drills", type=Path)
     preflight.add_argument("--repository", type=Path, default=Path.cwd())
     preflight.add_argument("--dashboard-dir", type=Path, default=Path("dashboard/dist"))
-    preflight.add_argument("--minimum-free-gb", type=_positive_int, default=5)
+    preflight.add_argument("--minimum-free-gb", type=_positive_int, default=20)
     health = commands.add_parser(
         "health",
         help="verify ledger, runtime lease, cursor freshness, incidents, and controls",

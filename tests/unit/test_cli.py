@@ -155,7 +155,7 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert restore.backup == Path("backups/candidate")
     assert restore.target_database == "maais_week_restore"
     assert preflight.repository == Path.cwd()
-    assert preflight.minimum_free_gb == 5
+    assert preflight.minimum_free_gb == 20
     assert preflight.qualification == Path("artifacts/qualification/latest")
     assert preflight.soak_readiness == Path("artifacts/readiness/latest")
     assert qualify.repository == Path.cwd()

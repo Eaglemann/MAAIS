@@ -1,6 +1,6 @@
 # MAAIS Paper-Trading and Observability Design
 
-**Status:** Design baseline for implementation
+**Status:** Implemented design baseline; current runbooks govern runtime topology
 **Date:** 2026-08-02
 **Owner and operator:** Single user
 **Initial experiment:** Seven continuous days, 10,000 USDT virtual capital, Binance USDT perpetual market data, no real-money execution
@@ -78,7 +78,10 @@ The initial deployment contains two application processes and two storage servic
 4. **DuckDB and Parquet**
    - One-minute market history, normalized replay inputs, derived research datasets, and exported experiment artifacts.
 
-Docker Compose manages PostgreSQL, worker, API/dashboard, health checks, persistent volumes, and local networking. The React build is served by FastAPI in the packaged local deployment.
+Docker Compose manages PostgreSQL, its health check, persistent volume, and local
+networking. Host `tmux` sessions supervise the worker, FastAPI/React Mission
+Control, daily-close supervisor, and sleep inhibitor. The React build is served
+by FastAPI in the packaged local deployment.
 
 ### 4.2 Ports and adapters
 

@@ -4,9 +4,11 @@ This platform supports public live market data with simulated execution only. It
 
 ## Requirements
 
-- macOS or Linux with Python 3.12, `uv`, Docker Compose, PostgreSQL 16 client tools, Node/npm, `curl`, `jq`, and `tmux`.
+- macOS or Linux with Python 3.12, `uv`, Docker Compose, PostgreSQL 16 client tools, Node 22/npm, `curl`, `jq`, and `tmux`.
 - `caffeinate` on macOS or `systemd-inhibit` on Linux so the operator script can block machine sleep for the timed run.
-- At least 5 GiB free disk space for the candidate gate; more is preferable for logs and daily backups.
+- At least 20 GiB free host disk space for the candidate gate. A seven-day,
+  ten-symbol run records roughly 100,800 decision cycles plus agent, quality,
+  lineage, event, report, and backup data, so 5 GiB is not a safe floor.
 - A machine that remains powered and connected during the timed run.
 
 ## One-time setup
@@ -16,7 +18,7 @@ cp .env.template .env
 uv sync --dev
 npm --prefix dashboard ci
 npm --prefix dashboard run build
-npm exec -- playwright-cli install-browser chrome-for-testing
+npm --prefix dashboard exec -- playwright-cli install-browser chrome-for-testing
 export MAAIS_DOCKER_CONTEXT=desktop-linux  # use `docker context show` to choose yours
 docker --context "${MAAIS_DOCKER_CONTEXT}" compose up -d --wait postgres
 uv run alembic upgrade head
