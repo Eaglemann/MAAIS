@@ -179,6 +179,31 @@ def test_history_and_outlier_warmup_are_blocking_not_applicable() -> None:
     assert assessment.is_expected_warmup
 
 
+def test_return_outlier_waits_for_complete_history_before_classifying_failure() -> None:
+    machine = MarketIntegrityStateMachine(IntegrityPolicy.official())
+    immature = machine.evaluate(
+        _context(
+            _frame(),
+            recent_close_returns=(Decimal("0"),) * 20,
+            historical_bar_count=25,
+        )
+    )
+    mature = machine.evaluate(
+        _context(
+            _frame(),
+            recent_close_returns=(Decimal("0"),) * 20,
+            historical_bar_count=60,
+        )
+    )
+
+    immature_outlier = _result(immature, IntegrityCheck.CLOSE_RETURN_OUTLIER)
+    assert immature_outlier.status is QualityStatus.NOT_APPLICABLE
+    assert immature_outlier.reason_code == "return_warmup_incomplete"
+    assert immature.is_expected_warmup
+    assert _result(mature, IntegrityCheck.CLOSE_RETURN_OUTLIER).status is QualityStatus.FAILED
+    assert not mature.is_expected_warmup
+
+
 def test_real_quality_failure_during_warmup_is_not_classified_as_expected() -> None:
     policy = replace(
         IntegrityPolicy.official(),

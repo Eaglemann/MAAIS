@@ -596,6 +596,14 @@ class MarketIntegrityStateMachine:
         )
 
     def _close_return_outlier(self, context: IntegrityContext) -> IntegrityResult:
+        if context.historical_bar_count < self._policy.minimum_history_bars:
+            return _result(
+                IntegrityCheck.CLOSE_RETURN_OUTLIER,
+                QualityStatus.NOT_APPLICABLE,
+                "return_warmup_incomplete",
+                actual=context.historical_bar_count,
+                required=self._policy.minimum_history_bars,
+            )
         if context.previous_close is None:
             return _result(
                 IntegrityCheck.CLOSE_RETURN_OUTLIER,
