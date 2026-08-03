@@ -34,6 +34,10 @@ from maais.operations.final_reporting import (
     verify_daily_report_bundle,
 )
 from maais.operations.health import evaluate_experiment_health
+from maais.operations.process_drills import (
+    load_verified_process_drills,
+    process_drill_evidence_passes,
+)
 from maais.operations.reporting import berlin_daily_window
 from maais.operations.verification import ledger_consistency_payload
 
@@ -196,6 +200,8 @@ def evaluate_soak_readiness(
     settings: Settings,
     run_state: Mapping[str, object],
     preflight: Mapping[str, object],
+    process_drill_evidence: Mapping[str, object],
+    process_drill_evidence_verified: bool,
     overview: Mapping[str, object],
     health: Mapping[str, object],
     ledger: Mapping[str, object],
@@ -262,6 +268,11 @@ def evaluate_soak_readiness(
         preflight.get("passed") is True
         and preflight.get("experiment_id") == str(manifest.experiment_id)
         and preflight.get("manifest_hash") == manifest.manifest_hash
+    )
+    pre_soak_process_drills_passed = (
+        run_state.get("run_purpose") == "soak"
+        and process_drill_evidence_verified
+        and process_drill_evidence.get("passed") is True
     )
     process_passed = (
         processes
@@ -351,6 +362,16 @@ def evaluate_soak_readiness(
         ),
         _check("preflight_evidence", preflight_passed, "frozen candidate preflight passed"),
         _check(
+            "pre_soak_process_drills",
+            pre_soak_process_drills_passed,
+            (
+                "hash-verified dashboard and worker SIGKILL drills passed for this commit"
+                if pre_soak_process_drills_passed
+                else "run is not a soak or exact-commit process-drill evidence is missing, "
+                "tampered, or failed"
+            ),
+        ),
+        _check(
             "minimum_duration",
             elapsed >= minimum_duration,
             f"elapsed_seconds={int(elapsed.total_seconds())} "
@@ -434,6 +455,7 @@ def evaluate_soak_readiness(
         "log_audit": dict(log_audit),
         "daily_report_evidence": dict(daily_report_evidence),
         "preflight": dict(preflight),
+        "process_drill_evidence": dict(process_drill_evidence),
         "run_state": dict(run_state),
     }
     normalized = to_json_data(report)
@@ -707,10 +729,18 @@ async def build_configured_soak_readiness(
     run_state = cast(dict[str, object], state_value)
     manifest_path = Path(str(run_state.get("manifest", "")))
     preflight_path = Path(str(run_state.get("preflight", "")))
+    process_drill_bundle = Path(str(run_state.get("process_drill_bundle", "")))
     manifest = load_manifest_file(manifest_path)
     preflight_value = json.loads(preflight_path.read_text(encoding="utf-8"))
     if not isinstance(preflight_value, dict):
         raise TypeError("candidate preflight must be a JSON object")
+    try:
+        process_drill_evidence, process_drill_bundle_verified = load_verified_process_drills(
+            process_drill_bundle
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        process_drill_evidence = {"passed": False, "error": str(exc)}
+        process_drill_bundle_verified = False
     generated_at = datetime.now(UTC)
     repository, database_state, database_identity = await asyncio.gather(
         asyncio.to_thread(capture_repository_identity, repository_root),
@@ -731,6 +761,11 @@ async def build_configured_soak_readiness(
         now=generated_at,
         maximum_lag=maximum_lag,
         allow_stopped=False,
+    )
+    process_drill_evidence_verified = process_drill_evidence_passes(
+        process_drill_evidence,
+        repository=repository,
+        bundle_verified=process_drill_bundle_verified,
     )
     run_state = {
         **run_state,
@@ -798,6 +833,8 @@ async def build_configured_soak_readiness(
         settings=settings,
         run_state=run_state,
         preflight=cast(dict[str, object], preflight_value),
+        process_drill_evidence=process_drill_evidence,
+        process_drill_evidence_verified=process_drill_evidence_verified,
         overview=overview,
         health=health,
         ledger=ledger,

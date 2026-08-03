@@ -15,8 +15,10 @@ The seven-day clock starts only after all of the following have fresh evidence:
 - no live-money path or exchange credentials.
 
 The required fault matrix and process-drill boundaries are defined in
-`docs/testing/fault-injection.md`. Process-kill drills use a disposable candidate and are
-completed before the clean 24-hour soak begins.
+`docs/testing/fault-injection.md`. `scripts/run-process-drills.sh` uses a
+purpose-bound disposable candidate and must produce a passing exact-commit
+bundle before `scripts/start-paper-soak.sh` can begin the clean soak. The soak
+readiness verdict independently re-verifies that bundle.
 
 After at least 24 uninterrupted hours, while all three supervised processes are still
 running, freeze the soak decision:

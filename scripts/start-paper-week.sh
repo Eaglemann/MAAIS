@@ -6,6 +6,20 @@ if [[ $# -lt 3 || $# -gt 4 ]]; then
   exit 64
 fi
 
+run_purpose="${MAAIS_RUN_PURPOSE:-seven_day}"
+if [[ "${run_purpose}" != "process_drill" && "${run_purpose}" != "soak" && "${run_purpose}" != "seven_day" ]]; then
+  echo "MAAIS_RUN_PURPOSE must be process_drill, soak, or seven_day" >&2
+  exit 64
+fi
+process_drill_bundle="${MAAIS_PROCESS_DRILL_BUNDLE:-}"
+if [[ "${run_purpose}" == "soak" ]]; then
+  if [[ -z "${process_drill_bundle}" || ! -d "${process_drill_bundle}" ]]; then
+    echo "a verified process-drill bundle is required for a soak run" >&2
+    exit 64
+  fi
+  process_drill_bundle="$(cd "${process_drill_bundle}" && pwd)"
+fi
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_dir}/.." && pwd)"
 source "${script_dir}/paper-process.sh"
@@ -41,13 +55,19 @@ postgres_system_identifier="$(paper_assert_postgres_route "${docker_context}")"
 uv run alembic upgrade head
 
 preflight_path="${state_dir}/preflight-$(date -u +%Y%m%dT%H%M%SZ).json"
-RUN_MODE=paper_live uv run maais preflight \
-  --manifest "${manifest_path}" \
-  --restore-verification "${restore_path}" \
-  --qualification "${qualification_path}" \
-  --repository "${repository_root}" \
-  --dashboard-dir "${repository_root}/dashboard/dist" \
-  > "${preflight_path}"
+preflight_arguments=(
+  preflight
+  --manifest "${manifest_path}"
+  --restore-verification "${restore_path}"
+  --qualification "${qualification_path}"
+  --run-purpose "${run_purpose}"
+  --repository "${repository_root}"
+  --dashboard-dir "${repository_root}/dashboard/dist"
+)
+if [[ "${run_purpose}" == "soak" ]]; then
+  preflight_arguments+=(--process-drills "${process_drill_bundle}")
+fi
+RUN_MODE=paper_live uv run maais "${preflight_arguments[@]}" > "${preflight_path}"
 
 experiment_id="$(jq -r '.experiment_id' "${manifest_path}")"
 session_suffix="${experiment_id%%-*}"
@@ -139,7 +159,8 @@ fi
 start_idempotency_key="paper-week-start-${experiment_id}"
 jq -n \
   --arg idempotency_key "${start_idempotency_key}" \
-  '{"command_type":"start","idempotency_key":$idempotency_key,"reason":"start the prepared local paper week","payload":{"source":"start-paper-week.sh"},"confirmation":"CONFIRM START"}' \
+  --arg run_purpose "${run_purpose}" \
+  '{"command_type":"start","idempotency_key":$idempotency_key,"reason":("start prepared local paper run: " + $run_purpose),"payload":{"source":"start-paper-week.sh","run_purpose":$run_purpose},"confirmation":"CONFIRM START"}' \
   > "${start_request_body}"
 control_token="$(<"${control_token_file}")"
 umask 077
@@ -200,6 +221,8 @@ jq -n \
   --arg manifest "${manifest_path}" \
   --arg restore_verification "${restore_path}" \
   --arg qualification "${qualification_path}" \
+  --arg run_purpose "${run_purpose}" \
+  --arg process_drill_bundle "${process_drill_bundle}" \
   --arg preflight "${preflight_path}" \
   --arg control_token_file "${control_token_file}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -214,7 +237,7 @@ jq -n \
   --arg dashboard_session "${dashboard_session}" \
   --arg awake_session "${awake_session}" \
   --argjson port "${mission_control_port}" \
-  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,qualification:$qualification,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
+  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,qualification:$qualification,run_purpose:$run_purpose,process_drill_bundle:$process_drill_bundle,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
   > "${temporary_state}"
 mv "${temporary_state}" "${current_state}"
 state_created=true

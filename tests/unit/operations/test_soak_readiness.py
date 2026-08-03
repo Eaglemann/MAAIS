@@ -48,6 +48,7 @@ def _inputs() -> dict[str, object]:
         "settings": Settings(run_mode=RunMode.PAPER_LIVE),
         "run_state": {
             "experiment_id": str(manifest.experiment_id),
+            "run_purpose": "soak",
             "started_at": (NOW - timedelta(hours=24, minutes=1)).isoformat(),
             "docker_context": "desktop-linux",
             "postgres_system_identifier": "7669409277984608290",
@@ -63,6 +64,8 @@ def _inputs() -> dict[str, object]:
             "experiment_id": str(manifest.experiment_id),
             "manifest_hash": manifest.manifest_hash,
         },
+        "process_drill_evidence": {"passed": True, "report_id": "b" * 64},
+        "process_drill_evidence_verified": True,
         "overview": {
             "experiment": {
                 "id": str(manifest.experiment_id),
@@ -262,7 +265,9 @@ def test_soak_readiness_explains_every_material_failure() -> None:
     inputs["run_state"] = {
         **inputs["run_state"],  # type: ignore[dict-item]
         "last_recovery_at": NOW.isoformat(),
+        "run_purpose": "process_drill",
     }
+    inputs["process_drill_evidence_verified"] = False
     inputs["log_audit"] = {
         **inputs["log_audit"],  # type: ignore[dict-item]
         "error_lines": 1,
@@ -278,6 +283,7 @@ def test_soak_readiness_explains_every_material_failure() -> None:
     assert {
         "candidate_identity",
         "process_continuity",
+        "pre_soak_process_drills",
         "decision_cardinality",
         "required_data_quality",
         "structured_logs",

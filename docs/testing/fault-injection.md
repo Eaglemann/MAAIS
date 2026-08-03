@@ -35,10 +35,12 @@ uv run pytest tests/integration/faults tests/integration/test_recovery_store.py 
 The PostgreSQL command requires `MAAIS_TEST_DATABASE_URL` to already reference a dedicated
 local database whose name ends in `_test`.
 
-For each disposable process drill, capture the overview and ledger immediately before the
-fault, kill only the exact PID recorded in `artifacts/run-state/current.json`, invoke the
-matching recovery command with a reason, and capture the same records afterward. Confirm
-that counts never regress, event/decision identities remain unique, the worker lease epoch
-increases only for a worker recovery, and `uv run maais verify-ledger` passes. Stop and
-discard the disposable candidate after both drills; neither drill is performed inside the
+Run both disposable process drills through `scripts/run-process-drills.sh`. It
+refuses to signal a run unless `run_purpose` is `process_drill`, kills only the
+exact recorded dashboard and worker PIDs, retains authoritative before/recovery/
+after snapshots, and freezes a hash-verified verdict. The verdict requires that
+counts never regress, ledgers always pass, the dashboard fault does not stop the
+worker checkpoint, and worker recovery acquires a higher lease epoch without
+restarting Mission Control or the daily supervisor. The runner stops the
+disposable candidate after both drills. Neither drill is performed inside the
 official 24-hour or seven-day measurement window.

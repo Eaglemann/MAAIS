@@ -78,6 +78,9 @@ def test_candidate_preflight_passes_only_when_every_gate_matches() -> None:
         qualification=_qualification(repository),
         qualification_bundle_verified=True,
         evaluated_at=datetime(2026, 8, 3, 1, tzinfo=timezone.utc),
+        run_purpose="soak",
+        process_drill_evidence={"passed": True, "report_id": "b" * 64},
+        process_drill_evidence_verified=True,
     )
 
     assert report["passed"] is True
@@ -109,6 +112,9 @@ def test_candidate_preflight_rejects_manifest_that_runtime_would_reject() -> Non
         qualification=_qualification(repository),
         qualification_bundle_verified=True,
         evaluated_at=datetime(2026, 8, 3, 1, tzinfo=timezone.utc),
+        run_purpose="soak",
+        process_drill_evidence={"passed": True, "report_id": "b" * 64},
+        process_drill_evidence_verified=True,
     )
 
     checks = cast(list[dict[str, object]], report["checks"])
@@ -141,6 +147,9 @@ def test_candidate_preflight_explains_all_failed_gates() -> None:
         qualification=_qualification(_repository(manifest)),
         qualification_bundle_verified=False,
         evaluated_at=datetime(2026, 8, 5, tzinfo=timezone.utc),
+        run_purpose="soak",
+        process_drill_evidence={"passed": False},
+        process_drill_evidence_verified=False,
     )
 
     checks = cast(list[dict[str, object]], report["checks"])
@@ -157,4 +166,5 @@ def test_candidate_preflight_explains_all_failed_gates() -> None:
         "dashboard_build",
         "free_disk",
         "fresh_qualification",
+        "process_drill_gate",
     }.issubset(failed)

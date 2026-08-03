@@ -67,6 +67,10 @@ interrupted state update. The
 timed run remains blocked until that bundle, the process fault drills, and the
 separate 24-hour soak pass.
 
+Disposable process drills and the 24-hour soak have separate purpose-bound
+launchers. The soak verdict rejects evidence from a drill run, any restart
+inside the soak, or a process-drill bundle from a different commit.
+
 - [Local setup](docs/runbooks/setup.md)
 - [Normal operations](docs/runbooks/operations.md)
 - [Incident response](docs/runbooks/incidents.md)

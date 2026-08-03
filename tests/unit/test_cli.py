@@ -73,6 +73,27 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/qualification",
         ]
     )
+    process_drills = parser.parse_args(
+        [
+            "process-drill-verdict",
+            "--manifest",
+            "artifacts/manifests/drill.json",
+            "--dashboard-baseline",
+            "artifacts/drills/dashboard-baseline.json",
+            "--dashboard-recovery",
+            "artifacts/drills/dashboard-recovery.json",
+            "--dashboard-after",
+            "artifacts/drills/dashboard-after.json",
+            "--worker-baseline",
+            "artifacts/drills/worker-baseline.json",
+            "--worker-recovery",
+            "artifacts/drills/worker-recovery.json",
+            "--worker-after",
+            "artifacts/drills/worker-after.json",
+            "--output",
+            "artifacts/process-drills",
+        ]
+    )
     health = parser.parse_args(
         [
             "health",
@@ -136,6 +157,8 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert preflight.qualification == Path("artifacts/qualification/latest")
     assert qualify.repository == Path.cwd()
     assert qualify.output == Path("artifacts/qualification")
+    assert process_drills.repository == Path.cwd()
+    assert process_drills.worker_after == Path("artifacts/drills/worker-after.json")
     assert health.maximum_lag_seconds == 180
     assert not health.allow_stopped
     assert soak_verdict.state == Path("artifacts/run-state/current.json")
@@ -195,6 +218,54 @@ def test_qualification_uses_separate_test_database_environment_without_printing_
         "passed": True,
         "qualification": str(bundle / "qualification.json"),
         "report_id": "a" * 64,
+    }
+
+
+def test_process_drill_verdict_prints_only_the_frozen_bundle_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle = tmp_path / "process-drill-bundle"
+
+    def fake_freeze(**_kwargs: object):
+        return (
+            SimpleNamespace(
+                directory=bundle,
+                report_path=bundle / "process-drills.json",
+                manifest_path=bundle / "bundle-manifest.json",
+            ),
+            {"passed": True, "report_id": "c" * 64},
+        )
+
+    monkeypatch.setattr("maais.cli.freeze_process_drill_evidence", fake_freeze)
+    arguments = [
+        "process-drill-verdict",
+        "--manifest",
+        "manifest.json",
+        "--dashboard-baseline",
+        "dashboard-baseline.json",
+        "--dashboard-recovery",
+        "dashboard-recovery.json",
+        "--dashboard-after",
+        "dashboard-after.json",
+        "--worker-baseline",
+        "worker-baseline.json",
+        "--worker-recovery",
+        "worker-recovery.json",
+        "--worker-after",
+        "worker-after.json",
+        "--output",
+        str(tmp_path),
+    ]
+
+    assert main(arguments) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "bundle_manifest": str(bundle / "bundle-manifest.json"),
+        "directory": str(bundle),
+        "passed": True,
+        "report": str(bundle / "process-drills.json"),
+        "report_id": "c" * 64,
     }
 
 

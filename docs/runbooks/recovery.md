@@ -2,6 +2,10 @@
 
 ## Worker or machine restart
 
+For the intentional pre-soak worker and API kill tests, use
+`scripts/run-process-drills.sh` rather than manually assembling evidence. The
+steps below are the supported incident recovery path for an unplanned failure.
+
 1. Confirm the prior worker process is no longer alive.
 2. Run `uv run maais verify-ledger`.
 3. Inspect the latest checkpoint, lease, cursors, recovery runs, incidents, open positions, pending orders, and kill switch in Mission Control.

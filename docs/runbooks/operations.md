@@ -2,6 +2,44 @@
 
 ## Start
 
+### Disposable recovery drills
+
+Before the clean soak, run the automated disposable drill once from the exact
+candidate commit:
+
+```bash
+MAAIS_DOCKER_CONTEXT=desktop-linux scripts/run-process-drills.sh \
+  artifacts/manifests/process-drill-YYYY-MM-DD.json \
+  artifacts/restore-drills/<drill>/restore-verification.json \
+  artifacts/qualification/<qualification-bundle>
+```
+
+The runner starts a purpose-bound disposable candidate, captures authoritative
+baselines, sends `SIGKILL` only to the PIDs recorded for Mission Control and the
+worker, uses the audited recovery path, and proves worker independence,
+checkpoint progress, PID replacement, higher worker lease epoch, non-regressing
+projections, and passing ledgers. It freezes every raw JSON record and report in
+a SHA-256 bundle under `artifacts/process-drills/`, then stops the disposable
+run. A failure is evidence to investigate and cannot be used by the soak.
+
+### 24-hour soak
+
+Start the clean soak with the process-drill bundle from the same commit:
+
+```bash
+MAAIS_DOCKER_CONTEXT=desktop-linux scripts/start-paper-soak.sh \
+  artifacts/manifests/soak-candidate-YYYY-MM-DD.json \
+  artifacts/restore-drills/<drill>/restore-verification.json \
+  artifacts/qualification/<qualification-bundle> \
+  artifacts/process-drills/<process-drill-bundle>
+```
+
+The run state is explicitly marked `soak`. The final soak verdict re-hashes the
+process-drill bundle and rejects a missing, failed, tampered, or different-commit
+bundle. Do not use `start-paper-week.sh` for this gate.
+
+### Seven-day experiment
+
 Use the exact candidate manifest, passing restore-verification artifact, and the
 fresh qualification bundle printed by `maais qualify-candidate`:
 

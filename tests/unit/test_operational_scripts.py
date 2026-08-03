@@ -24,6 +24,23 @@ def test_paper_services_start_with_structured_production_logging() -> None:
     assert "MANIFEST RESTORE_VERIFICATION QUALIFICATION_BUNDLE" in start_script
     assert '--qualification "${qualification_path}"' in start_script
     assert "qualification:$qualification" in start_script
+    assert 'run_purpose="${MAAIS_RUN_PURPOSE:-seven_day}"' in start_script
+    assert "run_purpose:$run_purpose" in start_script
+
+
+def test_disposable_process_drill_is_purpose_bound_and_freezes_recovery_evidence() -> None:
+    drill_start = (REPOSITORY_ROOT / "scripts" / "start-paper-drill.sh").read_text()
+    drill_run = (REPOSITORY_ROOT / "scripts" / "run-process-drills.sh").read_text()
+    soak_start = (REPOSITORY_ROOT / "scripts" / "start-paper-soak.sh").read_text()
+
+    assert "MAAIS_RUN_PURPOSE=process_drill" in drill_start
+    assert 'kill -KILL "${dashboard_pid}"' in drill_run
+    assert 'kill -KILL "${worker_pid}"' in drill_run
+    assert 'recover-paper-week.sh" dashboard' in drill_run
+    assert 'recover-paper-week.sh" worker' in drill_run
+    assert "process-drill-verdict" in drill_run
+    assert "MAAIS_RUN_PURPOSE=soak" in soak_start
+    assert "MAAIS_PROCESS_DRILL_BUNDLE" in soak_start
 
 
 def test_recovery_script_is_fail_closed_and_audited() -> None:

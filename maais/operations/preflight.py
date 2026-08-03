@@ -20,6 +20,10 @@ from maais.experiments.manifest import ExperimentManifest
 from maais.experiments.prepare import RepositoryIdentity, capture_repository_identity
 from maais.experiments.runtime_policy import LivePaperPolicy, RuntimePolicyError
 from maais.live import load_manifest_file
+from maais.operations.process_drills import (
+    load_verified_process_drills,
+    process_drill_evidence_passes,
+)
 from maais.operations.qualification import (
     load_verified_qualification,
     qualification_evidence_passes,
@@ -49,6 +53,9 @@ def evaluate_candidate_preflight(
     qualification: dict[str, object],
     qualification_bundle_verified: bool,
     evaluated_at: datetime,
+    run_purpose: str,
+    process_drill_evidence: dict[str, object],
+    process_drill_evidence_verified: bool,
 ) -> dict[str, object]:
     """Evaluate every local, identity, safety, and recovery prerequisite."""
     runtime_policy_error: str | None = None
@@ -76,6 +83,11 @@ def evaluate_candidate_preflight(
         repository=repository,
         bundle_verified=qualification_bundle_verified,
         evaluated_at=evaluated_at,
+    )
+    purpose_valid = run_purpose in {"process_drill", "soak", "seven_day"}
+    process_drill_gate_passed = purpose_valid and (
+        run_purpose != "soak"
+        or (process_drill_evidence_verified and process_drill_evidence.get("passed") is True)
     )
     checks = [
         _check(
@@ -166,12 +178,28 @@ def evaluate_candidate_preflight(
                 "not match the exact clean repository"
             ),
         ),
+        _check(
+            "process_drill_gate",
+            process_drill_gate_passed,
+            (
+                f"run purpose={run_purpose}; exact-commit process drills are not required"
+                if run_purpose != "soak" and purpose_valid
+                else (
+                    "run purpose=soak; exact-commit process drill bundle passed"
+                    if process_drill_gate_passed
+                    else "soak requires a passing, hash-verified process drill bundle for "
+                    "the exact repository"
+                )
+            ),
+        ),
     ]
     return {
         "passed": all(check["passed"] is True for check in checks),
         "experiment_id": str(manifest.experiment_id),
         "manifest_hash": manifest.manifest_hash,
         "qualification_report_id": qualification.get("report_id"),
+        "run_purpose": run_purpose,
+        "process_drill_report_id": process_drill_evidence.get("report_id"),
         "safety": {"paper_trading_only": True, "live_money": False},
         "checks": checks,
     }
@@ -205,6 +233,8 @@ async def run_candidate_preflight(
     manifest_path: Path,
     restore_verification_path: Path,
     qualification_directory: Path,
+    run_purpose: str,
+    process_drill_directory: Path | None,
     repository_root: Path,
     dashboard_directory: Path,
     minimum_free_gb: int,
@@ -221,6 +251,22 @@ async def run_candidate_preflight(
     qualification, qualification_verified = load_verified_qualification(qualification_directory)
     evaluated_at = datetime.now(UTC)
     database_name, schema_revision, stored_manifest_hash, ledger = database_state
+    if process_drill_directory is None:
+        process_drill_evidence: dict[str, object] = {"passed": False}
+        process_drill_evidence_verified = False
+    else:
+        try:
+            process_drill_evidence, process_bundle_verified = load_verified_process_drills(
+                process_drill_directory
+            )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            process_drill_evidence = {"passed": False, "error": str(exc)}
+            process_bundle_verified = False
+        process_drill_evidence_verified = process_drill_evidence_passes(
+            process_drill_evidence,
+            repository=repository,
+            bundle_verified=process_bundle_verified,
+        )
     report = evaluate_candidate_preflight(
         manifest=manifest,
         repository=repository,
@@ -236,8 +282,14 @@ async def run_candidate_preflight(
         qualification=qualification,
         qualification_bundle_verified=qualification_verified,
         evaluated_at=evaluated_at,
+        run_purpose=run_purpose,
+        process_drill_evidence=process_drill_evidence,
+        process_drill_evidence_verified=process_drill_evidence_verified,
     )
     report["evaluated_at"] = evaluated_at.isoformat().replace("+00:00", "Z")
     report["restore_verification_path"] = str(restore_verification_path.resolve())
     report["qualification_directory"] = str(qualification_directory.resolve())
+    report["process_drill_directory"] = (
+        str(process_drill_directory.resolve()) if process_drill_directory is not None else None
+    )
     return report

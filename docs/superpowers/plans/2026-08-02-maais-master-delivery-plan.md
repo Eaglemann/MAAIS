@@ -236,9 +236,9 @@ The phase brief below fixes scope and acceptance criteria. Its implementation-gr
 - [ ] Add structured metrics, JSON logs, lag, queue, state, incident, and report freshness signals.
 - [ ] Add Telegram alert routing and alert deduplication.
 - [ ] Add daily PostgreSQL and artifact backup plus verified restore script.
-- [ ] Add WebSocket, missing/duplicate/reordered data, stale book, venue error, database outage, disk-full, worker kill, API kill, and clock-drift fault tests.
+- [x] Add WebSocket, missing/duplicate/reordered data, stale book, venue error, database outage, disk-full, worker kill, API kill, and clock-drift fault tests.
 - [ ] Add setup, operations, incident, recovery, preflight, and seven-day runbooks.
-- [ ] Prove no duplicate decisions, orders, fills, commands, or reports after each recovery scenario.
+- [ ] Execute the exact-commit disposable process drills and preserve their passing bundle.
 
 ### Definition of done
 

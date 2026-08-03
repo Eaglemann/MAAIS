@@ -32,6 +32,7 @@ from maais.operations.incident_management import (
     apply_configured_incident_action,
 )
 from maais.operations.preflight import run_candidate_preflight
+from maais.operations.process_drills import freeze_process_drill_evidence
 from maais.operations.qualification import run_candidate_qualification
 from maais.operations.reporting import (
     build_configured_daily_report,
@@ -160,6 +161,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     qualify.add_argument("--repository", type=Path, default=Path.cwd())
     qualify.add_argument("--output", type=Path, required=True)
+    process_drills = commands.add_parser(
+        "process-drill-verdict",
+        help="verify and freeze disposable dashboard and worker recovery evidence",
+    )
+    process_drills.add_argument("--manifest", type=Path, required=True)
+    process_drills.add_argument("--repository", type=Path, default=Path.cwd())
+    process_drills.add_argument("--dashboard-baseline", type=Path, required=True)
+    process_drills.add_argument("--dashboard-recovery", type=Path, required=True)
+    process_drills.add_argument("--dashboard-after", type=Path, required=True)
+    process_drills.add_argument("--worker-baseline", type=Path, required=True)
+    process_drills.add_argument("--worker-recovery", type=Path, required=True)
+    process_drills.add_argument("--worker-after", type=Path, required=True)
+    process_drills.add_argument("--output", type=Path, required=True)
     preflight = commands.add_parser(
         "preflight",
         help="evaluate all local gates for an official timed paper candidate",
@@ -167,6 +181,12 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--manifest", type=Path, required=True)
     preflight.add_argument("--restore-verification", type=Path, required=True)
     preflight.add_argument("--qualification", type=Path, required=True)
+    preflight.add_argument(
+        "--run-purpose",
+        choices=("process_drill", "soak", "seven_day"),
+        default="seven_day",
+    )
+    preflight.add_argument("--process-drills", type=Path)
     preflight.add_argument("--repository", type=Path, default=Path.cwd())
     preflight.add_argument("--dashboard-dir", type=Path, default=Path("dashboard/dist"))
     preflight.add_argument("--minimum-free-gb", type=_positive_int, default=5)
@@ -376,12 +396,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0 if report["passed"] is True else 1
+    if arguments.command == "process-drill-verdict":
+        paths, report = freeze_process_drill_evidence(
+            manifest_path=arguments.manifest,
+            repository_root=arguments.repository,
+            dashboard_baseline_path=arguments.dashboard_baseline,
+            dashboard_recovery_path=arguments.dashboard_recovery,
+            dashboard_after_path=arguments.dashboard_after,
+            worker_baseline_path=arguments.worker_baseline,
+            worker_recovery_path=arguments.worker_recovery,
+            worker_after_path=arguments.worker_after,
+            output_directory=arguments.output,
+            generated_at=datetime.now(timezone.utc),
+        )
+        print(
+            json.dumps(
+                {
+                    "passed": report["passed"],
+                    "report_id": report["report_id"],
+                    "directory": str(paths.directory),
+                    "report": str(paths.report_path),
+                    "bundle_manifest": str(paths.manifest_path),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0 if report["passed"] is True else 1
     if arguments.command == "preflight":
         report = asyncio.run(
             run_candidate_preflight(
                 manifest_path=arguments.manifest,
                 restore_verification_path=arguments.restore_verification,
                 qualification_directory=arguments.qualification,
+                run_purpose=arguments.run_purpose,
+                process_drill_directory=arguments.process_drills,
                 repository_root=arguments.repository,
                 dashboard_directory=arguments.dashboard_dir,
                 minimum_free_gb=arguments.minimum_free_gb,

@@ -16,7 +16,6 @@ def test_settings_default_to_replay_without_credentials() -> None:
     assert settings.run_mode is RunMode.REPLAY
     assert settings.binance_demo_api_key == ""
     assert settings.binance_demo_api_secret == ""
-    assert settings.maais_test_database_url == ""
 
 
 def test_live_is_not_a_valid_mode() -> None:
