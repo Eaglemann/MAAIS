@@ -144,14 +144,14 @@ class PublicMarketDataRuntime:
             )
             self._emit_futures_preflight(futures)
             await self._poll_funding_once()
+            websocket = self._websocket_factory(self._symbols, self._futures_rest)
+            self._websocket = websocket
+            await websocket.start()
             primary, secondary = await asyncio.gather(
                 self._primary_spot.get_reference_events(),
                 self._secondary_spot.get_reference_events(),
             )
             self._emit_many((*primary, *secondary))
-            websocket = self._websocket_factory(self._symbols, self._futures_rest)
-            self._websocket = websocket
-            await websocket.start()
             self._state = PublicDataRuntimeState.READY
             self._supervisor = asyncio.create_task(
                 self._run(),

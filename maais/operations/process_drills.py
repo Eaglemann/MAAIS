@@ -17,7 +17,7 @@ from maais.experiments.manifest import ExperimentManifest
 from maais.experiments.prepare import RepositoryIdentity, capture_repository_identity
 from maais.live import load_manifest_file
 
-PROCESS_DRILL_SCHEMA_VERSION = 1
+PROCESS_DRILL_SCHEMA_VERSION = 2
 PROCESS_DRILL_CHECKS = (
     "candidate_identity",
     "disposable_run_purpose",
@@ -32,6 +32,7 @@ PROCESS_DRILL_CHECKS = (
     "projection_monotonicity",
     "ledger_consistency",
     "healthy_after_each_recovery",
+    "incident_free_after_each_recovery",
 )
 PROCESS_DRILL_ARTIFACTS = (
     "dashboard-baseline.json",
@@ -123,6 +124,23 @@ def _snapshot_healthy(snapshot: Mapping[str, object]) -> bool:
         and runtime.get("lease_status") == "active"
         and freshness.get("halted_cursors") == 0
         and freshness.get("active_recoveries") == 0
+    )
+
+
+def _overview_incident_free(overview: Mapping[str, object]) -> bool:
+    operations = _object(overview, "operations")
+    incidents = overview.get("incidents")
+    return (
+        operations.get("open_incidents") == 0
+        and operations.get("review_incidents") == 0
+        and isinstance(incidents, list)
+        and not any(
+            isinstance(incident, Mapping)
+            and (
+                incident.get("status") == "open" or incident.get("requires_operator_review") is True
+            )
+            for incident in incidents
+        )
     )
 
 
@@ -259,6 +277,13 @@ def evaluate_process_drills(
     ]
     ledger_ok = all(_ledger_ok(value) for value in ledger_values)
     healthy = _snapshot_healthy(dashboard_after) and _snapshot_healthy(worker_after)
+    recovery_overviews = (
+        _overview(dashboard_after),
+        _overview(worker_after),
+        _object(_object(dashboard_recovery, "after"), "overview"),
+        _object(_object(worker_recovery, "after"), "overview"),
+    )
+    incident_free = all(_overview_incident_free(overview) for overview in recovery_overviews)
 
     checks = [
         _check("candidate_identity", candidate_identity, "manifest matches the exact clean commit"),
@@ -317,6 +342,11 @@ def evaluate_process_drills(
             "healthy_after_each_recovery",
             healthy,
             "runtime lease and cursors are healthy after both recoveries",
+        ),
+        _check(
+            "incident_free_after_each_recovery",
+            incident_free,
+            "no open or operator-review incidents remain after either recovery",
         ),
     ]
     if tuple(check["name"] for check in checks) != PROCESS_DRILL_CHECKS:

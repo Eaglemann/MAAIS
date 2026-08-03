@@ -93,6 +93,33 @@ def _mark(event_ms: int, symbol: str = "BTCUSDT") -> str:
     )
 
 
+def _depth(
+    event_ms: int,
+    *,
+    first: int = 101,
+    final: int = 102,
+    previous: int = 100,
+    symbol: str = "BTCUSDT",
+) -> str:
+    stream_symbol = symbol.lower()
+    return json.dumps(
+        {
+            "stream": f"{stream_symbol}@depth@500ms",
+            "data": {
+                "e": "depthUpdate",
+                "E": event_ms,
+                "T": event_ms - 1,
+                "s": symbol,
+                "U": first,
+                "u": final,
+                "pu": previous,
+                "b": [["100", "4"]],
+                "a": [["101", "4"]],
+            },
+        }
+    )
+
+
 async def _no_sleep(_: float) -> None:
     await asyncio.sleep(0)
 
@@ -119,6 +146,7 @@ def test_stream_urls_separate_public_depth_from_market_events_without_credential
 async def test_start_ready_event_and_stop_retain_and_await_connector_task() -> None:
     public_socket = _Socket()
     market_socket = _Socket()
+    public_socket.messages.put_nowait(_depth(1785672000000))
     market_socket.messages.put_nowait(_mark(1785672000000))
     sockets = iter((public_socket, market_socket))
     connector = BinanceWebSocketConnector(
@@ -136,9 +164,13 @@ async def test_start_ready_event_and_stop_retain_and_await_connector_task() -> N
     assert task is not None and not task.done()
     assert connector.state is ConnectorState.READY
 
-    event = await anext(connector.events())
+    events = connector.events()
+    observed = {await anext(events), await anext(events)}
 
-    assert event.kind is MarketEventKind.MARK_FUNDING
+    assert {event.kind for event in observed} == {
+        MarketEventKind.MARK_FUNDING,
+        MarketEventKind.ORDER_BOOK,
+    }
     await connector.stop()
     assert public_socket.closed
     assert market_socket.closed
@@ -146,7 +178,7 @@ async def test_start_ready_event_and_stop_retain_and_await_connector_task() -> N
     assert connector.state is ConnectorState.STOPPED
 
 
-async def test_output_queue_saturation_halts_instead_of_dropping() -> None:
+async def test_startup_does_not_claim_ready_before_each_order_book_is_published() -> None:
     public_socket = _Socket()
     market_socket = _Socket()
     market_socket.messages.put_nowait(_mark(1785672000000))
@@ -158,7 +190,31 @@ async def test_output_queue_saturation_halts_instead_of_dropping() -> None:
         observed_now=lambda: NOW + timedelta(seconds=1),
         sleep=_no_sleep,
         jitter=lambda _low, _high: 0,
-        queue_size=1,
+        ready_timeout=0.01,
+    )
+
+    with pytest.raises(ConnectorHalt, match="ready_timeout"):
+        await connector.start()
+
+    assert connector.state is ConnectorState.HALTED
+    assert connector.failure is not None
+    assert connector.failure.reason_code == "ready_timeout"
+
+
+async def test_output_queue_saturation_halts_instead_of_dropping() -> None:
+    public_socket = _Socket()
+    market_socket = _Socket()
+    public_socket.messages.put_nowait(_depth(1785672000000))
+    market_socket.messages.put_nowait(_mark(1785672000000))
+    sockets = iter((public_socket, market_socket))
+    connector = BinanceWebSocketConnector(
+        ("BTCUSDT",),
+        rest=_Rest(),
+        connect=lambda _: next(sockets),
+        observed_now=lambda: NOW + timedelta(seconds=1),
+        sleep=_no_sleep,
+        jitter=lambda _low, _high: 0,
+        queue_size=2,
         ready_timeout=1,
     )
     await connector.start()
@@ -170,7 +226,11 @@ async def test_output_queue_saturation_halts_instead_of_dropping() -> None:
     assert connector.failure is not None
     assert connector.failure.reason_code == "output_queue_saturated"
     events = connector.events()
-    assert (await anext(events)).event_id.endswith("1785672000000")
+    retained = (await anext(events), await anext(events))
+    assert {event.kind for event in retained} == {
+        MarketEventKind.MARK_FUNDING,
+        MarketEventKind.ORDER_BOOK,
+    }
     with pytest.raises(ConnectorHalt, match="output_queue_saturated"):
         await anext(events)
 
@@ -178,6 +238,7 @@ async def test_output_queue_saturation_halts_instead_of_dropping() -> None:
 async def test_malformed_contract_halts_with_operator_visible_failure() -> None:
     public_socket = _Socket()
     market_socket = _Socket()
+    public_socket.messages.put_nowait(_depth(1785672000000))
     market_socket.messages.put_nowait(_mark(1785672000000))
     sockets = iter((public_socket, market_socket))
     connector = BinanceWebSocketConnector(
@@ -205,7 +266,9 @@ async def test_disconnect_enters_recovery_and_rebuilds_depth_before_ready() -> N
     first_market = _Socket()
     second_public = _Socket()
     second_market = _Socket()
+    first_public.messages.put_nowait(_depth(1785672000000))
     first_market.messages.put_nowait(_mark(1785672000000))
+    second_public.messages.put_nowait(_depth(1785672001000))
     second_market.messages.put_nowait(_mark(1785672001000))
     sockets = iter((first_public, first_market, second_public, second_market))
     connector = BinanceWebSocketConnector(
@@ -256,6 +319,7 @@ async def test_startup_requires_mark_coverage_for_every_symbol() -> None:
 async def test_unconfigured_stream_symbol_halts_as_contract_violation() -> None:
     public_socket = _Socket()
     market_socket = _Socket()
+    public_socket.messages.put_nowait(_depth(1785672000000))
     market_socket.messages.put_nowait(_mark(1785672000000))
     sockets = iter((public_socket, market_socket))
     connector = BinanceWebSocketConnector(

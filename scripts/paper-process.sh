@@ -291,6 +291,21 @@ paper_start_wait_seconds() {
   printf '%s\n' "$((60 - current_value))"
 }
 
+paper_wait_for_minute_window() {
+  local maximum_start_second="$1"
+  local current_second
+  local wait_seconds
+
+  current_second="$(date -u +%S)" || return 1
+  wait_seconds="$(
+    paper_start_wait_seconds "${current_second}" "${maximum_start_second}"
+  )" || return 1
+  if ((wait_seconds > 0)); then
+    echo "aligning recovery drill fault to a safe minute boundary: wait=${wait_seconds}s" >&2
+    sleep "${wait_seconds}"
+  fi
+}
+
 paper_wait_for_berlin_midnight_start_window() {
   local maximum_start_second="$1"
   local maximum_wait_seconds=600

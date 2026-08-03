@@ -44,7 +44,12 @@ def _overview(manifest, *, checkpoint: int, epoch: int, decisions: int) -> dict[
             "lease_epoch": epoch,
         },
         "decisions": {"total": decisions},
-        "operations": {"fills": checkpoint, "open_incidents": 0},
+        "operations": {
+            "fills": checkpoint,
+            "open_incidents": 0,
+            "review_incidents": 0,
+        },
+        "incidents": [],
         "freshness": {"halted_cursors": 0, "active_recoveries": 0},
     }
 
@@ -197,6 +202,32 @@ def test_process_drills_fail_on_pid_reuse_regression_bad_ledger_or_wrong_purpose
         "projection_monotonicity",
         "ledger_consistency",
     }.issubset(failed)
+
+
+def test_process_drills_reject_operator_incidents_after_recovery() -> None:
+    inputs = _inputs()
+    worker_after = dict(inputs["worker_after"])  # type: ignore[arg-type]
+    overview = dict(worker_after["overview"])  # type: ignore[arg-type]
+    overview["operations"] = {
+        **overview["operations"],  # type: ignore[dict-item]
+        "open_incidents": 10,
+        "review_incidents": 10,
+    }
+    overview["incidents"] = [
+        {
+            "status": "open",
+            "requires_operator_review": True,
+            "reason_code": "market_frame_quarantined",
+        }
+    ]
+    worker_after["overview"] = overview
+    inputs["worker_after"] = worker_after
+
+    report = evaluate_process_drills(**inputs)  # type: ignore[arg-type]
+    failed = {check["name"] for check in report["checks"] if not check["passed"]}  # type: ignore[union-attr]
+
+    assert report["passed"] is False
+    assert "incident_free_after_each_recovery" in failed
 
 
 def test_process_drill_bundle_hashes_report_and_every_raw_artifact(tmp_path: Path) -> None:

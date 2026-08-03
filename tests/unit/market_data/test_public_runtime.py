@@ -208,6 +208,37 @@ async def test_runtime_preflights_every_source_and_pumps_one_managed_queue() -> 
     assert runtime.state is PublicDataRuntimeState.STOPPED
 
 
+async def test_runtime_refreshes_references_after_websocket_readiness() -> None:
+    timeline: list[str] = []
+
+    class TimelineReference(_Reference):
+        async def get_reference_events(self) -> tuple[ObservedMarketEvent, ...]:
+            timeline.append(self.prefix)
+            return await super().get_reference_events()
+
+    class TimelineWebSocket(_WebSocket):
+        async def start(self) -> None:
+            timeline.append("websocket")
+            await super().start()
+
+    runtime = PublicMarketDataRuntime(
+        ("BTCUSDT",),
+        futures_rest=_FuturesRest(),  # type: ignore[arg-type]
+        primary_spot=TimelineReference("primary"),  # type: ignore[arg-type]
+        secondary_spot=TimelineReference("secondary"),  # type: ignore[arg-type]
+        websocket_factory=lambda symbols, rest: TimelineWebSocket(),  # type: ignore[arg-type,return-value]
+        observed_now=lambda: NOW + timedelta(seconds=1),
+        sleep=_blocking_sleep,
+        funding_start_at=NOW - timedelta(hours=8),
+    )
+
+    await runtime.start()
+
+    assert timeline[0] == "websocket"
+    assert set(timeline[1:]) == {"primary", "secondary"}
+    await runtime.stop()
+
+
 async def test_runtime_queue_saturation_fails_startup_without_dropping() -> None:
     runtime = PublicMarketDataRuntime(
         ("BTCUSDT",),

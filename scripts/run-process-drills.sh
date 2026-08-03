@@ -8,6 +8,7 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_dir}/.." && pwd)"
+source "${script_dir}/paper-process.sh"
 manifest_path="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 state_path="${repository_root}/artifacts/run-state/current.json"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -50,6 +51,37 @@ capture_snapshot() {
   rm -f "${state_copy}" "${overview_copy}" "${ledger_copy}"
 }
 
+wait_for_post_recovery_cycle() {
+  baseline="$1"
+  recovery="$2"
+  port="$(jq -er '.mission_control_port' "${state_path}")"
+  experiment_id="$(jq -er '.experiment_id' "${state_path}")"
+  baseline_decisions="$(jq -er '.overview.decisions.total' "${baseline}")"
+  expected_symbols="$(jq -er '.symbols | length' "${manifest_path}")"
+  minimum_decisions="$((baseline_decisions + expected_symbols))"
+  recovered_at="$(jq -er '.recovered_at' "${recovery}")"
+
+  for _attempt in $(seq 1 120); do
+    overview="$(curl -fsS \
+      "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" \
+      2>/dev/null || true)"
+    if [[ -n "${overview}" ]] && jq -e \
+      --argjson minimum_decisions "${minimum_decisions}" \
+      --arg recovered_at "${recovered_at}" \
+      '.decisions.total >= $minimum_decisions and (.freshness.latest_cursor_update_at // "") > $recovered_at' \
+      >/dev/null <<<"${overview}"; then
+      post_recovery_clean="$(jq -r \
+        '.operations.open_incidents == 0 and .operations.review_incidents == 0' \
+        <<<"${overview}")"
+      echo "post-recovery cycle observed: decisions=${minimum_decisions} clean=${post_recovery_clean}" >&2
+      return 0
+    fi
+    sleep 1
+  done
+  echo "replacement worker did not complete a full post-recovery symbol cycle" >&2
+  return 1
+}
+
 start_arguments=("$1" "$2" "$3")
 if [[ $# -eq 4 ]]; then
   start_arguments+=("$4")
@@ -85,6 +117,7 @@ cp "${dashboard_recovery_source}" "${work_directory}/dashboard-recovery.json"
 capture_snapshot "${work_directory}/dashboard-after.json"
 
 capture_snapshot "${work_directory}/worker-baseline.json"
+paper_wait_for_minute_window 5
 worker_pid="$(jq -er '.worker_pid' "${state_path}")"
 kill -KILL "${worker_pid}"
 for _attempt in $(seq 1 30); do
@@ -99,6 +132,9 @@ fi
   > "${work_directory}/worker-recovery.log"
 worker_recovery_source="$(jq -er '.last_recovery_evidence' "${state_path}")"
 cp "${worker_recovery_source}" "${work_directory}/worker-recovery.json"
+wait_for_post_recovery_cycle \
+  "${work_directory}/worker-baseline.json" \
+  "${work_directory}/worker-recovery.json"
 capture_snapshot "${work_directory}/worker-after.json"
 
 (cd "${repository_root}" && uv run maais process-drill-verdict \

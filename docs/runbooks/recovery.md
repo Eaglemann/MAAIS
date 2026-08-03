@@ -10,7 +10,12 @@ steps below are the supported incident recovery path for an unplanned failure.
 2. Run `uv run maais verify-ledger`.
 3. Inspect the latest checkpoint, lease, cursors, recovery runs, incidents, open positions, pending orders, and kill switch in Mission Control.
 4. Run `scripts/recover-paper-week.sh worker "REASON"`. It refuses a live recorded PID, waits for lease expiry, reuses the frozen manifest, requires a higher lease epoch, restores the sleep inhibitor, verifies the ledger before and after, and writes immutable evidence under `artifacts/run-state/recovery-evidence/`.
-5. Compare counts and event positions before and after restart. Any duplicate decision, order, fill, or report fails the candidate.
+5. Wait for a complete configured-symbol cycle after the replacement lease is active, then compare counts, event positions, quarantines, and incidents before and after restart. Any duplicate decision, order, fill, or report, or any open/operator-review incident, fails the candidate.
+
+The public connector does not advertise startup readiness until every configured
+symbol has both mark-price coverage and a reconciled order-book event. Initial
+spot references are collected only after that WebSocket readiness point so they
+cannot silently age during connector startup.
 
 Recovery reuses the Docker context and PostgreSQL system identifier recorded at
 candidate start. Do not switch container engines or remap the database port; a

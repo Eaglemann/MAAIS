@@ -7,7 +7,7 @@ the official 24-hour soak; their generated evidence is retained under
 
 | Fault | Direct evidence | Required invariant |
 |---|---|---|
-| WebSocket disconnect | `tests/unit/market_data/test_binance_websocket_connector.py::test_disconnect_enters_recovery_and_rebuilds_depth_before_ready` | Connector cannot become ready until depth is rebuilt. |
+| WebSocket disconnect | `tests/unit/market_data/test_binance_websocket_connector.py::test_disconnect_enters_recovery_and_rebuilds_depth_before_ready` and `::test_startup_does_not_claim_ready_before_each_order_book_is_published` | Connector cannot become ready until every configured symbol has both mark-price coverage and a reconciled, published order book. |
 | REST transport disconnect | `tests/unit/market_data/test_http_transport.py` plus the transient-failure cases in each public REST connector test | Transport-only failures retry with bounded backoff and structured source evidence; exhaustion retains the exact failed task and remains fail-closed. |
 | Missing bars | `tests/unit/market_data/test_gap_recovery.py` and `tests/integration/test_recovery_store.py` | Exact closed-bar range is validated, persisted, and resumed at the first uncommitted event. |
 | Duplicate event | `tests/unit/market_data/test_frame_builder.py::test_identical_duplicate_is_idempotent_but_conflicting_duplicate_fails` and `tests/integration/test_decision_lineage.py::test_identical_retry_is_idempotent_but_changed_retry_conflicts` | Identical retry is a no-op; conflicting content fails closed. |
@@ -42,6 +42,9 @@ exact recorded dashboard and worker PIDs, retains authoritative before/recovery/
 after snapshots, and freezes a hash-verified verdict. The verdict requires that
 counts never regress, ledgers always pass, the dashboard fault does not stop the
 worker checkpoint, and worker recovery acquires a higher lease epoch without
-restarting Mission Control or the daily supervisor. The runner stops the
-disposable candidate after both drills. Neither drill is performed inside the
-official 24-hour or seven-day measurement window.
+restarting Mission Control or the daily supervisor. The worker fault is aligned
+just after a minute boundary, and the verdict waits for a complete post-recovery
+symbol cycle. Any open incident or operator-review incident in either recovery
+snapshot fails the verdict. The runner stops the disposable candidate after both
+drills. Neither drill is performed inside the official 24-hour or seven-day
+measurement window.

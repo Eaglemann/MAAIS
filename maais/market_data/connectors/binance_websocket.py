@@ -168,6 +168,7 @@ class BinanceWebSocketConnector:
         self._books: dict[str, BinanceDepthBook] = {}
         self._depth_buffers: dict[str, list[BinanceDepthDelta]] = {}
         self._depth_ready = False
+        self._book_ready_symbols: set[str] = set()
         self._market_ready_symbols: set[str] = set()
         self._book_lock = asyncio.Lock()
         self._failure: ConnectorFailure | None = None
@@ -314,9 +315,11 @@ class BinanceWebSocketConnector:
         market_socket: _Socket,
     ) -> None:
         async with self._book_lock:
+            self._ready.clear()
             self._books = {}
             self._depth_buffers = {symbol: [] for symbol in self._symbols}
             self._depth_ready = False
+            self._book_ready_symbols = set()
             self._market_ready_symbols = set()
         initializer = asyncio.create_task(self._initialize_books(), name="binance_depth_snapshot")
         public_reader = asyncio.create_task(
@@ -375,6 +378,7 @@ class BinanceWebSocketConnector:
                     event = book.apply(delta)
                     if event is not None:
                         self._emit(event)
+                        self._book_ready_symbols.add(event.symbol)
                 self._depth_buffers[snapshot.symbol] = []
             self._depth_ready = True
             self._update_readiness()
@@ -410,6 +414,8 @@ class BinanceWebSocketConnector:
                     event = book.apply(parsed)
                     if event is not None:
                         self._emit(event)
+                        self._book_ready_symbols.add(event.symbol)
+                        self._update_readiness()
                 continue
             if depth_stream:
                 raise ConnectorHalt(
@@ -423,7 +429,12 @@ class BinanceWebSocketConnector:
                     self._update_readiness()
 
     def _update_readiness(self) -> None:
-        if not self._depth_ready or self._market_ready_symbols != set(self._symbols):
+        expected = set(self._symbols)
+        if (
+            not self._depth_ready
+            or self._book_ready_symbols != expected
+            or self._market_ready_symbols != expected
+        ):
             return
         self._state = ConnectorState.READY
         self._ready.set()
