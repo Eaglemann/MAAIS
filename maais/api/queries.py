@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
@@ -20,6 +20,7 @@ from maais.api.schemas import (
     ExperimentListItem,
     ExperimentOverview,
     OperationalCounts,
+    PaperModelAssumptions,
     ResearchCounterfactual,
     ResearchExecutionSensitivity,
     ResearchLabView,
@@ -27,6 +28,7 @@ from maais.api.schemas import (
     TradeListItem,
     TradePage,
 )
+from maais.config.paper_candidate import OFFICIAL_MARGIN_POLICY, OFFICIAL_MODEL_LIMITATIONS
 from maais.db.models.accounts import AccountSnapshotModel, PositionModel
 from maais.db.models.counterfactuals import CounterfactualModel
 from maais.db.models.decisions import (
@@ -62,6 +64,43 @@ _ACTIVE_RECOVERY_STATUSES = ("detected", "backfilling")
 
 def _fields(model: object, names: Iterable[str]) -> dict[str, object]:
     return {name: getattr(model, name) for name in names}
+
+
+def _optional_decimal(value: object) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _paper_model_assumptions(model: ExperimentModel) -> PaperModelAssumptions:
+    configuration = model.manifest_json.get("configuration")
+    risk = configuration.get("risk") if isinstance(configuration, Mapping) else None
+    risk = risk if isinstance(risk, Mapping) else {}
+    expected = {"leverage": 1, **OFFICIAL_MARGIN_POLICY}
+    official = all(risk.get(name) == value for name, value in expected.items())
+    leverage = risk.get("leverage")
+    maintenance_model = risk.get("maintenance_margin_model")
+    liquidation_model = risk.get("liquidation_price_model")
+    parity = risk.get("exchange_liquidation_parity")
+    return PaperModelAssumptions(
+        model_status="frozen_paper_model" if official else "legacy_or_unsupported_policy",
+        leverage=leverage if isinstance(leverage, int) and not isinstance(leverage, bool) else None,
+        maintenance_margin_model=(
+            maintenance_model if isinstance(maintenance_model, str) else None
+        ),
+        maintenance_margin_rate=_optional_decimal(risk.get("maintenance_margin_rate")),
+        liquidation_price_model=(liquidation_model if isinstance(liquidation_model, str) else None),
+        exchange_liquidation_parity=parity if isinstance(parity, bool) else None,
+        limitations=(
+            OFFICIAL_MODEL_LIMITATIONS
+            if official
+            else ("paper_model_policy_missing_or_not_supported",)
+        ),
+    )
 
 
 class MissionControlQueryService:
@@ -831,28 +870,31 @@ class MissionControlQueryService:
     @staticmethod
     def _identity(model: ExperimentModel) -> ExperimentIdentity:
         return ExperimentIdentity.model_validate(
-            _fields(
-                model,
-                (
-                    "id",
-                    "name",
-                    "mode",
-                    "status",
-                    "initial_capital",
-                    "currency",
-                    "created_at",
-                    "started_at",
-                    "ended_at",
-                    "failure_reason",
-                    "git_sha",
-                    "worktree_hash",
-                    "lock_hash",
-                    "schema_revision",
-                    "config_hash",
-                    "manifest_hash",
-                    "manifest_schema_version",
+            {
+                **_fields(
+                    model,
+                    (
+                        "id",
+                        "name",
+                        "mode",
+                        "status",
+                        "initial_capital",
+                        "currency",
+                        "created_at",
+                        "started_at",
+                        "ended_at",
+                        "failure_reason",
+                        "git_sha",
+                        "worktree_hash",
+                        "lock_hash",
+                        "schema_revision",
+                        "config_hash",
+                        "manifest_hash",
+                        "manifest_schema_version",
+                    ),
                 ),
-            )
+                "model_assumptions": _paper_model_assumptions(model),
+            }
         )
 
     @staticmethod

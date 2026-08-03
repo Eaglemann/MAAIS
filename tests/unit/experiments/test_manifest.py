@@ -46,7 +46,16 @@ def _manifest(**overrides: object) -> ExperimentManifest:
         "worktree_hash": None,
         "lock_hash": "2" * 64,
         "schema_revision": "0006",
-        "configuration": {"risk": {"leverage": 1}, "symbols": ["BTCUSDT"]},
+        "configuration": {
+            "risk": {
+                "leverage": 1,
+                "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+                "maintenance_margin_rate": "0.005",
+                "liquidation_price_model": "not_modeled",
+                "exchange_liquidation_parity": False,
+            },
+            "symbols": ["BTCUSDT"],
+        },
         "symbols": ("BTCUSDT",),
         "exchange_metadata": {"venue": "binance", "market": "usdt_perpetual"},
         "component_versions": {

@@ -1,4 +1,5 @@
 from dataclasses import replace
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
@@ -62,10 +63,42 @@ async def test_empty_experiment_uses_manifest_as_explicit_account_source(
     assert overview.account.source == "manifest_initial_state"
     assert overview.account.equity == manifest.initial_capital
     assert overview.account.cash_balance == manifest.initial_capital
+    assert overview.experiment.model_assumptions.model_status == "frozen_paper_model"
+    assert overview.experiment.model_assumptions.leverage == 1
+    assert overview.experiment.model_assumptions.maintenance_margin_rate == Decimal("0.005")
+    assert overview.experiment.model_assumptions.liquidation_price_model == "not_modeled"
+    assert overview.experiment.model_assumptions.exchange_liquidation_parity is False
+    assert overview.experiment.model_assumptions.limitations == (
+        "exchange_liquidation_behavior_not_modeled",
+    )
     assert overview.decisions.total == 0
     assert overview.operations.open_positions == 0
     assert overview.freshness.expected_symbols == len(manifest.symbols)
     assert overview.freshness.cursor_count == 0
+
+
+async def test_legacy_experiment_discloses_unsupported_model_without_hiding_history(
+    uow_factory: UnitOfWork,
+) -> None:
+    manifest = _manifest(
+        experiment_id=UUID(int=702),
+        schema_revision="0015",
+        configuration={"risk": {"leverage": 1}, "symbols": ["BTCUSDT"]},
+    )
+    async with uow_factory.begin() as uow:
+        await uow.experiments.create(manifest)
+    async with uow_factory.begin() as uow:
+        overview = await MissionControlQueryService(uow.session).get_overview(
+            manifest.experiment_id
+        )
+
+    assumptions = overview.experiment.model_assumptions
+    assert assumptions.model_status == "legacy_or_unsupported_policy"
+    assert assumptions.leverage == 1
+    assert assumptions.maintenance_margin_rate is None
+    assert assumptions.liquidation_price_model is None
+    assert assumptions.exchange_liquidation_parity is None
+    assert assumptions.limitations == ("paper_model_policy_missing_or_not_supported",)
 
 
 async def test_decision_feed_and_drilldown_preserve_complete_lineage(

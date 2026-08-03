@@ -401,7 +401,9 @@ Price tick, quantity step, minimum quantity, maximum quantity, minimum notional,
 ### 9.7 Margin and leverage
 
 - The official first run uses 1x leverage with a hard system maximum of 5x.
-- Account state tracks initial margin, maintenance margin, free margin, and liquidation estimate.
+- Account state tracks initial margin, maintenance margin, and free margin.
+- The first operational candidate freezes maintenance margin at 0.5% of gross notional. It does not estimate liquidation price or claim exchange liquidation parity; the immutable manifest, Mission Control, and daily/final reports must say so explicitly.
+- Exchange-tiered maintenance margin, liquidation estimation, and liquidation enforcement remain required research work before any future real-capital proposal. They do not block the first 1x operational paper week because its results cannot be represented as live-exchange parity.
 - Portfolio risk is measured as loss at recorded stop, not gross notional alone.
 - Gross-notional and margin caps are additional independent gates.
 

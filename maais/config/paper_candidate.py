@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Decimal
 from types import MappingProxyType
 
 GOLDEN_PAPER_REPLAY_SHA256 = (
@@ -36,3 +37,16 @@ OFFICIAL_FILL_POLICY: Mapping[str, str] = MappingProxyType(
         "slippage_model": "spread_plus_depth_plus_latency",
     }
 )
+
+OFFICIAL_MAINTENANCE_MARGIN_RATE = Decimal("0.005")
+
+OFFICIAL_MARGIN_POLICY: Mapping[str, str | bool] = MappingProxyType(
+    {
+        "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+        "maintenance_margin_rate": str(OFFICIAL_MAINTENANCE_MARGIN_RATE),
+        "liquidation_price_model": "not_modeled",
+        "exchange_liquidation_parity": False,
+    }
+)
+
+OFFICIAL_MODEL_LIMITATIONS = ("exchange_liquidation_behavior_not_modeled",)

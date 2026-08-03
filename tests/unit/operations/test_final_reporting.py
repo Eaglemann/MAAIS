@@ -82,6 +82,16 @@ def _daily_report(report_date: date, index: int) -> dict[str, object]:
             "peak_risk_at_stop": "2",
             "peak_used_margin": "100",
         },
+        "model_assumptions": {
+            "margin": {
+                "leverage": 1,
+                "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+                "maintenance_margin_rate": "0.005",
+                "liquidation_price_model": "not_modeled",
+                "exchange_liquidation_parity": False,
+            },
+            "limitations": ["exchange_liquidation_behavior_not_modeled"],
+        },
         "decisions": {
             "total": 10,
             "by_status": {"completed": 10},
@@ -299,6 +309,16 @@ def test_final_report_verifies_and_aggregates_exactly_seven_contiguous_days(
         "peak_risk_at_stop": "2",
         "peak_used_margin": "100",
     }
+    assert report["model_assumptions"] == {
+        "margin": {
+            "leverage": 1,
+            "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+            "maintenance_margin_rate": "0.005",
+            "liquidation_price_model": "not_modeled",
+            "exchange_liquidation_parity": False,
+        },
+        "limitations": ["exchange_liquidation_behavior_not_modeled"],
+    }
     assert report["decisions"]["total"] == 70  # type: ignore[index]
     assert report["execution"]["fills"] == 7  # type: ignore[index]
     assert report["operator_actions"] == {
@@ -340,6 +360,9 @@ def test_final_report_bundle_is_immutable_and_self_verifying(tmp_path: Path) -> 
         "daily-reports.csv",
     }
     assert "PAPER TRADING / NO LIVE MONEY" in paths.markdown_path.read_text(encoding="utf-8")
+    assert "Liquidation price model | NOT MODELED" in paths.markdown_path.read_text(
+        encoding="utf-8"
+    )
     with pytest.raises(FileExistsError, match="final report bundle already exists"):
         write_final_report_bundle(report, output_directory)
 
@@ -358,6 +381,30 @@ def test_final_report_rejects_equity_discontinuity_between_daily_snapshots(
         write_daily_report_bundle(report, tmp_path)
 
     with pytest.raises(ValueError, match="equity discontinuity"):
+        build_final_report_from_bundles(
+            tmp_path,
+            experiment_id=EXPERIMENT_ID,
+            start_date=start_date,
+            days=7,
+            generated_at=datetime(2026, 8, 10, 0, 5, tzinfo=timezone.utc),
+        )
+
+
+def test_final_report_rejects_margin_model_drift_between_daily_snapshots(
+    tmp_path: Path,
+) -> None:
+    start_date = date(2026, 8, 3)
+    for index in range(7):
+        report = _daily_report(start_date + timedelta(days=index), index)
+        if index == 3:
+            assumptions = report["model_assumptions"]
+            assert isinstance(assumptions, dict)
+            margin = assumptions["margin"]
+            assert isinstance(margin, dict)
+            margin["maintenance_margin_rate"] = "0.01"
+        write_daily_report_bundle(report, tmp_path)
+
+    with pytest.raises(ValueError, match="model assumptions differ"):
         build_final_report_from_bundles(
             tmp_path,
             experiment_id=EXPERIMENT_ID,

@@ -24,7 +24,11 @@ from maais.config.fees import (
     BINANCE_USDM_REGULAR_TAKER_FEE_RATE,
 )
 from maais.config.modes import RunMode
-from maais.config.paper_candidate import OFFICIAL_DATA_VERSIONS, OFFICIAL_FILL_POLICY
+from maais.config.paper_candidate import (
+    OFFICIAL_DATA_VERSIONS,
+    OFFICIAL_FILL_POLICY,
+    OFFICIAL_MARGIN_POLICY,
+)
 from maais.domain.enums import AgentMaturity
 from maais.domain.json import content_hash, freeze_json
 from maais.execution.paper.filters import ExchangeFilterSnapshot
@@ -208,7 +212,7 @@ def prepare_live_paper_manifest(
         lock_hash=repository.lock_hash,
         schema_revision=repository.schema_revision,
         configuration={
-            "risk": {"leverage": 1},
+            "risk": {"leverage": 1, **OFFICIAL_MARGIN_POLICY},
             "runtime": {
                 "proposal_ttl_seconds": "30",
                 "book_wait_timeout_seconds": "5",

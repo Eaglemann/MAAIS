@@ -6,9 +6,10 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "./api";
-import App, { OperatorConsole, ResearchLab, TradeTable } from "./App";
+import App, { ModelBoundary, OperatorConsole, ResearchLab, TradeTable } from "./App";
 import type {
   JsonRecord,
+  PaperModelAssumptions,
   OperatorCommandPage,
   ResearchLabView,
   RuntimeOverview,
@@ -28,6 +29,31 @@ describe("Mission Control startup", () => {
 
     expect(await screen.findByRole("heading", { name: "No paper experiments yet" }))
       .toBeInTheDocument();
+  });
+});
+
+const MODEL_ASSUMPTIONS: PaperModelAssumptions = {
+  model_status: "frozen_paper_model",
+  leverage: 1,
+  maintenance_margin_model: "fixed_fraction_of_gross_notional",
+  maintenance_margin_rate: "0.005",
+  liquidation_price_model: "not_modeled",
+  exchange_liquidation_parity: false,
+  limitations: ["exchange_liquidation_behavior_not_modeled"],
+};
+
+describe("Paper model boundary", () => {
+  it("makes the maintenance-margin approximation and absent liquidation parity explicit", () => {
+    render(<ModelBoundary assumptions={MODEL_ASSUMPTIONS} />);
+
+    expect(screen.getByRole("heading", { name: "Simulation model boundary" }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/0\.5% of gross notional/i)).toBeInTheDocument();
+    expect(screen.getByText(/liquidation price is not modeled/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not reproduce exchange liquidation behavior/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/1x leverage/i)).toBeInTheDocument();
+    expect(screen.getByText(/no exchange liquidation parity/i)).toBeInTheDocument();
   });
 });
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import cast
 from uuid import UUID
 
+from maais.config.paper_candidate import OFFICIAL_MARGIN_POLICY, OFFICIAL_MODEL_LIMITATIONS
 from maais.domain.json import content_hash, to_json_data
 from maais.operations.reporting import REPORT_SCHEMA_VERSION, berlin_daily_window
 
@@ -40,6 +41,10 @@ _EXPERIMENT_IDENTITY = (
     "manifest_hash",
     "started_at",
 )
+_EXPECTED_MODEL_ASSUMPTIONS: dict[str, object] = {
+    "margin": {"leverage": 1, **OFFICIAL_MARGIN_POLICY},
+    "limitations": list(OFFICIAL_MODEL_LIMITATIONS),
+}
 
 
 class FinalReportValidationError(ValueError):
@@ -67,6 +72,14 @@ def _object(value: object, name: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise FinalReportValidationError(f"{name} must be an object")
     return cast(dict[str, object], value)
+
+
+def _model_assumptions(report: Mapping[str, object]) -> dict[str, object]:
+    assumptions = _object(report.get("model_assumptions"), "daily report model assumptions")
+    _object(assumptions.get("margin"), "daily report margin assumptions")
+    if not isinstance(assumptions.get("limitations"), list):
+        raise FinalReportValidationError("daily report model limitations must be a list")
+    return assumptions
 
 
 def _integer(value: object, name: str) -> int:
@@ -204,6 +217,8 @@ def _verify_daily_report(
         or safety.get("authenticated_exchange_credentials_used") is not False
     ):
         raise FinalReportValidationError("daily report violates the paper-only safety boundary")
+    if _model_assumptions(report) != _EXPECTED_MODEL_ASSUMPTIONS:
+        raise FinalReportValidationError("daily report model assumptions are unsupported")
     experiment = _object(report.get("experiment"), "daily report experiment")
     if experiment.get("id") != str(experiment_id) or experiment.get("mode") != "paper_live":
         raise FinalReportValidationError("daily report experiment identity is invalid")
@@ -390,6 +405,7 @@ def build_final_report_from_bundles(
     reports: list[dict[str, object]] = []
     evidence_rows: list[dict[str, object]] = []
     experiment_identity: dict[str, object] | None = None
+    model_assumptions: dict[str, object] | None = None
     for index in range(days):
         report_date = start_date.fromordinal(start_date.toordinal() + index)
         matches = _matching_reports(reports_directory, experiment_id, report_date)
@@ -399,6 +415,13 @@ def build_final_report_from_bundles(
                 f"found {len(matches)}"
             )
         directory, report, evidence = matches[0]
+        daily_assumptions = _model_assumptions(report)
+        if model_assumptions is None:
+            model_assumptions = daily_assumptions
+        elif model_assumptions != daily_assumptions:
+            raise FinalReportValidationError(
+                f"daily report model assumptions differ on {report_date.isoformat()}"
+            )
         _verify_daily_report(
             report,
             expected_date=report_date,
@@ -425,6 +448,7 @@ def build_final_report_from_bundles(
         reports.append(report)
 
     assert experiment_identity is not None
+    assert model_assumptions is not None
     experiment_started_at = _parse_utc(
         experiment_identity.get("started_at"),
         "daily report experiment.started_at",
@@ -480,6 +504,7 @@ def build_final_report_from_bundles(
             "calendar_days": days,
         },
         "account": account,
+        "model_assumptions": model_assumptions,
         "decisions": {
             "total": _sum_integers(reports, "decisions", "total"),
             "by_status": _sum_counts(reports, "decisions", "by_status"),
@@ -683,6 +708,8 @@ def render_final_report_markdown(report: dict[str, object]) -> str:
     experiment = _object(report.get("experiment"), "final report experiment")
     period = _object(report.get("period"), "final report period")
     account = _object(report.get("account"), "final report account")
+    assumptions = _object(report.get("model_assumptions"), "final report model assumptions")
+    margin = _object(assumptions.get("margin"), "final report margin assumptions")
     decisions = _object(report.get("decisions"), "final report decisions")
     execution = _object(report.get("execution"), "final report execution")
     operations = _object(report.get("operations"), "final report operations")
@@ -719,6 +746,19 @@ Generated: `{report["generated_at"]}`
 | Funding | {account["funding"]} |
 | Maximum drawdown | {account["maximum_drawdown"]} |
 | Peak exposure | {account["peak_exposure"]} |
+
+## Model assumptions and limitations
+
+| Assumption | Value |
+|---|---|
+| Leverage | {margin["leverage"]}x |
+| Maintenance margin model | {margin["maintenance_margin_model"]} |
+| Maintenance margin rate | {margin["maintenance_margin_rate"]} |
+| Liquidation price model | {str(margin["liquidation_price_model"]).replace("_", " ").upper()} |
+| Exchange liquidation parity | {"YES" if margin["exchange_liquidation_parity"] else "NO"} |
+
+Paper results do not reproduce exchange liquidation behavior. Maintenance margin is a
+frozen paper-model assumption; no exchange liquidation price is estimated.
 
 ## Decisions
 

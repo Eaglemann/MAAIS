@@ -5,7 +5,11 @@ from decimal import Decimal
 import pytest
 
 from maais.config.modes import RunMode
-from maais.config.paper_candidate import OFFICIAL_DATA_VERSIONS, OFFICIAL_FILL_POLICY
+from maais.config.paper_candidate import (
+    OFFICIAL_DATA_VERSIONS,
+    OFFICIAL_FILL_POLICY,
+    OFFICIAL_MARGIN_POLICY,
+)
 from maais.domain.enums import PaperOrderType
 from maais.execution.paper.filters import ExchangeFilterSnapshot
 from maais.experiments.runtime_policy import LivePaperPolicy, RuntimePolicyError
@@ -31,7 +35,13 @@ def _live_manifest(**overrides):
     values = {
         "mode": RunMode.PAPER_LIVE,
         "configuration": {
-            "risk": {"leverage": 1},
+            "risk": {
+                "leverage": 1,
+                "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+                "maintenance_margin_rate": "0.005",
+                "liquidation_price_model": "not_modeled",
+                "exchange_liquidation_parity": False,
+            },
             "runtime": {
                 "proposal_ttl_seconds": "30",
                 "book_wait_timeout_seconds": "5",
@@ -94,6 +104,10 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
     policy = LivePaperPolicy.from_manifest(_live_manifest())
 
     assert policy.leverage == 1
+    assert policy.maintenance_margin_model == "fixed_fraction_of_gross_notional"
+    assert policy.maintenance_margin_rate == Decimal("0.005")
+    assert policy.liquidation_price_model == "not_modeled"
+    assert policy.exchange_liquidation_parity is False
     assert policy.proposal_ttl.total_seconds() == 30
     assert policy.book_wait_timeout.total_seconds() == 5
     assert policy.execution_latency.total_seconds() == 0.25
@@ -114,14 +128,41 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("maintenance_margin_model", "exchange_tiered"),
+        ("maintenance_margin_rate", "0.01"),
+        ("liquidation_price_model", "estimated"),
+        ("exchange_liquidation_parity", True),
+    ),
+)
+def test_live_policy_rejects_margin_model_drift(field: str, value: object) -> None:
+    manifest = _live_manifest()
+    configuration = dict(manifest.configuration)
+    risk = dict(configuration["risk"])  # type: ignore[arg-type]
+    risk[field] = value
+    configuration["risk"] = risk
+
+    with pytest.raises(RuntimePolicyError, match="margin policy"):
+        LivePaperPolicy.from_manifest(replace(manifest, configuration=configuration))
+
+
+@pytest.mark.parametrize(
     ("changes", "message"),
     (
         ({"mode": RunMode.REPLAY}, "mode=paper_live"),
-        ({"configuration": {"risk": {"leverage": 1}}}, "runtime"),
         (
             {
                 "configuration": {
-                    "risk": {"leverage": 1},
+                    "risk": {"leverage": 1, **OFFICIAL_MARGIN_POLICY},
+                }
+            },
+            "runtime",
+        ),
+        (
+            {
+                "configuration": {
+                    "risk": {"leverage": 1, **OFFICIAL_MARGIN_POLICY},
                     "runtime": {
                         "proposal_ttl_seconds": "30",
                         "book_wait_timeout_seconds": "5",
@@ -139,7 +180,7 @@ def test_live_policy_extracts_every_execution_critical_value_without_defaults() 
         (
             {
                 "configuration": {
-                    "risk": {"leverage": 2},
+                    "risk": {"leverage": 2, **OFFICIAL_MARGIN_POLICY},
                     "runtime": {
                         "proposal_ttl_seconds": "30",
                         "book_wait_timeout_seconds": "5",

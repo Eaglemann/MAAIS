@@ -320,6 +320,16 @@ async def test_daily_report_reconciles_complete_decision_lineage(
     assert len(report["reconciliation"]["report_hash"]) == 64  # type: ignore[index]
     assert report["report_schema_version"] == 2
     assert report["experiment"]["started_at"] is None  # type: ignore[index]
+    assert report["model_assumptions"] == {
+        "margin": {
+            "leverage": 1,
+            "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+            "maintenance_margin_rate": "0.005",
+            "liquidation_price_model": "not_modeled",
+            "exchange_liquidation_parity": False,
+        },
+        "limitations": ["exchange_liquidation_behavior_not_modeled"],
+    }
     assert report["operator_actions"] == {
         "events": 3,
         "requests": 1,

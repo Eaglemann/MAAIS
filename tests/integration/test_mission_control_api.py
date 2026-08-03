@@ -52,6 +52,15 @@ async def test_read_only_api_exposes_overview_feed_and_complete_decision(
     assert experiments.json()[0]["experiment"]["manifest_hash"] == manifest.manifest_hash
     assert overview.status_code == 200
     assert overview.json()["account"]["source"] == "manifest_initial_state"
+    assert overview.json()["experiment"]["model_assumptions"] == {
+        "model_status": "frozen_paper_model",
+        "leverage": 1,
+        "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+        "maintenance_margin_rate": "0.005",
+        "liquidation_price_model": "not_modeled",
+        "exchange_liquidation_parity": False,
+        "limitations": ["exchange_liquidation_behavior_not_modeled"],
+    }
     assert decisions.status_code == 200
     assert decisions.json()["items"][0]["id"] == str(bundle.cycle.id)
     assert trades.status_code == 200

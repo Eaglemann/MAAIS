@@ -22,6 +22,16 @@ class ApiHealth(ReadModel):
     checked_at: datetime
 
 
+class PaperModelAssumptions(ReadModel):
+    model_status: str
+    leverage: int | None
+    maintenance_margin_model: str | None
+    maintenance_margin_rate: Decimal | None
+    liquidation_price_model: str | None
+    exchange_liquidation_parity: bool | None
+    limitations: tuple[str, ...]
+
+
 class ExperimentIdentity(ReadModel):
     id: UUID
     name: str
@@ -40,6 +50,7 @@ class ExperimentIdentity(ReadModel):
     config_hash: str
     manifest_hash: str
     manifest_schema_version: int
+    model_assumptions: PaperModelAssumptions
 
 
 class AccountOverview(ReadModel):

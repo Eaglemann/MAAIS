@@ -21,6 +21,15 @@ There is no live-money mode. Public market-data connectors do not require API
 credentials. Authenticated exchange operations are restricted to Binance Demo
 Futures and are never used to calculate official paper P&L.
 
+### Paper-model boundary
+
+The official first paper candidate uses 1x leverage and a frozen maintenance-margin
+approximation equal to 0.5% of gross notional. It does not estimate a liquidation price
+and does not reproduce Binance maintenance-margin tiers or liquidation behavior. Mission
+Control and every immutable daily/final report display this limitation. The first week can
+test operations, decision traceability, data integrity, and the local execution/accounting
+model; it cannot establish live-exchange parity or durable profitability.
+
 ## Local setup
 
 Requirements: Python 3.12, `uv`, Docker Desktop with Compose, PostgreSQL

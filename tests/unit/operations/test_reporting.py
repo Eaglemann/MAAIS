@@ -45,6 +45,16 @@ def _report() -> dict[str, object]:
             "funding": "0",
             "maximum_drawdown": "0.003",
         },
+        "model_assumptions": {
+            "margin": {
+                "leverage": 1,
+                "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+                "maintenance_margin_rate": "0.005",
+                "liquidation_price_model": "not_modeled",
+                "exchange_liquidation_parity": False,
+            },
+            "limitations": ["exchange_liquidation_behavior_not_modeled"],
+        },
         "decisions": {
             "total": 100,
             "by_status": {"completed": 90, "quarantined": 10},
@@ -154,6 +164,9 @@ def test_daily_report_markdown_surfaces_safety_and_reconciliation() -> None:
     assert "Operator action trail" in rendered
     assert "inspect unexpected signal concentration" in rendered
     assert "paper_worker:test" in rendered
+    assert "Maintenance margin rate | 0.005" in rendered
+    assert "Liquidation price model | NOT MODELED" in rendered
+    assert "Exchange liquidation parity | NO" in rendered
 
 
 def test_report_bundle_is_immutable_and_contains_json_and_markdown(tmp_path: Path) -> None:

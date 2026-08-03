@@ -10,7 +10,11 @@ from types import MappingProxyType
 
 from maais.config.fees import BINANCE_FEE_SCHEDULE_URL
 from maais.config.modes import RunMode
-from maais.config.paper_candidate import OFFICIAL_DATA_VERSIONS, OFFICIAL_FILL_POLICY
+from maais.config.paper_candidate import (
+    OFFICIAL_DATA_VERSIONS,
+    OFFICIAL_FILL_POLICY,
+    OFFICIAL_MARGIN_POLICY,
+)
 from maais.domain.enums import PaperOrderType
 from maais.execution.paper.filters import ExchangeFilterSnapshot
 from maais.experiments.manifest import ExperimentManifest
@@ -74,6 +78,13 @@ def _integer(parent: Mapping[str, object], name: str) -> int:
     return value
 
 
+def _boolean(parent: Mapping[str, object], name: str) -> bool:
+    value = parent.get(name)
+    if not isinstance(value, bool):
+        raise RuntimePolicyError(f"{name} must be an explicit boolean")
+    return value
+
+
 def _utc_datetime(parent: Mapping[str, object], name: str) -> datetime:
     raw = _text(parent, name).replace("Z", "+00:00")
     try:
@@ -132,6 +143,10 @@ class LivePaperPolicy:
     fee_schedule_source: str
     fee_schedule_verified_at: datetime
     leverage: int
+    maintenance_margin_model: str
+    maintenance_margin_rate: Decimal
+    liquidation_price_model: str
+    exchange_liquidation_parity: bool
     history_bars: int
     benchmark_symbol: str
     benchmark_horizon_bars: int
@@ -162,6 +177,15 @@ class LivePaperPolicy:
         leverage = _integer(risk, "leverage")
         if leverage != 1:
             raise RuntimePolicyError("official paper runtime requires leverage exactly 1")
+        margin_policy = {
+            "maintenance_margin_model": _text(risk, "maintenance_margin_model"),
+            "maintenance_margin_rate": _text(risk, "maintenance_margin_rate"),
+            "liquidation_price_model": _text(risk, "liquidation_price_model"),
+            "exchange_liquidation_parity": _boolean(risk, "exchange_liquidation_parity"),
+        }
+        if margin_policy != dict(OFFICIAL_MARGIN_POLICY):
+            raise RuntimePolicyError("official margin policy differs from the frozen paper model")
+        maintenance_margin_rate = _decimal(risk, "maintenance_margin_rate")
 
         runtime = _mapping(manifest.configuration, "runtime")
         proposal_ttl_seconds = _decimal(runtime, "proposal_ttl_seconds")
@@ -291,6 +315,10 @@ class LivePaperPolicy:
             fee_schedule_source=fee_schedule_source,
             fee_schedule_verified_at=fee_schedule_verified_at,
             leverage=leverage,
+            maintenance_margin_model=str(margin_policy["maintenance_margin_model"]),
+            maintenance_margin_rate=maintenance_margin_rate,
+            liquidation_price_model=str(margin_policy["liquidation_price_model"]),
+            exchange_liquidation_parity=bool(margin_policy["exchange_liquidation_parity"]),
             history_bars=history_bars,
             benchmark_symbol=benchmark_symbol,
             benchmark_horizon_bars=benchmark_horizon_bars,

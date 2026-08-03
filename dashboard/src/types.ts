@@ -1,5 +1,15 @@
 export type JsonRecord = Record<string, unknown>;
 
+export interface PaperModelAssumptions {
+  model_status: string;
+  leverage: number | null;
+  maintenance_margin_model: string | null;
+  maintenance_margin_rate: string | null;
+  liquidation_price_model: string | null;
+  exchange_liquidation_parity: boolean | null;
+  limitations: string[];
+}
+
 export interface ExperimentIdentity {
   id: string;
   name: string;
@@ -18,6 +28,7 @@ export interface ExperimentIdentity {
   config_hash: string;
   manifest_hash: string;
   manifest_schema_version: number;
+  model_assumptions: PaperModelAssumptions;
 }
 
 export interface AccountOverview {

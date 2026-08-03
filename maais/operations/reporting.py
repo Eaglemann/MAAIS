@@ -7,6 +7,7 @@ import hashlib
 import json
 import tempfile
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -19,6 +20,7 @@ import duckdb
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from maais.config.paper_candidate import OFFICIAL_MARGIN_POLICY, OFFICIAL_MODEL_LIMITATIONS
 from maais.config.settings import get_settings
 from maais.db.models.accounts import AccountSnapshotModel, FundingEntryModel, PositionModel
 from maais.db.models.counterfactuals import CounterfactualModel
@@ -52,6 +54,22 @@ ZERO = Decimal("0")
 REPORT_SCHEMA_VERSION = 2
 _PENDING_ORDER_STATUSES = ("created", "authorized", "accepted", "partially_filled")
 _OPEN_COUNTERFACTUAL_STATUSES = ("pending", "open")
+
+
+def _report_model_assumptions(manifest: Mapping[str, object]) -> dict[str, object]:
+    configuration = manifest.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise ValueError("experiment manifest configuration must be an object")
+    risk = configuration.get("risk")
+    if not isinstance(risk, Mapping):
+        raise ValueError("experiment manifest risk policy must be an object")
+    margin = {"leverage": risk.get("leverage"), **dict(OFFICIAL_MARGIN_POLICY)}
+    if any(risk.get(name) != value for name, value in margin.items()):
+        raise ValueError("experiment manifest margin policy differs from the reporting model")
+    return {
+        "margin": margin,
+        "limitations": list(OFFICIAL_MODEL_LIMITATIONS),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -845,6 +863,7 @@ async def build_daily_report(
             "cutoff_utc": _iso(cutoff),
         },
         "account": account,
+        "model_assumptions": _report_model_assumptions(experiment.manifest_json),
         "decisions": {
             "total": len(decision_rows),
             "by_status": _counts([row.status for row in decision_rows]),
@@ -1159,6 +1178,8 @@ def _operator_action_trail(rows: object) -> str:
 def render_daily_report_markdown(report: dict[str, object]) -> str:
     experiment = cast(dict[str, object], report["experiment"])
     account = cast(dict[str, object], report["account"])
+    assumptions = cast(dict[str, object], report["model_assumptions"])
+    margin = cast(dict[str, object], assumptions["margin"])
     decisions = cast(dict[str, object], report["decisions"])
     execution = cast(dict[str, object], report["execution"])
     operations = cast(dict[str, object], report["operations"])
@@ -1189,6 +1210,19 @@ Generated: `{report["generated_at"]}`
 | Fees | {account["fees"]} |
 | Funding | {account["funding"]} |
 | Maximum drawdown | {account["maximum_drawdown"]} |
+
+## Model assumptions and limitations
+
+| Assumption | Value |
+| --- | --- |
+| Leverage | {margin["leverage"]}x |
+| Maintenance margin model | {margin["maintenance_margin_model"]} |
+| Maintenance margin rate | {margin["maintenance_margin_rate"]} |
+| Liquidation price model | {str(margin["liquidation_price_model"]).replace("_", " ").upper()} |
+| Exchange liquidation parity | {"YES" if margin["exchange_liquidation_parity"] else "NO"} |
+
+Paper results do not reproduce exchange liquidation behavior. Maintenance margin is a
+frozen paper-model assumption; no exchange liquidation price is estimated.
 
 ## Decisions
 

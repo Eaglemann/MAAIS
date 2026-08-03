@@ -101,6 +101,12 @@ Review Mission Control at least twice daily. Confirm:
 - decision counts, proposal/order/fill counts, account values, and source timestamps are plausible;
 - warm-up `insufficient_history` is distinguished from real quality failures.
 
+Keep the amber **Simulation model boundary** visible during every review. The frozen
+candidate uses 1x leverage and maintenance margin equal to 0.5% of gross notional.
+Liquidation price is not modeled and exchange liquidation parity is explicitly false.
+Treat any missing, changed, or contradictory disclosure as candidate drift and stop the
+run. This boundary is also frozen into each daily and final report.
+
 Use Mission Control's Trade Ledger for every directional proposal. It keeps official
 orders/fills, quantity, fees, modeled slippage, and research-only counterfactual outcomes
 visibly separate, and opens the exact linked decision bundle for the complete inputs,

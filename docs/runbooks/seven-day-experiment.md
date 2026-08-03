@@ -93,6 +93,12 @@ period; that partial bundle is not included in the final aggregate.
 
 The week evaluates operational correctness, data quality, decision traceability, simulated execution behavior, cost sensitivity, and whether the system generates enough directional opportunities to study. It cannot establish durable profitability or live execution performance. Warm-up and a small sample must not be interpreted as a strategy result.
 
+The week also does not validate exchange liquidation behavior. Its immutable manifest
+uses 1x leverage, a fixed maintenance-margin rate of 0.5% of gross notional, no liquidation
+price model, and no claim of exchange liquidation parity. Those assumptions must remain
+visible in Mission Control and identical across all daily and final reports. Exchange-tiered
+margin and liquidation modeling are a later research gate before any real-capital proposal.
+
 ## Exit evidence
 
 Retain the qualification bundle and every hashed check log, manifest, preflight

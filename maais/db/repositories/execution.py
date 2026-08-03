@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from maais.config.paper_candidate import OFFICIAL_MAINTENANCE_MARGIN_RATE
 from maais.db.models.accounts import (
     AccountSnapshotModel,
     ExitPlanModel,
@@ -951,7 +952,7 @@ class PaperExecutionRepository:
             "average_entry": position.average_entry,
             "mark_price": position.mark_price,
             "initial_margin": initial_margin,
-            "maintenance_margin": position.gross_notional * Decimal("0.005"),
+            "maintenance_margin": position.gross_notional * OFFICIAL_MAINTENANCE_MARGIN_RATE,
             "leverage": leverage,
             "unrealized_pnl": position.unrealized_pnl,
             "realized_pnl": position.realized_pnl,

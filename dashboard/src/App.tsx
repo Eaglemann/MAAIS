@@ -32,6 +32,7 @@ import type {
   JsonRecord,
   OperatorActionDraft,
   OperatorCommandPage,
+  PaperModelAssumptions,
   ResearchLabView,
   TradePage,
 } from "./types";
@@ -105,6 +106,40 @@ function JsonDetails({ labelText, value }: { labelText: string; value: unknown }
       <summary>{labelText}</summary>
       <pre>{JSON.stringify(value, null, 2)}</pre>
     </details>
+  );
+}
+
+export function ModelBoundary({
+  assumptions,
+}: {
+  assumptions: PaperModelAssumptions | null;
+}) {
+  const rate = Number(assumptions?.maintenance_margin_rate ?? Number.NaN);
+  const rateLabel = Number.isFinite(rate)
+    ? `${rate * 100}% of gross notional`
+    : "not disclosed";
+  const leverage = assumptions?.leverage === null || assumptions?.leverage === undefined
+    ? "unknown leverage"
+    : `${assumptions.leverage}x leverage`;
+  const parity = assumptions?.exchange_liquidation_parity === false
+    ? "no exchange liquidation parity"
+    : "exchange liquidation parity is not established";
+  const liquidation = assumptions?.liquidation_price_model === "not_modeled"
+    ? "Liquidation price is not modeled."
+    : "Liquidation model is not disclosed or supported for this experiment.";
+  return (
+    <section className="model-boundary" aria-label="Paper model limitations">
+      <div>
+        <span className="kicker">Known simulation limitation</span>
+        <h2>Simulation model boundary</h2>
+      </div>
+      <div className="model-boundary__facts">
+        <span>Maintenance margin is {rateLabel}.</span>
+        <span>{liquidation}</span>
+        <span>{leverage} · {parity}.</span>
+      </div>
+      <strong>This paper model does not reproduce exchange liquidation behavior.</strong>
+    </section>
   );
 }
 
@@ -660,6 +695,14 @@ export default function App() {
             <div><span>Last refresh</span><strong>{formatTime(lastUpdated)}</strong></div>
           </div>
         </section>
+
+        <ModelBoundary
+          assumptions={
+            overview?.experiment.model_assumptions
+            ?? activeExperiment?.experiment.model_assumptions
+            ?? null
+          }
+        />
 
         <section className="identity-strip">
           <div><span>Run</span><strong>{overview?.experiment.name ?? activeExperiment?.experiment.name ?? "Loading"}</strong></div>

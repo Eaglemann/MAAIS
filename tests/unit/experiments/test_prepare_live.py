@@ -54,6 +54,16 @@ def test_prepare_live_manifest_pins_complete_runtime_identity() -> None:
     assert policy.strategy_parameters["timeframe"] == "1m"
     assert policy.maker_fee_rate == Decimal("0.0002")
     assert policy.taker_fee_rate == Decimal("0.0005")
+    assert manifest.configuration["risk"] == {
+        "leverage": 1,
+        "maintenance_margin_model": "fixed_fraction_of_gross_notional",
+        "maintenance_margin_rate": "0.005",
+        "liquidation_price_model": "not_modeled",
+        "exchange_liquidation_parity": False,
+    }
+    assert policy.maintenance_margin_rate == Decimal("0.005")
+    assert policy.liquidation_price_model == "not_modeled"
+    assert policy.exchange_liquidation_parity is False
     assert manifest.manifest_schema_version == 2
     assert policy.fill_policy["broker"] == "local_paper"
     assert policy.fill_policy["depth_model"] == "visible_depth_walk_full_or_reject"
