@@ -16,19 +16,27 @@ from typing import cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from maais.api.queries import MissionControlQueryService
 from maais.config.modes import RunMode
 from maais.config.settings import Settings, get_settings
-from maais.db.models.decisions import DecisionCycleModel, MarketFrameModel
+from maais.db.models.decisions import (
+    AgentEvaluationModel,
+    DecisionCycleModel,
+    DecisionSummaryModel,
+    GateEvaluationModel,
+    MarketFrameModel,
+)
+from maais.db.models.experiments import AgentVersionModel
 from maais.db.models.operations import DataQualityEvaluationModel
 from maais.db.replay import verify_ledger_consistency
 from maais.domain.json import content_hash, to_json_data
 from maais.experiments.manifest import ExperimentManifest
 from maais.experiments.prepare import RepositoryIdentity, capture_repository_identity
 from maais.live import load_manifest_file
+from maais.market_data.integrity.state_machine import IntegrityCheck
 from maais.operations.database_identity import collect_configured_database_identity
 from maais.operations.final_reporting import (
     FinalReportValidationError,
@@ -60,6 +68,7 @@ SOAK_READINESS_REQUIRED_CHECKS = (
     "ledger_consistency",
     "operational_state",
     "decision_cardinality",
+    "decision_metadata_coverage",
     "required_data_quality",
     "structured_logs",
     "daily_report_reconciliation",
@@ -335,8 +344,18 @@ def evaluate_soak_readiness(
         and not isinstance(overview_total, bool)
         and overview_total == coverage["total_cycles"]
     )
+    decision_metadata = _object(run_state.get("decision_metadata"), "run state decision_metadata")
+    metadata_passed = (
+        decision_metadata.get("passed") is True
+        and decision_metadata.get("decision_cycles") == coverage["total_cycles"]
+        and decision_metadata.get("market_frames") == coverage["total_cycles"]
+        and decision_metadata.get("decision_summaries") == coverage["total_cycles"]
+        and decision_metadata.get("agent_rows") == decision_metadata.get("expected_agent_rows")
+        and decision_metadata.get("quality_rows") == decision_metadata.get("expected_quality_rows")
+        and decision_metadata.get("gate_cycles") == coverage["total_cycles"]
+    )
     logs_passed = (
-        log_audit.get("files") == 2
+        log_audit.get("files") == 4
         and isinstance(log_audit.get("lines"), int)
         and cast(int, log_audit["lines"]) > 0
         and log_audit.get("invalid_lines") == 0
@@ -433,6 +452,19 @@ def evaluate_soak_readiness(
             f"irregular={coverage['irregular_intervals']}",
         ),
         _check(
+            "decision_metadata_coverage",
+            metadata_passed,
+            f"cycles={decision_metadata.get('decision_cycles')} "
+            f"agents={decision_metadata.get('agent_rows')}/"
+            f"{decision_metadata.get('expected_agent_rows')} "
+            f"quality={decision_metadata.get('quality_rows')}/"
+            f"{decision_metadata.get('expected_quality_rows')} "
+            f"incomplete_agents={decision_metadata.get('incomplete_agent_cycles')} "
+            f"invalid_agents={decision_metadata.get('invalid_agent_rows')} "
+            f"incomplete_quality={decision_metadata.get('incomplete_quality_cycles')} "
+            f"missing_gates={decision_metadata.get('missing_gate_cycles')}",
+        ),
+        _check(
             "required_data_quality",
             unsafe_quality_admissions == 0,
             f"required failures={required_quality_failures} "
@@ -480,6 +512,7 @@ def evaluate_soak_readiness(
         "database_identity": dict(database_identity),
         "overview": dict(overview),
         "decision_coverage": coverage,
+        "decision_metadata_coverage": dict(decision_metadata),
         "required_quality_failures": required_quality_failures,
         "unsafe_quality_admissions": unsafe_quality_admissions,
         "log_audit": dict(log_audit),
@@ -798,10 +831,263 @@ def audit_structured_logs(paths: Sequence[Path]) -> dict[str, object]:
     }
 
 
+def _soak_log_paths(state_path: Path, suffix: str) -> tuple[Path, ...]:
+    log_directory = state_path.parent / "logs"
+    return (
+        log_directory / f"paper-worker-{suffix}.log",
+        log_directory / f"mission-control-{suffix}.log",
+        log_directory / f"daily-supervisor-{suffix}.log",
+        log_directory / f"sleep-inhibitor-{suffix}.log",
+    )
+
+
+async def _decision_metadata_coverage(
+    session: AsyncSession,
+    manifest: ExperimentManifest,
+) -> dict[str, object]:
+    experiment_id = manifest.experiment_id
+    expected_agent_count = len(manifest.agent_versions)
+    expected_quality_count = len(IntegrityCheck)
+
+    cycle_count, invalid_cycle_rows = (
+        await session.execute(
+            select(
+                func.count(DecisionCycleModel.id),
+                func.count(DecisionCycleModel.id).filter(
+                    or_(
+                        DecisionCycleModel.feature_snapshot_json == {},
+                        DecisionCycleModel.reason_code == "",
+                        func.length(DecisionCycleModel.content_hash) != 64,
+                    )
+                ),
+            ).where(DecisionCycleModel.experiment_id == experiment_id)
+        )
+    ).one()
+    frame_count, invalid_frame_rows = (
+        await session.execute(
+            select(
+                func.count(MarketFrameModel.id),
+                func.count(MarketFrameModel.id).filter(
+                    or_(
+                        MarketFrameModel.bar_snapshot_json == {},
+                        MarketFrameModel.orderbook_snapshot_json == {},
+                        MarketFrameModel.source_manifest_json == {},
+                        MarketFrameModel.source_sequence_json == {},
+                        MarketFrameModel.quality_results_json == {},
+                        func.length(MarketFrameModel.content_hash) != 64,
+                    )
+                ),
+            ).where(MarketFrameModel.experiment_id == experiment_id)
+        )
+    ).one()
+    summary_count, invalid_summary_rows = (
+        await session.execute(
+            select(
+                func.count(DecisionSummaryModel.decision_cycle_id),
+                func.count(DecisionSummaryModel.decision_cycle_id).filter(
+                    or_(
+                        DecisionSummaryModel.consensus_snapshot_json == {},
+                        DecisionSummaryModel.adversarial_snapshot_json == {},
+                        DecisionSummaryModel.ev_snapshot_json == {},
+                        DecisionSummaryModel.cost_snapshot_json == {},
+                    )
+                ),
+            )
+            .join(
+                DecisionCycleModel,
+                DecisionCycleModel.id == DecisionSummaryModel.decision_cycle_id,
+            )
+            .where(DecisionCycleModel.experiment_id == experiment_id)
+        )
+    ).one()
+
+    invalid_agent_metadata = or_(
+        func.cardinality(AgentEvaluationModel.reason_codes_json) == 0,
+        AgentEvaluationModel.input_snapshot_json == {},
+        AgentEvaluationModel.explanation_json == {},
+        AgentEvaluationModel.enabled != AgentVersionModel.enabled,
+    )
+    agent_groups = (
+        await session.execute(
+            select(
+                AgentEvaluationModel.decision_cycle_id,
+                func.count(AgentEvaluationModel.id),
+                func.count(func.distinct(AgentVersionModel.agent_name)),
+                func.count(AgentEvaluationModel.id).filter(invalid_agent_metadata),
+            )
+            .join(
+                DecisionCycleModel,
+                DecisionCycleModel.id == AgentEvaluationModel.decision_cycle_id,
+            )
+            .join(
+                AgentVersionModel,
+                AgentVersionModel.id == AgentEvaluationModel.agent_version_id,
+            )
+            .where(DecisionCycleModel.experiment_id == experiment_id)
+            .group_by(AgentEvaluationModel.decision_cycle_id)
+        )
+    ).all()
+    observed_agent_versions = set(
+        (
+            await session.execute(
+                select(
+                    AgentVersionModel.agent_name,
+                    AgentVersionModel.version,
+                    AgentVersionModel.maturity,
+                    AgentVersionModel.implementation_hash,
+                    AgentVersionModel.enabled,
+                    AgentEvaluationModel.weight,
+                )
+                .join(
+                    AgentEvaluationModel,
+                    AgentEvaluationModel.agent_version_id == AgentVersionModel.id,
+                )
+                .join(
+                    DecisionCycleModel,
+                    DecisionCycleModel.id == AgentEvaluationModel.decision_cycle_id,
+                )
+                .where(DecisionCycleModel.experiment_id == experiment_id)
+                .distinct()
+            )
+        ).all()
+    )
+    expected_agent_versions = {
+        (
+            entry.agent_name,
+            entry.version,
+            entry.maturity.value,
+            entry.implementation_hash,
+            entry.enabled,
+            entry.weight,
+        )
+        for entry in manifest.agent_versions
+    }
+    agent_rows = sum(int(row[1]) for row in agent_groups)
+    invalid_agent_rows = sum(int(row[3]) for row in agent_groups)
+    incomplete_agent_cycles = (
+        int(cycle_count)
+        - len(agent_groups)
+        + sum(
+            int(row[1]) != expected_agent_count
+            or int(row[2]) != expected_agent_count
+            or int(row[3]) != 0
+            for row in agent_groups
+        )
+    )
+    invalid_agent_versions = len(observed_agent_versions ^ expected_agent_versions)
+
+    quality_groups = (
+        await session.execute(
+            select(
+                DataQualityEvaluationModel.market_frame_id,
+                func.count(DataQualityEvaluationModel.id),
+                func.count(func.distinct(DataQualityEvaluationModel.check_name)),
+                func.count(DataQualityEvaluationModel.id).filter(
+                    DataQualityEvaluationModel.check_name.not_in(
+                        tuple(check.value for check in IntegrityCheck)
+                    )
+                ),
+            )
+            .join(
+                MarketFrameModel,
+                MarketFrameModel.id == DataQualityEvaluationModel.market_frame_id,
+            )
+            .where(MarketFrameModel.experiment_id == experiment_id)
+            .group_by(DataQualityEvaluationModel.market_frame_id)
+        )
+    ).all()
+    quality_rows = sum(int(row[1]) for row in quality_groups)
+    incomplete_quality_cycles = (
+        int(cycle_count)
+        - len(quality_groups)
+        + sum(
+            int(row[1]) != expected_quality_count
+            or int(row[2]) != expected_quality_count
+            or int(row[3]) != 0
+            for row in quality_groups
+        )
+    )
+
+    invalid_gate_metadata = or_(
+        GateEvaluationModel.reason_code == "",
+        GateEvaluationModel.input_json == {},
+        GateEvaluationModel.output_json == {},
+    )
+    gate_groups = (
+        await session.execute(
+            select(
+                GateEvaluationModel.decision_cycle_id,
+                func.count(GateEvaluationModel.id),
+                func.min(GateEvaluationModel.sequence),
+                func.max(GateEvaluationModel.sequence),
+                func.count(func.distinct(GateEvaluationModel.sequence)),
+                func.count(GateEvaluationModel.id).filter(invalid_gate_metadata),
+            )
+            .join(
+                DecisionCycleModel,
+                DecisionCycleModel.id == GateEvaluationModel.decision_cycle_id,
+            )
+            .where(DecisionCycleModel.experiment_id == experiment_id)
+            .group_by(GateEvaluationModel.decision_cycle_id)
+        )
+    ).all()
+    missing_gate_cycles = int(cycle_count) - len(gate_groups)
+    invalid_gate_cycles = sum(
+        int(row[2]) != 1
+        or int(row[3]) != int(row[1])
+        or int(row[4]) != int(row[1])
+        or int(row[5]) != 0
+        for row in gate_groups
+    )
+
+    result: dict[str, object] = {
+        "decision_cycles": int(cycle_count),
+        "market_frames": int(frame_count),
+        "decision_summaries": int(summary_count),
+        "agent_rows": agent_rows,
+        "expected_agent_rows": int(cycle_count) * expected_agent_count,
+        "quality_rows": quality_rows,
+        "expected_quality_rows": int(cycle_count) * expected_quality_count,
+        "gate_cycles": len(gate_groups),
+        "invalid_cycle_rows": int(invalid_cycle_rows),
+        "invalid_frame_rows": int(invalid_frame_rows),
+        "missing_summary_rows": int(cycle_count) - int(summary_count),
+        "invalid_summary_rows": int(invalid_summary_rows),
+        "incomplete_agent_cycles": incomplete_agent_cycles,
+        "invalid_agent_rows": invalid_agent_rows,
+        "invalid_agent_versions": invalid_agent_versions,
+        "incomplete_quality_cycles": incomplete_quality_cycles,
+        "missing_gate_cycles": missing_gate_cycles,
+        "invalid_gate_cycles": invalid_gate_cycles,
+    }
+    result["passed"] = bool(
+        int(cycle_count) > 0
+        and int(frame_count) == int(cycle_count)
+        and int(summary_count) == int(cycle_count)
+        and agent_rows == int(cycle_count) * expected_agent_count
+        and quality_rows == int(cycle_count) * expected_quality_count
+        and len(gate_groups) == int(cycle_count)
+        and all(value == 0 for key, value in result.items() if key.startswith("invalid_"))
+        and result["missing_summary_rows"] == 0
+        and incomplete_agent_cycles == 0
+        and incomplete_quality_cycles == 0
+        and missing_gate_cycles == 0
+    )
+    return result
+
+
 async def _database_soak_state(
     database_url: str,
-    experiment_id: UUID,
-) -> tuple[dict[str, object], dict[str, object], dict[str, tuple[datetime, ...]], int, int]:
+    manifest: ExperimentManifest,
+) -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, tuple[datetime, ...]],
+    int,
+    int,
+    dict[str, object],
+]:
+    experiment_id = manifest.experiment_id
     engine = create_async_engine(database_url, pool_pre_ping=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -853,6 +1139,7 @@ async def _database_soak_state(
                     )
                     or 0
                 )
+                decision_metadata = await _decision_metadata_coverage(session, manifest)
         decision_lists: dict[str, list[datetime]] = {}
         for symbol, cycle_at in rows:
             decision_lists.setdefault(str(symbol), []).append(cycle_at)
@@ -866,6 +1153,7 @@ async def _database_soak_state(
             {symbol: tuple(values) for symbol, values in decision_lists.items()},
             required_quality_failures,
             unsafe_quality_admissions,
+            decision_metadata,
         )
     finally:
         await engine.dispose()
@@ -900,7 +1188,7 @@ async def build_configured_soak_readiness(
     generated_at = datetime.now(UTC)
     repository, database_state, database_identity = await asyncio.gather(
         asyncio.to_thread(capture_repository_identity, repository_root),
-        _database_soak_state(settings.database_url, experiment_id),
+        _database_soak_state(settings.database_url, manifest),
         collect_configured_database_identity(),
     )
     (
@@ -909,6 +1197,7 @@ async def build_configured_soak_readiness(
         decision_times,
         required_quality_failures,
         unsafe_quality_admissions,
+        decision_metadata,
     ) = database_state
     health_state = _health_state_from_overview(overview)
     health = evaluate_experiment_health(
@@ -932,14 +1221,10 @@ async def build_configured_soak_readiness(
             "scheduler": _pid_alive(run_state.get("scheduler_pid")),
             "awake": _pid_alive(run_state.get("awake_pid")),
         },
+        "decision_metadata": decision_metadata,
     }
     suffix = str(experiment_id).split("-", 1)[0]
-    logs = audit_structured_logs(
-        (
-            state_path.parent / "logs" / f"paper-worker-{suffix}.log",
-            state_path.parent / "logs" / f"mission-control-{suffix}.log",
-        )
-    )
+    logs = audit_structured_logs(_soak_log_paths(state_path, suffix))
     started_at = _parse_utc(run_state.get("started_at"), "run state started_at")
     expected_report_date = started_at.astimezone(BERLIN).date()
     daily_entries = run_state.get("daily_reports")

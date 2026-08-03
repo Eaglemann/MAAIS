@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from maais.config.modes import RunMode
@@ -29,6 +30,7 @@ from maais.operations.reporting import build_configured_daily_report, build_dail
 from maais.operations.verification import verify_ledger_with_factory
 from tests.integration.test_decision_lineage import _prepare_bundle
 from tests.integration.test_paper_execution_repository import _record
+from tests.unit.decisions.test_bundle import _valid_bundle
 
 pytestmark = pytest.mark.integration
 
@@ -70,6 +72,65 @@ async def test_consistency_report_accepts_valid_ledger(
 
     assert report.ok
     assert not report.errors
+
+
+async def test_ledger_verification_uses_a_bounded_query_count_for_decisions(
+    uow_factory: UnitOfWork,
+    db_engine: AsyncEngine,
+) -> None:
+    manifest, template = await _prepare_bundle(uow_factory)
+    agent_version_ids = {agent.agent_name: agent.agent_version_id for agent in template.agents}
+    bundles = []
+    for index in range(5):
+        shift = timedelta(minutes=index)
+        bundle = _valid_bundle(
+            experiment_id=manifest.experiment_id,
+            strategy_version_id=template.cycle.strategy_version_id,
+            agent_version_ids=agent_version_ids,
+        )
+        bundle = replace(
+            bundle,
+            market_frame=replace(
+                bundle.market_frame,
+                bar_open_at=bundle.market_frame.bar_open_at + shift,
+                bar_close_at=bundle.market_frame.bar_close_at + shift,
+                observed_at=bundle.market_frame.observed_at + shift,
+                content_hash=f"{index + 1:064x}",
+            ),
+            cycle=replace(
+                bundle.cycle,
+                cycle_at=bundle.cycle.cycle_at + shift,
+                created_at=bundle.cycle.created_at + shift,
+                completed_at=bundle.cycle.completed_at + shift,
+            ),
+            proposal=replace(
+                bundle.proposal,
+                proposed_at=bundle.proposal.proposed_at + shift,
+                expires_at=bundle.proposal.expires_at + shift,
+            ),
+        )
+        bundle.validate()
+        bundles.append(bundle)
+    async with uow_factory.begin() as uow:
+        for bundle in bundles:
+            await uow.decisions.record_bundle(bundle)
+
+    statement_count = 0
+
+    def count_statement(*_args: object) -> None:
+        nonlocal statement_count
+        statement_count += 1
+
+    event.listen(db_engine.sync_engine, "before_cursor_execute", count_statement)
+    try:
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            report = await verify_ledger_consistency(session)
+    finally:
+        event.remove(db_engine.sync_engine, "before_cursor_execute", count_statement)
+
+    assert report.ok
+    assert statement_count <= 20
 
 
 async def test_operator_verification_returns_serializable_valid_result(

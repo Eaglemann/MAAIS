@@ -147,8 +147,11 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
         await session.scalars(select(DomainEventModel).order_by(DomainEventModel.global_position))
     ).all()
     events_by_stream: dict[UUID, list[DomainEventModel]] = {}
+    aggregate_event_counts: dict[tuple[str, UUID], int] = {}
     for event in events:
         events_by_stream.setdefault(event.stream_id, []).append(event)
+        aggregate_key = (event.aggregate_type, event.aggregate_id)
+        aggregate_event_counts[aggregate_key] = aggregate_event_counts.get(aggregate_key, 0) + 1
     for stream in streams:
         stream_events = sorted(
             events_by_stream.get(stream.id, []),
@@ -198,44 +201,46 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
                     )
                 )
 
+    agent_counts = {
+        cycle_id: int(count)
+        for cycle_id, count in (
+            await session.execute(
+                select(
+                    AgentEvaluationModel.decision_cycle_id,
+                    func.count(AgentEvaluationModel.id),
+                ).group_by(AgentEvaluationModel.decision_cycle_id)
+            )
+        ).all()
+    }
+    gate_counts = {
+        cycle_id: int(count)
+        for cycle_id, count in (
+            await session.execute(
+                select(
+                    GateEvaluationModel.decision_cycle_id,
+                    func.count(GateEvaluationModel.id),
+                ).group_by(GateEvaluationModel.decision_cycle_id)
+            )
+        ).all()
+    }
+    proposal_counts = {
+        cycle_id: int(count)
+        for cycle_id, count in (
+            await session.execute(
+                select(
+                    TradeProposalModel.decision_cycle_id,
+                    func.count(TradeProposalModel.id),
+                ).group_by(TradeProposalModel.decision_cycle_id)
+            )
+        ).all()
+    }
     cycles = (await session.scalars(select(DecisionCycleModel))).all()
     for cycle in cycles:
-        agent_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(AgentEvaluationModel)
-                .where(AgentEvaluationModel.decision_cycle_id == cycle.id)
-            )
-            or 0
-        )
-        gate_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(GateEvaluationModel)
-                .where(GateEvaluationModel.decision_cycle_id == cycle.id)
-            )
-            or 0
-        )
-        proposal_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(TradeProposalModel)
-                .where(TradeProposalModel.decision_cycle_id == cycle.id)
-            )
-            or 0
-        )
+        agent_count = agent_counts.get(cycle.id, 0)
+        gate_count = gate_counts.get(cycle.id, 0)
+        proposal_count = proposal_counts.get(cycle.id, 0)
         expected_event_count = 1 + agent_count + gate_count + proposal_count
-        actual_event_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(DomainEventModel)
-                .where(
-                    DomainEventModel.aggregate_type == "decision_cycle",
-                    DomainEventModel.aggregate_id == cycle.id,
-                )
-            )
-            or 0
-        )
+        actual_event_count = aggregate_event_counts.get(("decision_cycle", cycle.id), 0)
         if agent_count != 8 or actual_event_count != expected_event_count:
             stream = next(
                 (
@@ -305,17 +310,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
             )
             or 0
         )
-        domain_event_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(DomainEventModel)
-                .where(
-                    DomainEventModel.aggregate_type == "paper_order",
-                    DomainEventModel.aggregate_id == order.id,
-                )
-            )
-            or 0
-        )
+        domain_event_count = aggregate_event_counts.get(("paper_order", order.id), 0)
         filled_quantity = await session.scalar(
             select(func.coalesce(func.sum(FillModel.quantity), 0)).where(
                 FillModel.order_intent_id == order.id
@@ -416,17 +411,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
 
     counterfactuals = (await session.scalars(select(CounterfactualModel))).all()
     for counterfactual in counterfactuals:
-        event_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(DomainEventModel)
-                .where(
-                    DomainEventModel.aggregate_type == "counterfactual",
-                    DomainEventModel.aggregate_id == counterfactual.id,
-                )
-            )
-            or 0
-        )
+        event_count = aggregate_event_counts.get(("counterfactual", counterfactual.id), 0)
         hash_matches = content_hash(counterfactual.state_json) == counterfactual.content_hash
         if event_count != counterfactual.version or not hash_matches:
             stream = next(
@@ -459,17 +444,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
     )
     for aggregate_type, rows in versioned_operational_rows:
         for row in rows:
-            event_count = int(
-                await session.scalar(
-                    select(func.count())
-                    .select_from(DomainEventModel)
-                    .where(
-                        DomainEventModel.aggregate_type == aggregate_type,
-                        DomainEventModel.aggregate_id == row.id,
-                    )
-                )
-                or 0
-            )
+            event_count = aggregate_event_counts.get((aggregate_type, row.id), 0)
             hash_matches = content_hash(row.state_json) == row.content_hash
             if event_count != row.version or not hash_matches:
                 stream = next(
@@ -490,17 +465,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
 
     checkpoints = (await session.scalars(select(WorkerCheckpointModel))).all()
     for checkpoint in checkpoints:
-        event_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(DomainEventModel)
-                .where(
-                    DomainEventModel.aggregate_type == "worker_checkpoint",
-                    DomainEventModel.aggregate_id == checkpoint.experiment_id,
-                )
-            )
-            or 0
-        )
+        event_count = aggregate_event_counts.get(("worker_checkpoint", checkpoint.experiment_id), 0)
         hash_matches = content_hash(checkpoint.state_json) == checkpoint.content_hash
         if event_count != checkpoint.version or not hash_matches:
             stream = next(
@@ -547,17 +512,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
             )
     for frame_id, rows in quality_by_frame.items():
         names = {row.check_name for row in rows}
-        event_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(DomainEventModel)
-                .where(
-                    DomainEventModel.aggregate_type == "market_quality",
-                    DomainEventModel.aggregate_id == frame_id,
-                )
-            )
-            or 0
-        )
+        event_count = aggregate_event_counts.get(("market_quality", frame_id), 0)
         if len(names) != len(rows) or event_count != 1:
             stream = next(
                 (
@@ -597,17 +552,7 @@ async def verify_ledger_consistency(session: AsyncSession) -> LedgerConsistencyR
                 "result": command.result_json,
             }
         )
-        event_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(DomainEventModel)
-                .where(
-                    DomainEventModel.aggregate_type == "operator_command",
-                    DomainEventModel.aggregate_id == command.id,
-                )
-            )
-            or 0
-        )
+        event_count = aggregate_event_counts.get(("operator_command", command.id), 0)
         if expected_hash != command.content_hash or event_count != command.version:
             stream = next(
                 (

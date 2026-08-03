@@ -45,6 +45,7 @@ def _inputs() -> dict[str, object]:
         for cycle_at in values
         if cycle_at.astimezone(ZoneInfo("Europe/Berlin")).date().isoformat() == "2026-08-02"
     )
+    decision_cycles = len(manifest.symbols) * 1440
     return {
         "manifest": manifest,
         "repository": repository,
@@ -60,6 +61,27 @@ def _inputs() -> dict[str, object]:
                 "dashboard": True,
                 "scheduler": True,
                 "awake": True,
+            },
+            "decision_metadata": {
+                "passed": True,
+                "decision_cycles": decision_cycles,
+                "market_frames": decision_cycles,
+                "decision_summaries": decision_cycles,
+                "agent_rows": decision_cycles * 8,
+                "expected_agent_rows": decision_cycles * 8,
+                "quality_rows": decision_cycles * 18,
+                "expected_quality_rows": decision_cycles * 18,
+                "gate_cycles": decision_cycles,
+                "invalid_cycle_rows": 0,
+                "invalid_frame_rows": 0,
+                "missing_summary_rows": 0,
+                "invalid_summary_rows": 0,
+                "incomplete_agent_cycles": 0,
+                "invalid_agent_rows": 0,
+                "invalid_agent_versions": 0,
+                "incomplete_quality_cycles": 0,
+                "missing_gate_cycles": 0,
+                "invalid_gate_cycles": 0,
             },
         },
         "preflight": {
@@ -79,7 +101,7 @@ def _inputs() -> dict[str, object]:
                 "manifest_hash": manifest.manifest_hash,
             },
             "runtime": {"kill_switch_active": False},
-            "decisions": {"total": len(manifest.symbols) * 1440},
+            "decisions": {"total": decision_cycles},
             "operations": {"open_incidents": 0, "review_incidents": 0},
             "freshness": {"halted_cursors": 0, "active_recoveries": 0},
         },
@@ -95,7 +117,7 @@ def _inputs() -> dict[str, object]:
         "required_quality_failures": 0,
         "unsafe_quality_admissions": 0,
         "log_audit": {
-            "files": 2,
+            "files": 4,
             "lines": 1000,
             "invalid_lines": 0,
             "error_lines": 0,
@@ -291,6 +313,28 @@ def test_soak_readiness_explains_every_material_failure() -> None:
         "required_data_quality",
         "structured_logs",
     }.issubset(failed)
+
+
+def test_soak_readiness_rejects_incomplete_decision_rationale_metadata() -> None:
+    inputs = _inputs()
+    run_state = inputs["run_state"]
+    assert isinstance(run_state, dict)
+    metadata = run_state["decision_metadata"]
+    assert isinstance(metadata, dict)
+    run_state["decision_metadata"] = {
+        **metadata,
+        "passed": False,
+        "incomplete_agent_cycles": 1,
+        "invalid_agent_rows": 8,
+    }
+
+    report = evaluate_soak_readiness(**inputs)  # type: ignore[arg-type]
+    checks = {check["name"]: check for check in report["checks"]}  # type: ignore[union-attr]
+
+    assert "decision_metadata_coverage" in checks
+    assert checks["decision_metadata_coverage"]["passed"] is False
+    assert report["passed"] is False
+    assert report["decision_metadata_coverage"] == run_state["decision_metadata"]
 
 
 def test_soak_readiness_bundle_is_immutable_and_hash_manifested(tmp_path: Path) -> None:
@@ -509,3 +553,15 @@ def test_log_audit_summarizes_structured_transport_recovery_evidence(tmp_path: P
         }
     ]
     assert audit["warnings_truncated"] == 0
+
+
+def test_soak_log_paths_cover_every_supervised_service(tmp_path: Path) -> None:
+    log_paths = getattr(soak_readiness_module, "_soak_log_paths", None)
+
+    assert log_paths is not None
+    assert log_paths(tmp_path / "current.json", "cc18fa3f") == (
+        tmp_path / "logs" / "paper-worker-cc18fa3f.log",
+        tmp_path / "logs" / "mission-control-cc18fa3f.log",
+        tmp_path / "logs" / "daily-supervisor-cc18fa3f.log",
+        tmp_path / "logs" / "sleep-inhibitor-cc18fa3f.log",
+    )

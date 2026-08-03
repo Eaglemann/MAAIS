@@ -96,6 +96,7 @@ def _soak_readiness(
                 "ledger_consistency",
                 "operational_state",
                 "decision_cardinality",
+                "decision_metadata_coverage",
                 "required_data_quality",
                 "structured_logs",
                 "daily_report_reconciliation",

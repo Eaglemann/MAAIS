@@ -20,7 +20,7 @@ purpose-bound disposable candidate and must produce a passing exact-commit
 bundle before `scripts/start-paper-soak.sh` can begin the clean soak. The soak
 readiness verdict independently re-verifies that bundle.
 
-After at least 24 uninterrupted hours, while all three supervised processes are still
+After at least 24 uninterrupted hours, while all four supervised processes are still
 running, freeze the soak decision:
 
 ```bash
@@ -33,9 +33,11 @@ uv run maais soak-verdict \
 
 The command exits nonzero unless the candidate identity and preflight match, the full
 duration elapsed, every symbol has contiguous one-minute decision cardinality, runtime and
-ledger health pass, every required data-quality failure was quarantined rather than
-admitted, no process restarted, and the worker/dashboard logs contain only structured JSON
-with no error-level event. Its JSON,
+ledger health pass, every decision has its market frame, summary, all eight configured
+agent rows with nonempty input/reason/explanation metadata, all 18 quality evaluations, and
+contiguous gate sequence, every required data-quality failure was quarantined rather than
+admitted, no process restarted, and the worker, dashboard, daily-close supervisor, and
+sleep-inhibitor logs contain only structured JSON with no error-level event. Its JSON,
 Markdown, and SHA-256 manifest form the readiness verdict; a failed bundle is evidence to
 investigate, never permission to begin the week.
 

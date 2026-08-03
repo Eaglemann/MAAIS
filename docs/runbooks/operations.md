@@ -36,7 +36,9 @@ MAAIS_DOCKER_CONTEXT=desktop-linux scripts/start-paper-soak.sh \
 
 The run state is explicitly marked `soak`. The final soak verdict re-hashes the
 process-drill bundle and rejects a missing, failed, tampered, or different-commit
-bundle. Do not use `start-paper-week.sh` for this gate.
+bundle. It also machine-checks complete rationale and lineage inputs for every
+decision and audits the logs from all four supervised services. Do not use
+`start-paper-week.sh` for this gate.
 
 ### Seven-day experiment
 
