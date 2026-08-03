@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
@@ -42,7 +43,7 @@ from maais.monitoring.admission import (
 from maais.orchestration.commands import EntryDecisionContext, OrchestrationCommand
 from maais.orchestration.results import OrchestrationDisposition
 from maais.orchestration.service import OfficialOrchestrationService
-from maais.risk.official import DrawdownSnapshot
+from maais.risk.official import DrawdownSnapshot, RiskCheck
 from tests.unit.experiments.test_manifest import _manifest
 from tests.unit.market_data.test_integrity_state_machine import _context, _frame
 
@@ -411,6 +412,70 @@ async def test_fully_admitted_direction_executes_and_records_sensitivities() -> 
         outcome.capability.claims.gate_chain_hash
         == outcome.bundle.proposal.entry_policy["gate_chain_hash"]
     )
+
+
+async def test_actual_agents_execute_a_small_atr_signal_with_fee_safe_capped_sizing() -> None:
+    features = replace(
+        _features(),
+        regime=Regime.TRENDING,
+        zscore=2.0,
+        zscore_mean=100.0,
+        zscore_std=1.0,
+        ema_fast=102.0,
+        ema_slow=100.0,
+        ema_signal=2.0,
+        roc_short=0.05,
+        roc_long=0.1,
+        atr=0.1,
+        rolling_std=0.003,
+        bid_ask_spread=0.0001,
+        book_imbalance=0.9,
+        funding_rate=-0.001,
+        annualized_funding=-1.095,
+        funding_bias="short_heavy",
+    )
+    command = _command(admitted=True, entry_context=_entry_context())
+    signing_key = b"actual agent capped-sizing test key"
+    authorizer = ExecutionAuthorizer(signing_key)
+    broker = PaperBroker(
+        clock=DeterministicClock(lambda: command.completed_at),
+        authorizer=authorizer,
+        market_fills=MarketFillEngine(timedelta(seconds=1)),
+    )
+    service = OfficialOrchestrationService(
+        _FeatureComputer(features),
+        authorizer=authorizer,
+        paper_broker=broker,
+    )
+
+    outcome = await service.process(command)
+
+    assert outcome.disposition is OrchestrationDisposition.EXECUTED
+    assert outcome.bundle.cycle.direction is Direction.LONG
+    assert outcome.bundle.proposal is not None
+    assert outcome.bundle.proposal.status is ProposalStatus.APPROVED
+    risk_input = outcome.bundle.proposal.sizing_snapshot["risk_input"]
+    risk_gates = outcome.bundle.proposal.sizing_snapshot["risk_gates"]
+    assert isinstance(risk_input, Mapping)
+    assert isinstance(risk_gates, tuple)
+    risk_request = risk_input["request"]
+    assert isinstance(risk_request, Mapping)
+    assert risk_request["entry_fee_fraction"] == "0.0005"
+    trade_risk_gate = next(
+        gate for gate in risk_gates if gate["check"] == RiskCheck.TRADE_RISK_AT_STOP
+    )
+    assert "margin_and_entry_fee" in trade_risk_gate["details"]["limiting_constraints"]
+    margin_gate = next(gate for gate in risk_gates if gate["check"] == RiskCheck.MARGIN)
+    assert margin_gate["reason_code"] == "margin_and_entry_fee_within_limit"
+    assert Decimal(margin_gate["details"]["entry_fee"]) > 0
+    assert Decimal(margin_gate["details"]["total_required_capital"]) <= Decimal(
+        margin_gate["details"]["limit"]
+    )
+    assert all(gate.passed for gate in outcome.bundle.gates)
+    assert outcome.execution is not None
+    assert len(outcome.execution.fills) == 1
+    assert outcome.execution.account is not None
+    assert outcome.execution.account.reconcile().ok
 
 
 async def test_approved_but_unfillable_entry_becomes_operator_review_halt() -> None:

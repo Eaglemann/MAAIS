@@ -163,6 +163,7 @@ class OfficialRiskRequest:
     p_win: Decimal
     expected_gain_fraction: Decimal
     expected_loss_fraction: Decimal
+    entry_fee_fraction: Decimal
     leverage: int
     drawdown: DrawdownSnapshot
     open_positions: tuple[OpenRiskPosition, ...]
@@ -186,6 +187,12 @@ class OfficialRiskRequest:
                 raise ValueError(f"{name} must be a positive finite Decimal")
         if not self.p_win.is_finite() or self.p_win < 0 or self.p_win > 1:
             raise ValueError("p_win must be a finite Decimal in [0, 1]")
+        if (
+            not self.entry_fee_fraction.is_finite()
+            or self.entry_fee_fraction < 0
+            or self.entry_fee_fraction > Decimal("0.01")
+        ):
+            raise ValueError("entry_fee_fraction must be a finite Decimal in [0, 0.01]")
         if self.leverage <= 0:
             raise ValueError("leverage must be positive")
         if self.evaluated_at.tzinfo is None or self.evaluated_at.utcoffset() != timedelta(0):
@@ -406,27 +413,54 @@ class OfficialRiskEngine:
 
         risk_fraction = min(half_kelly, self._policy.maximum_trade_loss_fraction)
         risk_budget = request.capital * risk_fraction * drawdown_multiplier * correlation_multiplier
-        quantity = risk_budget / stop_distance
+        existing_loss = sum(
+            (item.loss_at_stop for item in request.open_positions), start=Decimal("0")
+        )
+        loss_limit = request.capital * self._policy.maximum_portfolio_loss_fraction
+        remaining_loss_capacity = max(loss_limit - existing_loss, Decimal("0"))
+        existing_notional = sum(
+            (item.notional for item in request.open_positions), start=Decimal("0")
+        )
+        notional_limit = request.capital * self._policy.maximum_gross_notional_fraction
+        remaining_notional_capacity = max(notional_limit - existing_notional, Decimal("0"))
+        existing_margin = sum((item.margin for item in request.open_positions), start=Decimal("0"))
+        margin_limit = request.capital * self._policy.maximum_margin_fraction
+        remaining_margin_capacity = max(margin_limit - existing_margin, Decimal("0"))
+        margin_cost_per_quantity = request.executable_price * (
+            Decimal("1") / Decimal(request.leverage) + request.entry_fee_fraction
+        )
+        quantity_caps = {
+            "trade_loss": risk_budget / stop_distance,
+            "portfolio_loss": remaining_loss_capacity / stop_distance,
+            "gross_notional": remaining_notional_capacity / request.executable_price,
+            "margin_and_entry_fee": remaining_margin_capacity / margin_cost_per_quantity,
+        }
+        quantity = min(quantity_caps.values())
+        limiting_constraints = sorted(
+            name for name, capacity in quantity_caps.items() if capacity == quantity
+        )
         notional = quantity * request.executable_price
         risk_at_stop = quantity * stop_distance
         margin = notional / Decimal(request.leverage)
         gates.append(
             _gate(
                 RiskCheck.TRADE_RISK_AT_STOP,
-                QualityStatus.PASSED,
-                "trade_risk_sized_from_stop",
+                (
+                    QualityStatus.PASSED
+                    if quantity > 0 and risk_at_stop <= risk_budget
+                    else QualityStatus.FAILED
+                ),
+                "trade_risk_sized_within_all_caps" if quantity > 0 else "no_risk_capacity",
                 risk_fraction=risk_fraction,
                 risk_budget=risk_budget,
                 quantity=quantity,
                 risk_at_stop=risk_at_stop,
+                quantity_caps=quantity_caps,
+                limiting_constraints=limiting_constraints,
             )
         )
 
-        existing_loss = sum(
-            (item.loss_at_stop for item in request.open_positions), start=Decimal("0")
-        )
         total_loss = existing_loss + risk_at_stop
-        loss_limit = request.capital * self._policy.maximum_portfolio_loss_fraction
         gates.append(
             _gate(
                 RiskCheck.PORTFOLIO_LOSS_AT_STOP,
@@ -441,11 +475,7 @@ class OfficialRiskEngine:
             )
         )
 
-        existing_notional = sum(
-            (item.notional for item in request.open_positions), start=Decimal("0")
-        )
         total_notional = existing_notional + notional
-        notional_limit = request.capital * self._policy.maximum_gross_notional_fraction
         gates.append(
             _gate(
                 RiskCheck.GROSS_NOTIONAL,
@@ -460,17 +490,28 @@ class OfficialRiskEngine:
             )
         )
 
-        existing_margin = sum((item.margin for item in request.open_positions), start=Decimal("0"))
+        entry_fee = notional * request.entry_fee_fraction
         total_margin = existing_margin + margin
-        margin_limit = request.capital * self._policy.maximum_margin_fraction
+        total_required_capital = total_margin + entry_fee
         gates.append(
             _gate(
                 RiskCheck.MARGIN,
-                QualityStatus.PASSED if total_margin <= margin_limit else QualityStatus.FAILED,
-                "margin_within_limit" if total_margin <= margin_limit else "margin_exceeded",
+                (
+                    QualityStatus.PASSED
+                    if total_required_capital <= margin_limit
+                    else QualityStatus.FAILED
+                ),
+                (
+                    "margin_and_entry_fee_within_limit"
+                    if total_required_capital <= margin_limit
+                    else "margin_and_entry_fee_exceeded"
+                ),
                 existing_margin=existing_margin,
                 proposed_margin=margin,
+                entry_fee_fraction=request.entry_fee_fraction,
+                entry_fee=entry_fee,
                 total_margin=total_margin,
+                total_required_capital=total_required_capital,
                 limit=margin_limit,
             )
         )
@@ -649,6 +690,7 @@ class OfficialRiskEngine:
                     "p_win": request.p_win,
                     "expected_gain_fraction": request.expected_gain_fraction,
                     "expected_loss_fraction": request.expected_loss_fraction,
+                    "entry_fee_fraction": request.entry_fee_fraction,
                     "leverage": request.leverage,
                     "drawdown": request.drawdown.to_dict(),
                     "open_positions": [

@@ -28,6 +28,7 @@ def _request(**changes) -> OfficialRiskRequest:
         "p_win": Decimal("0.60"),
         "expected_gain_fraction": Decimal("0.02"),
         "expected_loss_fraction": Decimal("0.01"),
+        "entry_fee_fraction": Decimal("0"),
         "leverage": 1,
         "drawdown": DrawdownSnapshot(Decimal("10000"), Decimal("10000")),
         "open_positions": (),
@@ -52,6 +53,23 @@ def test_sizes_from_executable_price_and_actual_stop_distance() -> None:
     assert decision.margin == Decimal("10000.0")
     assert {gate.check for gate in decision.gates} == set(RiskCheck)
     assert all(gate.status is QualityStatus.PASSED for gate in decision.gates)
+
+
+def test_small_stop_is_capped_by_available_notional_instead_of_rejected() -> None:
+    decision = OfficialRiskEngine(OfficialRiskPolicy.conservative()).evaluate(
+        _request(
+            executable_price=Decimal("100"),
+            stop_price=Decimal("99.9"),
+        )
+    )
+
+    assert decision.approved
+    assert decision.quantity == Decimal("100")
+    assert decision.notional == Decimal("10000")
+    assert decision.risk_at_stop == Decimal("10.0")
+    assert decision.margin == Decimal("10000")
+    assert _gate(decision, RiskCheck.GROSS_NOTIONAL).status is QualityStatus.PASSED
+    assert _gate(decision, RiskCheck.MARGIN).status is QualityStatus.PASSED
 
 
 def test_nonpositive_kelly_rejects_before_any_quantity_calculation() -> None:
@@ -102,7 +120,7 @@ def test_multi_symbol_exposure_requires_sixty_aligned_returns() -> None:
     assert _gate(admitted, RiskCheck.CORRELATION).status is QualityStatus.PASSED
 
 
-def test_portfolio_loss_at_stop_is_independent_from_gross_and_margin_caps() -> None:
+def test_portfolio_loss_capacity_caps_quantity_independently_from_other_limits() -> None:
     position = OpenRiskPosition(
         symbol="ETHUSDT",
         notional=Decimal("1000"),
@@ -118,8 +136,34 @@ def test_portfolio_loss_at_stop_is_independent_from_gross_and_margin_caps() -> N
         )
     )
 
-    assert not decision.approved
-    assert _gate(decision, RiskCheck.PORTFOLIO_LOSS_AT_STOP).status is QualityStatus.FAILED
+    assert decision.approved
+    assert decision.quantity == Decimal("0.08")
+    assert decision.risk_at_stop == Decimal("100.00")
+    assert _gate(decision, RiskCheck.PORTFOLIO_LOSS_AT_STOP).status is QualityStatus.PASSED
+    assert _gate(decision, RiskCheck.GROSS_NOTIONAL).status is QualityStatus.PASSED
+    assert _gate(decision, RiskCheck.MARGIN).status is QualityStatus.PASSED
+
+
+def test_existing_notional_and_margin_capacity_cap_a_new_position() -> None:
+    position = OpenRiskPosition(
+        symbol="ETHUSDT",
+        notional=Decimal("9500"),
+        loss_at_stop=Decimal("10"),
+        margin=Decimal("9500"),
+    )
+    correlation = CorrelationObservation("ETHUSDT", 60, Decimal("0.1"))
+
+    decision = OfficialRiskEngine(OfficialRiskPolicy.conservative()).evaluate(
+        _request(
+            open_positions=(position,),
+            correlations=(correlation,),
+        )
+    )
+
+    assert decision.approved
+    assert decision.quantity == Decimal("0.01")
+    assert decision.notional == Decimal("500.00")
+    assert decision.margin == Decimal("500.00")
     assert _gate(decision, RiskCheck.GROSS_NOTIONAL).status is QualityStatus.PASSED
     assert _gate(decision, RiskCheck.MARGIN).status is QualityStatus.PASSED
 

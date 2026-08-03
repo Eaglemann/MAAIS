@@ -666,6 +666,7 @@ class OfficialOrchestrationService:
                 p_win=analysis.consensus_probability,
                 expected_gain_fraction=analysis.expected_gain,
                 expected_loss_fraction=analysis.expected_loss,
+                entry_fee_fraction=context.taker_fee_rate,
                 leverage=context.account.leverage,
                 drawdown=context.drawdown,
                 open_positions=context.open_positions,
