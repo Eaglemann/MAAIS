@@ -92,10 +92,17 @@ class HealthAwareDispatchEngine:
         return self._engine.cursors
 
     async def process(self, event: ObservedMarketEvent) -> DispatchResult:
-        if event.kind is MarketEventKind.CLOSED_BAR:
+        if event.kind is not MarketEventKind.CLOSED_BAR:
+            return await self._engine.process(event)
+        for component in self._mandatory_components:
+            self._health.heartbeat(component, event.observed_at)
+        try:
+            return await self._engine.process(event)
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
             for component in self._mandatory_components:
-                self._health.heartbeat(component, event.observed_at)
-        return await self._engine.process(event)
+                self._health.failure(component, detail, event.observed_at)
+            raise
 
 
 @dataclass(frozen=True, slots=True)
