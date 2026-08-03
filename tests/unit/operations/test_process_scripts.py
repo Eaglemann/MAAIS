@@ -133,6 +133,26 @@ paper_wait_for_start_window 5
     assert "aligning paper activation to a safe minute boundary" in result.stderr
 
 
+def test_fault_window_waits_until_after_the_close_cycle_and_before_next_close() -> None:
+    result = _run_bash(
+        """
+for second in 00 09 10 15 16 59; do
+  printf '%s=%s\n' "$second" "$(paper_minute_window_wait_seconds "$second" 10 15)"
+done
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "00=10",
+        "09=1",
+        "10=0",
+        "15=0",
+        "16=54",
+        "59=11",
+    ]
+
+
 def test_seven_day_start_waits_for_the_next_berlin_midnight() -> None:
     result = _run_bash(
         """

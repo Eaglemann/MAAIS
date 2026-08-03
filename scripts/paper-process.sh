@@ -291,17 +291,51 @@ paper_start_wait_seconds() {
   printf '%s\n' "$((60 - current_value))"
 }
 
+paper_minute_window_wait_seconds() {
+  local current_second="$1"
+  local minimum_second="$2"
+  local maximum_second="$3"
+  local current_value
+  local minimum_value
+  local maximum_value
+
+  if [[ ! "${current_second}" =~ ^[0-5][0-9]$ \
+    || ! "${minimum_second}" =~ ^([0-9]|[1-5][0-9])$ \
+    || ! "${maximum_second}" =~ ^([0-9]|[1-5][0-9])$ ]]; then
+    echo "paper minute window requires second 00-59 and bounds 0-59" >&2
+    return 64
+  fi
+  current_value=$((10#${current_second}))
+  minimum_value=$((10#${minimum_second}))
+  maximum_value=$((10#${maximum_second}))
+  if ((minimum_value > maximum_value)); then
+    echo "paper minute window minimum cannot exceed maximum" >&2
+    return 64
+  fi
+  if ((current_value < minimum_value)); then
+    printf '%s\n' "$((minimum_value - current_value))"
+    return 0
+  fi
+  if ((current_value <= maximum_value)); then
+    printf '0\n'
+    return 0
+  fi
+  printf '%s\n' "$((60 - current_value + minimum_value))"
+}
+
 paper_wait_for_minute_window() {
-  local maximum_start_second="$1"
+  local minimum_second="$1"
+  local maximum_second="$2"
   local current_second
   local wait_seconds
 
   current_second="$(date -u +%S)" || return 1
   wait_seconds="$(
-    paper_start_wait_seconds "${current_second}" "${maximum_start_second}"
+    paper_minute_window_wait_seconds \
+      "${current_second}" "${minimum_second}" "${maximum_second}"
   )" || return 1
   if ((wait_seconds > 0)); then
-    echo "aligning recovery drill fault to a safe minute boundary: wait=${wait_seconds}s" >&2
+    echo "aligning recovery drill fault to the post-close window: wait=${wait_seconds}s" >&2
     sleep "${wait_seconds}"
   fi
 }

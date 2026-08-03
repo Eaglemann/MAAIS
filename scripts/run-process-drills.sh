@@ -52,11 +52,22 @@ capture_snapshot() {
 }
 
 wait_for_post_recovery_cycle() {
-  baseline="$1"
-  recovery="$2"
+  local recovery="$1"
+  local port
+  local experiment_id
+  local baseline_decisions
+  local expected_symbols
+  local minimum_decisions
+  local recovered_at
+  local overview
+  local current_decisions
+  local stable_decisions=""
+  local stable_observations=0
+  local post_recovery_clean
+
   port="$(jq -er '.mission_control_port' "${state_path}")"
   experiment_id="$(jq -er '.experiment_id' "${state_path}")"
-  baseline_decisions="$(jq -er '.overview.decisions.total' "${baseline}")"
+  baseline_decisions="$(jq -er '.before.overview.decisions.total' "${recovery}")"
   expected_symbols="$(jq -er '.symbols | length' "${manifest_path}")"
   minimum_decisions="$((baseline_decisions + expected_symbols))"
   recovered_at="$(jq -er '.recovered_at' "${recovery}")"
@@ -68,13 +79,25 @@ wait_for_post_recovery_cycle() {
     if [[ -n "${overview}" ]] && jq -e \
       --argjson minimum_decisions "${minimum_decisions}" \
       --arg recovered_at "${recovered_at}" \
-      '.decisions.total >= $minimum_decisions and (.freshness.latest_cursor_update_at // "") > $recovered_at' \
+      '.decisions.total >= $minimum_decisions and (.freshness.latest_cursor_update_at // "") > $recovered_at and .freshness.active_recoveries == 0' \
       >/dev/null <<<"${overview}"; then
-      post_recovery_clean="$(jq -r \
-        '.operations.open_incidents == 0 and .operations.review_incidents == 0' \
-        <<<"${overview}")"
-      echo "post-recovery cycle observed: decisions=${minimum_decisions} clean=${post_recovery_clean}" >&2
-      return 0
+      current_decisions="$(jq -er '.decisions.total' <<<"${overview}")"
+      if [[ "${current_decisions}" == "${stable_decisions}" ]]; then
+        stable_observations="$((stable_observations + 1))"
+      else
+        stable_decisions="${current_decisions}"
+        stable_observations=1
+      fi
+      if ((stable_observations >= 3)); then
+        post_recovery_clean="$(jq -r \
+          '.operations.open_incidents == 0 and .operations.review_incidents == 0' \
+          <<<"${overview}")"
+        echo "post-recovery cycle observed: decisions=${current_decisions} clean=${post_recovery_clean}" >&2
+        return 0
+      fi
+    else
+      stable_decisions=""
+      stable_observations=0
     fi
     sleep 1
   done
@@ -117,7 +140,7 @@ cp "${dashboard_recovery_source}" "${work_directory}/dashboard-recovery.json"
 capture_snapshot "${work_directory}/dashboard-after.json"
 
 capture_snapshot "${work_directory}/worker-baseline.json"
-paper_wait_for_minute_window 5
+paper_wait_for_minute_window 10 15
 worker_pid="$(jq -er '.worker_pid' "${state_path}")"
 kill -KILL "${worker_pid}"
 for _attempt in $(seq 1 30); do
@@ -132,9 +155,7 @@ fi
   > "${work_directory}/worker-recovery.log"
 worker_recovery_source="$(jq -er '.last_recovery_evidence' "${state_path}")"
 cp "${worker_recovery_source}" "${work_directory}/worker-recovery.json"
-wait_for_post_recovery_cycle \
-  "${work_directory}/worker-baseline.json" \
-  "${work_directory}/worker-recovery.json"
+wait_for_post_recovery_cycle "${work_directory}/worker-recovery.json"
 capture_snapshot "${work_directory}/worker-after.json"
 
 (cd "${repository_root}" && uv run maais process-drill-verdict \

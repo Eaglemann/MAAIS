@@ -38,8 +38,9 @@ def test_disposable_process_drill_is_purpose_bound_and_freezes_recovery_evidence
     assert 'kill -KILL "${worker_pid}"' in drill_run
     assert 'recover-paper-week.sh" dashboard' in drill_run
     assert 'recover-paper-week.sh" worker' in drill_run
-    assert "paper_wait_for_minute_window 5" in drill_run
+    assert "paper_wait_for_minute_window 10 15" in drill_run
     assert "wait_for_post_recovery_cycle" in drill_run
+    assert ".freshness.active_recoveries == 0" in drill_run
     assert ".operations.open_incidents == 0" in drill_run
     assert ".operations.review_incidents == 0" in drill_run
     assert "process-drill-verdict" in drill_run

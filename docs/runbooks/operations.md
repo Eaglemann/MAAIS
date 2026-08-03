@@ -18,10 +18,12 @@ The runner starts a purpose-bound disposable candidate, captures authoritative
 baselines, sends `SIGKILL` only to the PIDs recorded for Mission Control and the
 worker, uses the audited recovery path, and proves worker independence,
 checkpoint progress, PID replacement, higher worker lease epoch, non-regressing
-projections, and passing ledgers. The worker fault is aligned to a safe minute
-boundary, and the runner waits for a complete post-recovery symbol cycle. The
-verdict rejects any open or operator-review incident after either recovery. It
-freezes every raw JSON record and report in a SHA-256 bundle under
+projections, and passing ledgers. The worker fault is injected during seconds
+`10` through `15`, after the prior close cycle and early enough for lease
+takeover before the next close. The runner waits until post-recovery decisions
+are stable and no gap recovery remains active. The verdict rejects any open or
+operator-review incident after either recovery. It freezes every raw JSON record
+and report in a SHA-256 bundle under
 `artifacts/process-drills/`, then stops the disposable run. A failure is evidence
 to investigate and cannot be used by the soak.
 

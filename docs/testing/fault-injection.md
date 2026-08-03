@@ -43,9 +43,10 @@ exact recorded dashboard and worker PIDs, retains authoritative before/recovery/
 after snapshots, and freezes a hash-verified verdict. The verdict requires that
 counts never regress, ledgers always pass, the dashboard fault does not stop the
 worker checkpoint, and worker recovery acquires a higher lease epoch without
-restarting Mission Control or the daily supervisor. The worker fault is aligned
-just after a minute boundary, and the verdict waits for a complete post-recovery
-symbol cycle. Any open incident or operator-review incident in either recovery
-snapshot fails the verdict. The runner stops the disposable candidate after both
-drills. Neither drill is performed inside the official 24-hour or seven-day
-measurement window.
+restarting Mission Control or the daily supervisor. The worker fault is injected
+only during seconds `10` through `15`, after the prior 10-symbol close cycle and
+with enough time for expired-lease takeover before the next close. The verdict
+then waits for a stable, recovery-free post-recovery symbol cycle. Any open
+incident or operator-review incident in either recovery snapshot fails the
+verdict. The runner stops the disposable candidate after both drills. Neither
+drill is performed inside the official 24-hour or seven-day measurement window.
