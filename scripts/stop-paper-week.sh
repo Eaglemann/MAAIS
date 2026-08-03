@@ -44,7 +44,7 @@ fi
 
 if kill -0 "${worker_pid}" 2>/dev/null; then
   if ! kill -0 "${dashboard_pid}" 2>/dev/null \
-    || ! curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/health" >/dev/null 2>&1; then
+    || ! paper_curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/health" >/dev/null 2>&1; then
     echo "Mission Control must be healthy before an audited STOP; recover it first" >&2
     exit 1
   fi
@@ -63,13 +63,13 @@ if kill -0 "${worker_pid}" 2>/dev/null; then
     "data = \"@${stop_request_body}\"" \
     > "${stop_request_config}"
   unset control_token
-  stop_response="$(curl --silent --show-error --fail --config "${stop_request_config}")"
+  stop_response="$(paper_curl --silent --show-error --fail --config "${stop_request_config}")"
   cleanup_stop_request
   stop_command_id="$(jq -er '.command_id' <<<"${stop_response}")"
   command_status=""
   command_response=""
   for _attempt in $(seq 1 60); do
-    command_response="$(curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/commands/${stop_command_id}" 2>/dev/null || true)"
+    command_response="$(paper_curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/commands/${stop_command_id}" 2>/dev/null || true)"
     if [[ -n "${command_response}" ]]; then
       command_status="$(jq -r '.status // empty' <<<"${command_response}")"
     fi

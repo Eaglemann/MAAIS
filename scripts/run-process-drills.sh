@@ -37,7 +37,7 @@ capture_snapshot() {
   overview_copy="${target}.overview.json"
   ledger_copy="${target}.ledger.json"
   cp "${state_path}" "${state_copy}"
-  curl -fsS \
+  paper_curl -fsS \
     "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" \
     > "${overview_copy}"
   (cd "${repository_root}" && uv run maais verify-ledger) > "${ledger_copy}"
@@ -73,7 +73,7 @@ wait_for_post_recovery_cycle() {
   recovered_at="$(jq -er '.recovered_at' "${recovery}")"
 
   for _attempt in $(seq 1 120); do
-    overview="$(curl -fsS \
+    overview="$(paper_curl -fsS \
       "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" \
       2>/dev/null || true)"
     if [[ -n "${overview}" ]] && jq -e \

@@ -152,7 +152,7 @@ for _attempt in $(seq 1 90); do
     cleanup_startup
     exit 1
   fi
-  overview="$(curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
+  overview="$(paper_curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
   if [[ -n "${overview}" ]] && jq -e '.runtime.worker_status == "running" and .runtime.lease_status == "active"' >/dev/null <<<"${overview}"; then
     worker_ready=true
     break
@@ -183,14 +183,14 @@ printf '%s\n' \
   "data = \"@${start_request_body}\"" \
   > "${start_request_config}"
 unset control_token
-start_response="$(curl --silent --show-error --fail --config "${start_request_config}")"
+start_response="$(paper_curl --silent --show-error --fail --config "${start_request_config}")"
 rm -f "${start_request_body}" "${start_request_config}"
 start_command_id="$(jq -er '.command_id' <<<"${start_response}")"
 command_status=""
 experiment_status=""
 for _attempt in $(seq 1 60); do
-  command_response="$(curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/commands/${start_command_id}" 2>/dev/null || true)"
-  overview="$(curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
+  command_response="$(paper_curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/commands/${start_command_id}" 2>/dev/null || true)"
+  overview="$(paper_curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
   if [[ -n "${command_response}" ]]; then
     command_status="$(jq -r '.status // empty' <<<"${command_response}")"
   fi

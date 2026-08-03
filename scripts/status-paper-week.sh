@@ -34,8 +34,8 @@ kill -0 "${worker_pid}" 2>/dev/null && worker_alive=true
 kill -0 "${dashboard_pid}" 2>/dev/null && dashboard_alive=true
 [[ "${awake_pid}" =~ ^[0-9]+$ ]] && kill -0 "${awake_pid}" 2>/dev/null && awake_alive=true
 [[ "${scheduler_pid}" =~ ^[0-9]+$ ]] && kill -0 "${scheduler_pid}" 2>/dev/null && scheduler_alive=true
-api_health="$(curl -fsS "http://127.0.0.1:${port}/api/v1/health" 2>/dev/null || true)"
-overview="$(curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
+api_health="$(paper_curl -fsS "http://127.0.0.1:${port}/api/v1/health" 2>/dev/null || true)"
+overview="$(paper_curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
 database_health="$(cd "${repository_root}" && uv run maais health --experiment "${experiment_id}" --maximum-lag-seconds 180 2>/dev/null || true)"
 
 jq -n \

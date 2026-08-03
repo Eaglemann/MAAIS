@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_dir}/.." && pwd)"
+source "${script_dir}/paper-process.sh"
 dashboard_dir="${repository_root}/dashboard"
 artifact_dir="${repository_root}/output/playwright/browser-smoke"
 playwright_cli="${dashboard_dir}/node_modules/.bin/playwright-cli"
@@ -47,7 +48,7 @@ for _attempt in $(seq 1 30); do
   if ! kill -0 "${server_pid}" 2>/dev/null; then
     break
   fi
-  if curl -fsS "http://127.0.0.1:${port}/" >/dev/null 2>&1; then
+  if paper_curl -fsS "http://127.0.0.1:${port}/" >/dev/null 2>&1; then
     server_ready=true
     break
   fi

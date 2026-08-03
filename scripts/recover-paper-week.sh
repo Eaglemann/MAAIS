@@ -61,7 +61,7 @@ if [[ "${service}" == "scheduler" ]]; then
   if ! kill -0 "${worker_pid}" 2>/dev/null \
     || ! kill -0 "${dashboard_pid}" 2>/dev/null \
     || ! kill -0 "${awake_pid}" 2>/dev/null \
-    || ! curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
+    || ! paper_curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
     echo "worker, Mission Control, and sleep inhibitor must be healthy before scheduler recovery" >&2
     exit 1
   fi
@@ -74,7 +74,7 @@ paper_assert_recorded_postgres_route \
   "${docker_context}" \
   "${postgres_system_identifier}" >/dev/null
 before_ledger="$(uv run maais verify-ledger)"
-before_overview="$(curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
+before_overview="$(paper_curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
 recovery_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 new_worker_pid="${worker_pid}"
@@ -103,7 +103,7 @@ if [[ "${service}" == "dashboard" ]]; then
   fi
 elif [[ "${service}" == "worker" ]]; then
   if ! kill -0 "${dashboard_pid}" 2>/dev/null \
-    || ! curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
+    || ! paper_curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
     echo "Mission Control must be healthy before worker recovery" >&2
     exit 1
   fi
@@ -145,7 +145,7 @@ elif [[ "${service}" == "worker" ]]; then
     if ! kill -0 "${new_worker_pid}" 2>/dev/null; then
       break
     fi
-    overview="$(curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
+    overview="$(paper_curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview" 2>/dev/null || true)"
     if [[ -n "${overview}" ]] && jq -e --argjson before_epoch "${before_epoch}" \
       '.runtime.worker_status == "running" and .runtime.lease_status == "active" and .runtime.lease_epoch > $before_epoch' \
       >/dev/null <<<"${overview}"; then
@@ -196,7 +196,7 @@ if [[ ! "${new_scheduler_pid}" =~ ^[0-9]+$ ]] || ! kill -0 "${new_scheduler_pid}
   fi
 fi
 
-after_overview="$(curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview")"
+after_overview="$(paper_curl -fsS "http://127.0.0.1:${port}/api/v1/experiments/${experiment_id}/overview")"
 after_ledger="$(uv run maais verify-ledger)"
 recovered_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 evidence_target="${evidence_dir}/${timestamp}-${service}.json"

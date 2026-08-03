@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import os
 import shlex
+import socket
 import stat
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
@@ -27,6 +30,66 @@ def _run_bash(
         text=True,
         env=environment,
     )
+
+
+def test_local_http_client_times_out_on_a_half_open_connection() -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(2)
+    port = listener.getsockname()[1]
+    accepted = threading.Event()
+    release = threading.Event()
+
+    def hold_connection_open() -> None:
+        try:
+            connection, _address = listener.accept()
+        except OSError:
+            return
+        accepted.set()
+        try:
+            release.wait(3)
+        finally:
+            connection.close()
+
+    thread = threading.Thread(target=hold_connection_open, daemon=True)
+    thread.start()
+    environment = {
+        **os.environ,
+        "MAAIS_HTTP_CONNECT_TIMEOUT_SECONDS": "1",
+        "MAAIS_HTTP_MAX_TIME_SECONDS": "1",
+    }
+    started = time.monotonic()
+    try:
+        result = _run_bash(
+            f"paper_curl --silent http://127.0.0.1:{port}/health",
+            environment=environment,
+        )
+    finally:
+        elapsed = time.monotonic() - started
+        release.set()
+        listener.close()
+        thread.join(timeout=1)
+
+    assert result.returncode == 28, result.stderr
+    assert accepted.is_set()
+    assert elapsed < 2
+
+
+def test_local_http_client_rejects_invalid_timeout_configuration() -> None:
+    environment = {
+        **os.environ,
+        "MAAIS_HTTP_CONNECT_TIMEOUT_SECONDS": "1",
+        "MAAIS_HTTP_MAX_TIME_SECONDS": "0",
+    }
+
+    result = _run_bash(
+        "paper_curl --silent http://127.0.0.1:1/health",
+        environment=environment,
+    )
+
+    assert result.returncode == 64
+    assert "MAAIS HTTP timeouts must be positive integer seconds" in result.stderr
 
 
 def test_signal_worker_targets_process_group_when_worker_is_leader() -> None:

@@ -6,6 +6,22 @@
 PAPER_TMUX_PANE_PID=""
 PAPER_OPERATION_LOCK_DIR=""
 
+paper_curl() {
+  local connect_timeout="${MAAIS_HTTP_CONNECT_TIMEOUT_SECONDS:-2}"
+  local maximum_time="${MAAIS_HTTP_MAX_TIME_SECONDS:-10}"
+
+  if [[ ! "${connect_timeout}" =~ ^[1-9][0-9]*$ \
+    || ! "${maximum_time}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "MAAIS HTTP timeouts must be positive integer seconds" >&2
+    return 64
+  fi
+
+  curl \
+    --connect-timeout "${connect_timeout}" \
+    --max-time "${maximum_time}" \
+    "$@"
+}
+
 paper_file_mode() {
   local path="$1"
   local mode
@@ -239,7 +255,7 @@ paper_require_http_endpoint_free() {
     echo "HTTP health URL is required" >&2
     return 64
   fi
-  if curl --silent --show-error --fail --max-time 1 "${health_url}" >/dev/null 2>&1; then
+  if paper_curl --silent --show-error --fail --max-time 1 "${health_url}" >/dev/null 2>&1; then
     echo "Mission Control endpoint already has a healthy listener: ${health_url}" >&2
     return 1
   fi
@@ -261,7 +277,7 @@ paper_wait_http_process() {
     if ! kill -0 "${root_pid}" 2>/dev/null; then
       return 1
     fi
-    if curl --silent --show-error --fail "${health_url}" >/dev/null 2>&1; then
+    if paper_curl --silent --show-error --fail "${health_url}" >/dev/null 2>&1; then
       sleep 1
       kill -0 "${root_pid}" 2>/dev/null
       return
