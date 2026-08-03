@@ -99,6 +99,39 @@ paper_require_http_endpoint_free http://127.0.0.1:8000/api/v1/health
     assert "already has a healthy listener" in result.stderr
 
 
+def test_start_window_calculates_the_next_safe_minute_boundary() -> None:
+    result = _run_bash(
+        """
+for second in 00 05 06 52 59; do
+  printf '%s=%s\n' "$second" "$(paper_start_wait_seconds "$second" 5)"
+done
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "00=0",
+        "05=0",
+        "06=54",
+        "52=8",
+        "59=1",
+    ]
+
+
+def test_start_window_waits_when_the_current_minute_is_too_close_to_close() -> None:
+    result = _run_bash(
+        """
+date() { printf '52\n'; }
+sleep() { printf 'slept=%s\n' "$1"; }
+paper_wait_for_start_window 5
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["slept=8"]
+    assert "aligning paper activation to a safe minute boundary" in result.stderr
+
+
 def test_sleep_inhibitor_executes_caffeinate_for_worker_pid(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

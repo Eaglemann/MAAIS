@@ -271,6 +271,41 @@ paper_wait_http_process() {
   return 1
 }
 
+paper_start_wait_seconds() {
+  local current_second="$1"
+  local maximum_start_second="$2"
+  local current_value
+  local maximum_value
+
+  if [[ ! "${current_second}" =~ ^[0-5][0-9]$ \
+    || ! "${maximum_start_second}" =~ ^([0-9]|1[0-5])$ ]]; then
+    echo "paper start window requires second 00-59 and maximum 0-15" >&2
+    return 64
+  fi
+  current_value=$((10#${current_second}))
+  maximum_value=$((10#${maximum_start_second}))
+  if ((current_value <= maximum_value)); then
+    printf '0\n'
+    return 0
+  fi
+  printf '%s\n' "$((60 - current_value))"
+}
+
+paper_wait_for_start_window() {
+  local maximum_start_second="$1"
+  local current_second
+  local wait_seconds
+
+  current_second="$(date -u +%S)" || return 1
+  wait_seconds="$(
+    paper_start_wait_seconds "${current_second}" "${maximum_start_second}"
+  )" || return 1
+  if ((wait_seconds > 0)); then
+    echo "aligning paper activation to a safe minute boundary: wait=${wait_seconds}s" >&2
+    sleep "${wait_seconds}"
+  fi
+}
+
 paper_sleep_inhibitor_kind() {
   if command -v caffeinate >/dev/null 2>&1; then
     printf 'caffeinate\n'

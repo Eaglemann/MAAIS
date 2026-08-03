@@ -153,6 +153,8 @@ if [[ "${worker_ready}" != true ]]; then
   exit 1
 fi
 
+paper_wait_for_start_window 5
+
 start_idempotency_key="paper-week-start-${experiment_id}"
 jq -n \
   --arg idempotency_key "${start_idempotency_key}" \
