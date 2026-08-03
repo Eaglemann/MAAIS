@@ -622,7 +622,16 @@ def audit_structured_logs(paths: Sequence[Path]) -> dict[str, object]:
                 record_problem({"path": str(path), "line": line_number, "reason": "not_an_object"})
                 continue
             event = value.get("event")
-            if isinstance(event, str) and event:
+            if (
+                isinstance(event, str)
+                and 0 < len(event) <= 100
+                and event.isascii()
+                and event[0].islower()
+                and all(
+                    character.islower() or character.isdigit() or character == "_"
+                    for character in event
+                )
+            ):
                 event_counts[event] += 1
             level = str(value.get("level", "")).lower()
             if level in {"error", "critical", "exception"}:

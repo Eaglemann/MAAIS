@@ -336,6 +336,13 @@ def test_log_audit_summarizes_structured_transport_recovery_evidence(tmp_path: P
         )
         + "\n"
         + json.dumps({"level": "info", "event": "paper_live_started"})
+        + "\n"
+        + json.dumps(
+            {
+                "level": "info",
+                "event": '127.0.0.1:64123 - "GET /api/v1/health HTTP/1.1" 200',
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
