@@ -60,6 +60,45 @@ paper_signal_process_tree 50560
     assert result.stdout.splitlines() == ["-INT 50566", "-INT 50560"]
 
 
+def test_signal_process_tree_is_idempotent_after_the_root_already_exited() -> None:
+    result = _run_bash(
+        """
+set -euo pipefail
+ps() { return 1; }
+paper_signal_process_tree 50560
+printf 'cleanup-continued\n'
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["cleanup-continued"]
+
+
+def test_http_readiness_rejects_a_stale_service_when_launched_process_is_dead() -> None:
+    result = _run_bash(
+        """
+kill() { return 1; }
+curl() { return 0; }
+sleep() { return 0; }
+paper_wait_http_process 50560 http://127.0.0.1:8000/api/v1/health 3
+"""
+    )
+
+    assert result.returncode == 1
+
+
+def test_http_endpoint_guard_rejects_an_existing_healthy_listener() -> None:
+    result = _run_bash(
+        """
+curl() { return 0; }
+paper_require_http_endpoint_free http://127.0.0.1:8000/api/v1/health
+"""
+    )
+
+    assert result.returncode == 1
+    assert "already has a healthy listener" in result.stderr
+
+
 def test_sleep_inhibitor_executes_caffeinate_for_worker_pid(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

@@ -84,24 +84,19 @@ new_scheduler_pid="${scheduler_pid:-0}"
 
 if [[ "${service}" == "dashboard" ]]; then
   paper_stop_tmux_session "${dashboard_session}"
+  dashboard_health_url="http://127.0.0.1:${port}/api/v1/health"
+  if ! paper_require_http_endpoint_free "${dashboard_health_url}"; then
+    echo "Mission Control recovery found an unowned listener" >&2
+    exit 1
+  fi
   dashboard_log="${state_dir}/logs/mission-control-${experiment_id%%-*}.log"
   printf -v dashboard_command \
     'cd %q && exec env RUN_MODE=paper_live ENVIRONMENT=production MISSION_CONTROL_TOKEN_FILE=%q uv run maais mission-control --port %q >> %q 2>&1' \
     "${repository_root}" "${control_token_file}" "${port}" "${dashboard_log}"
   paper_start_tmux_session "${dashboard_session}" "${dashboard_command}"
   new_dashboard_pid="${PAPER_TMUX_PANE_PID}"
-  dashboard_ready=false
-  for _attempt in $(seq 1 30); do
-    if ! kill -0 "${new_dashboard_pid}" 2>/dev/null; then
-      break
-    fi
-    if curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
-      dashboard_ready=true
-      break
-    fi
-    sleep 1
-  done
-  if [[ "${dashboard_ready}" != true ]]; then
+  if ! paper_wait_http_process "${new_dashboard_pid}" "${dashboard_health_url}" 30; then
+    paper_signal_process_tree "${new_dashboard_pid}" || true
     paper_stop_tmux_session "${dashboard_session}"
     echo "Mission Control recovery failed; inspect ${dashboard_log}" >&2
     exit 1

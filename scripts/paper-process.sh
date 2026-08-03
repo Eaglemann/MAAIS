@@ -219,7 +219,10 @@ paper_signal_process_tree() {
     return 64
   fi
 
-  process_group="$(ps -o pgid= -p "${root_pid}" 2>/dev/null | tr -d '[:space:]')"
+  process_group="$({ ps -o pgid= -p "${root_pid}" 2>/dev/null || true; } | tr -d '[:space:]')"
+  if [[ -z "${process_group}" ]]; then
+    return 0
+  fi
   if [[ "${process_group}" == "${root_pid}" ]]; then
     kill -INT -- "-${process_group}" 2>/dev/null || true
     return 0
@@ -227,6 +230,45 @@ paper_signal_process_tree() {
 
   paper_signal_descendants "${root_pid}"
   kill -INT "${root_pid}" 2>/dev/null || true
+}
+
+paper_require_http_endpoint_free() {
+  local health_url="$1"
+
+  if [[ -z "${health_url}" ]]; then
+    echo "HTTP health URL is required" >&2
+    return 64
+  fi
+  if curl --silent --show-error --fail --max-time 1 "${health_url}" >/dev/null 2>&1; then
+    echo "Mission Control endpoint already has a healthy listener: ${health_url}" >&2
+    return 1
+  fi
+}
+
+paper_wait_http_process() {
+  local root_pid="$1"
+  local health_url="$2"
+  local maximum_attempts="$3"
+  local attempt
+
+  if [[ ! "${root_pid}" =~ ^[0-9]+$ || -z "${health_url}" \
+    || ! "${maximum_attempts}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "HTTP process readiness arguments are invalid" >&2
+    return 64
+  fi
+
+  for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
+    if ! kill -0 "${root_pid}" 2>/dev/null; then
+      return 1
+    fi
+    if curl --silent --show-error --fail "${health_url}" >/dev/null 2>&1; then
+      sleep 1
+      kill -0 "${root_pid}" 2>/dev/null
+      return
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 paper_sleep_inhibitor_kind() {

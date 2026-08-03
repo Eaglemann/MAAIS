@@ -88,21 +88,21 @@ start_request_body="${state_dir}/.start-command-${session_suffix}.json"
 start_request_config="${state_dir}/.start-command-${session_suffix}.curl"
 cleanup_startup() {
   if [[ "${scheduler_pid}" =~ ^[0-9]+$ ]]; then
-    paper_signal_process_tree "${scheduler_pid}"
+    paper_signal_process_tree "${scheduler_pid}" || true
   fi
   if [[ "${worker_pid}" =~ ^[0-9]+$ ]]; then
-    paper_signal_process_tree "${worker_pid}"
+    paper_signal_process_tree "${worker_pid}" || true
   fi
   if [[ "${awake_pid}" =~ ^[0-9]+$ ]]; then
     kill -TERM "${awake_pid}" 2>/dev/null || true
   fi
   if [[ "${dashboard_pid}" =~ ^[0-9]+$ ]]; then
-    kill -TERM "${dashboard_pid}" 2>/dev/null || true
+    paper_signal_process_tree "${dashboard_pid}" || true
   fi
-  paper_stop_tmux_session "${awake_session}"
-  paper_stop_tmux_session "${scheduler_session}"
-  paper_stop_tmux_session "${worker_session}"
-  paper_stop_tmux_session "${dashboard_session}"
+  paper_stop_tmux_session "${awake_session}" || true
+  paper_stop_tmux_session "${scheduler_session}" || true
+  paper_stop_tmux_session "${worker_session}" || true
+  paper_stop_tmux_session "${dashboard_session}" || true
   rm -f "${start_request_body}" "${start_request_config}"
   if [[ "${state_created}" == true ]]; then
     rm -f "${current_state}"
@@ -110,21 +110,18 @@ cleanup_startup() {
 }
 trap cleanup_startup ERR INT TERM
 
+dashboard_health_url="http://127.0.0.1:${mission_control_port}/api/v1/health"
+if ! paper_require_http_endpoint_free "${dashboard_health_url}"; then
+  cleanup_startup
+  exit 1
+fi
 printf -v dashboard_command \
   'cd %q && exec env RUN_MODE=paper_live ENVIRONMENT=production MISSION_CONTROL_TOKEN_FILE=%q uv run maais mission-control --port %q >> %q 2>&1' \
   "${repository_root}" "${control_token_file}" "${mission_control_port}" "${dashboard_log}"
 paper_start_tmux_session "${dashboard_session}" "${dashboard_command}"
 dashboard_pid="${PAPER_TMUX_PANE_PID}"
 
-dashboard_ready=false
-for _attempt in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:${mission_control_port}/api/v1/health" >/dev/null; then
-    dashboard_ready=true
-    break
-  fi
-  sleep 1
-done
-if [[ "${dashboard_ready}" != true ]]; then
+if ! paper_wait_http_process "${dashboard_pid}" "${dashboard_health_url}" 30; then
   echo "Mission Control did not become healthy; inspect ${dashboard_log}" >&2
   cleanup_startup
   exit 1
