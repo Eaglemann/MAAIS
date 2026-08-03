@@ -687,7 +687,9 @@ async def _database_soak_state(
     try:
         async with factory() as session:
             async with session.begin():
-                await session.execute(text("SET TRANSACTION READ ONLY"))
+                await session.execute(
+                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                )
                 overview_model = await MissionControlQueryService(session).get_overview(
                     experiment_id
                 )
