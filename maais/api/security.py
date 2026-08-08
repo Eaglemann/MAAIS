@@ -8,8 +8,9 @@ from datetime import datetime
 from secrets import compare_digest
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response, WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.requests import HTTPConnection
 
 from maais.config.security import AuthMode, SecuritySettings
 from maais.db.connection import get_session_factory
@@ -42,22 +43,31 @@ class MissionControlSecurity:
     clock: Callable[[], datetime]
 
 
-def security_context(request: Request) -> MissionControlSecurity:
-    context = request.app.state.security
+@dataclass(frozen=True, slots=True)
+class WebSocketAuthentication:
+    principal: OperatorPrincipal
+    token_hash: str
+
+
+def security_context(connection: HTTPConnection) -> MissionControlSecurity:
+    context = connection.app.state.security
     if not isinstance(context, MissionControlSecurity):  # pragma: no cover - app invariant
         raise RuntimeError("Mission Control security context is not configured")
     return context
 
 
-def session_factory(request: Request) -> SessionFactory:
-    factory: SessionFactory | None = request.app.state.session_factory
+def session_factory(connection: HTTPConnection) -> SessionFactory:
+    factory: SessionFactory | None = connection.app.state.session_factory
     if factory is None:
         factory = get_session_factory()
-        request.app.state.session_factory = factory
+        connection.app.state.session_factory = factory
     return factory
 
 
 async def require_operator(request: Request) -> OperatorPrincipal:
+    cached = getattr(request.state, "operator_principal", None)
+    if isinstance(cached, OperatorPrincipal):
+        return cached
     context = security_context(request)
     if context.settings.auth_mode is AuthMode.LOCAL_TOKEN:
         supplied = _bearer_token(request.headers.get("Authorization"))
@@ -71,11 +81,13 @@ async def require_operator(request: Request) -> OperatorPrincipal:
                 detail="valid local control bearer token required",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        return OperatorPrincipal(
+        principal = OperatorPrincipal(
             actor="local_operator",
             session_id=None,
             auth_mode=AuthMode.LOCAL_TOKEN,
         )
+        request.state.operator_principal = principal
+        return principal
     if request.headers.get("Authorization") is not None:
         raise _session_required()
     token = request.cookies.get(SESSION_COOKIE_NAME, "")
@@ -92,10 +104,38 @@ async def require_operator(request: Request) -> OperatorPrincipal:
     except SessionAuthenticationError as error:
         raise _session_required() from error
     request.state.operator_session = authenticated
-    return OperatorPrincipal(
+    principal = OperatorPrincipal(
         actor=authenticated.actor,
         session_id=authenticated.id,
         auth_mode=AuthMode.OPERATOR_SESSION,
+    )
+    request.state.operator_principal = principal
+    return principal
+
+
+async def authenticate_websocket(websocket: WebSocket) -> WebSocketAuthentication | None:
+    context = security_context(websocket)
+    if context.settings.auth_mode is AuthMode.LOCAL_TOKEN:
+        return None
+    if websocket.headers.get("Authorization") is not None:
+        raise SessionAuthenticationError
+    token = websocket.cookies.get(SESSION_COOKIE_NAME, "")
+    try:
+        token_hash = opaque_token_hash(token, context.settings.session_pepper)
+    except ValueError:
+        token_hash = "0" * 64
+    async with UnitOfWork(session_factory(websocket)).begin() as uow:
+        session = await uow.sessions.authenticate(
+            token_hash,
+            observed_at=context.clock(),
+        )
+    return WebSocketAuthentication(
+        principal=OperatorPrincipal(
+            actor=session.actor,
+            session_id=session.id,
+            auth_mode=AuthMode.OPERATOR_SESSION,
+        ),
+        token_hash=token_hash,
     )
 
 

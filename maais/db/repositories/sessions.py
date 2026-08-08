@@ -87,6 +87,13 @@ class OperatorSessionRepository:
         row.version = updated.version
         return updated
 
+    async def check(self, token_hash: str, *, observed_at: datetime) -> OperatorSession:
+        row = await self._session.scalar(
+            select(OperatorSessionModel).where(OperatorSessionModel.token_hash == token_hash)
+        )
+        current = _session_from_row(row) if row is not None else None
+        return require_authenticatable_session(current, observed_at=observed_at)
+
     async def rotate(self, candidate: OperatorSession) -> OperatorSession:
         row = await self._locked_session(candidate.id)
         current = _session_from_row(row)

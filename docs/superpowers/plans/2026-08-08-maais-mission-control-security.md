@@ -323,7 +323,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
 **Produces:** Deny-by-default route protection, protected WebSocket/export surfaces, no-store policy, and strict browser headers.
 
-- [ ] Enumerate every registered route in a test and require an explicit public/private classification. The public set is exactly `/healthz/live`, `/healthz/ready`, `/monitor/v1/health`, `/api/v1/auth/login`, `/api/v1/auth/session`, `/docs` only outside production, `/openapi.json` only outside production, and static login assets.
+- [x] Enumerate every registered route in a test and require an explicit public/private classification. The public set is exactly `/healthz/live`, `/healthz/ready`, `/monitor/v1/health`, `/api/v1/auth/login`, `/api/v1/auth/session`, `/docs` only outside production, `/openapi.json` only outside production, and static login assets.
 
   ```python
   PUBLIC_PRODUCTION_PATHS = {
@@ -335,25 +335,25 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
   }
   ```
 
-- [ ] Write table-driven tests that call every GET/POST/export route unauthenticated and expect `401`/`403`, then authenticated and expect its domain response. Test WebSocket policy close before and after login.
+- [x] Write table-driven tests that call every GET/POST/export route unauthenticated and expect `401`/`403`, then authenticated and expect its domain response. Test WebSocket policy close before and after login.
 
-- [ ] Write header tests for HSTS in production, CSP, `frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, and `Cache-Control` behavior.
+- [x] Write header tests for HSTS in production, CSP, `frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, and `Cache-Control` behavior.
 
-- [ ] Run tests and confirm existing public query/export/WebSocket routes fail the new expectations.
+- [x] Run tests and confirm existing public query/export/WebSocket routes fail the new expectations.
 
   ```bash
   uv run pytest -q tests/integration/test_mission_control_surface_security.py tests/unit/api/test_security_headers.py
   ```
 
-- [ ] Refactor route registration into protected routers or apply a single session dependency at the `/api/v1` router and override only login/session-discovery endpoints. `/api/v1/auth/csrf` is session-authenticated and Origin/Host-validated but is the sole CSRF-bootstrap exception. Avoid ad hoc per-route omissions.
+- [x] Refactor route registration into protected routers or apply a single session dependency at the `/api/v1` router and override only login/session-discovery endpoints. `/api/v1/auth/csrf` is session-authenticated and Origin/Host-validated but is the sole CSRF-bootstrap exception. Avoid ad hoc per-route omissions.
 
-- [ ] Require CSRF on operator commands and logout; preserve idempotency and operator confirmation checks. Set the command actor from `OperatorPrincipal`, never from request JSON.
+- [x] Require CSRF on operator commands and logout; preserve idempotency and operator confirmation checks. Set the command actor from `OperatorPrincipal`, never from request JSON.
 
-- [ ] Authenticate WebSocket cookies with the same repository and clock before `accept()`. Re-check expiry on each polling iteration and close `1008` when the session expires.
+- [x] Authenticate WebSocket cookies with the same repository and clock before `accept()`. Re-check expiry on each polling iteration and close `1008` when the session expires.
 
-- [ ] Remove permissive production CORS. Local development keeps only `127.0.0.1:5173` and `localhost:5173`; production same-origin requires no cross-origin policy.
+- [x] Remove permissive production CORS. Local development keeps only `127.0.0.1:5173` and `localhost:5173`; production same-origin requires no cross-origin policy.
 
-- [ ] Re-run surface tests, command tests, and API query/export regressions.
+- [x] Re-run surface tests, command tests, and API query/export regressions.
 
   ```bash
   uv run pytest -q tests/unit/api tests/integration/test_mission_control_surface_security.py tests/integration/test_mission_control_api.py tests/integration/test_mission_control_commands_api.py
@@ -363,7 +363,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
   Expected: all commands exit `0`; there is no unclassified production route.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/api/app.py maais/api/headers.py tests/integration/test_mission_control_surface_security.py tests/unit/api/test_security_headers.py

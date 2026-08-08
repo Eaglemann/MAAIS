@@ -26,6 +26,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from maais.api.auth import load_control_token
+from maais.api.headers import apply_browser_headers, requires_operator_session
 from maais.api.queries import MissionControlQueryService
 from maais.api.schemas import (
     ApiHealth,
@@ -50,6 +51,7 @@ from maais.api.schemas import (
 from maais.api.security import (
     MissionControlSecurity,
     OperatorPrincipal,
+    authenticate_websocket,
     clear_session_cookie,
     optional_operator_session,
     require_csrf,
@@ -61,6 +63,7 @@ from maais.api.security import (
 from maais.api.security import (
     session_factory as security_session_factory,
 )
+from maais.config.cloud import DeploymentTarget
 from maais.config.security import AuthMode, SecuritySettings
 from maais.config.settings import get_settings
 from maais.db.connection import get_engine, get_session_factory
@@ -71,12 +74,16 @@ from maais.db.repositories.operator_commands import (
     OperatorCommandConflict,
     OperatorCommandRepository,
 )
-from maais.db.repositories.sessions import LoginAuthenticationError
+from maais.db.repositories.sessions import LoginAuthenticationError, OperatorSessionRepository
 from maais.db.unit_of_work import UnitOfWork
 from maais.operations.operator_commands import CommandStatus, OperatorCommand
 from maais.operations.verification import establish_read_only_snapshot
 from maais.security.passwords import INVALID_CREDENTIALS, verify_operator_password
-from maais.security.sessions import issue_session_tokens, rotate_csrf_token
+from maais.security.sessions import (
+    SessionAuthenticationError,
+    issue_session_tokens,
+    rotate_csrf_token,
+)
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -198,6 +205,7 @@ def create_app(
                 token_path = global_settings.mission_control_token_file
             resolved_control_token = load_control_token(token_path)
     resolved_clock = clock or (lambda: datetime.now(timezone.utc))
+    production_security = resolved_security.deployment_target is DeploymentTarget.RAILWAY
     owns_global_engine = session_factory is None
 
     @asynccontextmanager
@@ -213,6 +221,9 @@ def create_app(
         version="0.1.0",
         description="Local paper-trading operations, audit, and queued control API.",
         lifespan=lifespan,
+        docs_url=None if production_security else "/docs",
+        redoc_url=None,
+        openapi_url=None if production_security else "/openapi.json",
     )
     application.state.session_factory = session_factory
     application.state.security = MissionControlSecurity(
@@ -220,13 +231,14 @@ def create_app(
         control_token=resolved_control_token,
         clock=resolved_clock,
     )
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=("http://127.0.0.1:5173", "http://localhost:5173"),
-        allow_credentials=False,
-        allow_methods=("GET", "POST"),
-        allow_headers=("Accept", "Authorization", "Content-Type"),
-    )
+    if resolved_security.deployment_target is DeploymentTarget.LOCAL:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=("http://127.0.0.1:5173", "http://localhost:5173"),
+            allow_credentials=False,
+            allow_methods=("GET", "POST"),
+            allow_headers=("Accept", "Authorization", "Content-Type"),
+        )
 
     async def read_session() -> AsyncIterator[AsyncSession]:
         factory: SessionFactory | None = application.state.session_factory
@@ -239,11 +251,27 @@ def create_app(
                 yield session
 
     @application.middleware("http")
-    async def disable_browser_caching(request: Request, call_next):
-        response = await call_next(request)
-        if request.url.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
-        return response
+    async def mission_control_boundary(request: Request, call_next):
+        if resolved_security.auth_mode is AuthMode.OPERATOR_SESSION and requires_operator_session(
+            request.url.path
+        ):
+            try:
+                await require_operator(request)
+            except HTTPException as error:
+                response = JSONResponse(
+                    status_code=error.status_code,
+                    content={"detail": error.detail},
+                    headers=error.headers,
+                )
+            else:
+                response = await call_next(request)
+        else:
+            response = await call_next(request)
+        return apply_browser_headers(
+            request,
+            response,
+            production=production_security,
+        )
 
     @application.exception_handler(LookupError)
     async def not_found(_request: Request, error: LookupError) -> JSONResponse:
@@ -764,6 +792,11 @@ def create_app(
         websocket: WebSocket,
         after_cursor: int = 0,
     ) -> None:
+        try:
+            websocket_auth = await authenticate_websocket(websocket)
+        except SessionAuthenticationError:
+            await websocket.close(code=1008, reason="session authentication required")
+            return
         if after_cursor < 0:
             await websocket.close(code=1008, reason="after_cursor cannot be negative")
             return
@@ -780,6 +813,11 @@ def create_app(
                 async with factory() as session:
                     async with session.begin():
                         await establish_read_only_snapshot(session)
+                        if websocket_auth is not None:
+                            await OperatorSessionRepository(session).check(
+                                websocket_auth.token_hash,
+                                observed_at=resolved_clock(),
+                            )
                         page = await _outbox_cursor_page(
                             session,
                             after_cursor=cursor,
@@ -798,6 +836,9 @@ def create_app(
                     )
                     last_heartbeat = loop.time()
                 await asyncio.sleep(0.5)
+        except SessionAuthenticationError:
+            await websocket.close(code=1008, reason="session expired")
+            return
         except WebSocketDisconnect:
             return
 
