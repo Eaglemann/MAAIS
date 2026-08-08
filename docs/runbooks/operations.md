@@ -31,6 +31,13 @@ to investigate and cannot be used by the soak.
 
 ### 24-hour soak
 
+On a MacBook, connect AC power, charge the battery to at least 50%, and keep the
+lid open for the entire timed run. The launcher verifies AC power and battery
+reserve before startup and again immediately before activation. `caffeinate`
+prevents idle sleep but cannot override macOS clamshell sleep; closing the lid
+invalidates the run. For a seven-day experiment, an always-on desktop host is
+more reliable than a laptop.
+
 Start the clean soak with the process-drill bundle from the same commit:
 
 ```bash

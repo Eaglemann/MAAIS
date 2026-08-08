@@ -33,6 +33,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_dir}/.." && pwd)"
 source "${script_dir}/paper-process.sh"
+host_power_evidence="$(paper_assert_timed_run_host_power "${run_purpose}")"
 manifest_path="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 restore_path="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 qualification_path="$(cd "$3" && pwd)"
@@ -166,6 +167,13 @@ if [[ "${worker_ready}" != true ]]; then
 fi
 
 paper_wait_for_start_window 5
+host_power_evidence="$(paper_assert_timed_run_host_power "${run_purpose}")"
+host_power_evidence="$(
+  jq -c \
+    --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '. + {checked_at:$checked_at}' \
+    <<<"${host_power_evidence}"
+)"
 
 start_idempotency_key="paper-week-start-${experiment_id}"
 jq -n \
@@ -245,11 +253,12 @@ jq -n \
   --arg supervisor "tmux" \
   --arg docker_context "${docker_context}" \
   --arg postgres_system_identifier "${postgres_system_identifier}" \
+  --argjson host_power "${host_power_evidence}" \
   --arg worker_session "${worker_session}" \
   --arg dashboard_session "${dashboard_session}" \
   --arg awake_session "${awake_session}" \
   --argjson port "${mission_control_port}" \
-  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,qualification:$qualification,run_purpose:$run_purpose,process_drill_bundle:$process_drill_bundle,soak_readiness_bundle:$soak_readiness_bundle,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
+  '{experiment_id:$experiment_id,manifest:$manifest,restore_verification:$restore_verification,qualification:$qualification,run_purpose:$run_purpose,process_drill_bundle:$process_drill_bundle,soak_readiness_bundle:$soak_readiness_bundle,preflight:$preflight,control_token_file:$control_token_file,started_at:$started_at,worker_pid:$worker_pid,dashboard_pid:$dashboard_pid,awake_pid:$awake_pid,awake_kind:$awake_kind,supervisor:$supervisor,docker_context:$docker_context,postgres_system_identifier:$postgres_system_identifier,host_power:$host_power,worker_session:$worker_session,dashboard_session:$dashboard_session,awake_session:$awake_session,mission_control_port:$port}' \
   > "${temporary_state}"
 mv "${temporary_state}" "${current_state}"
 state_created=true

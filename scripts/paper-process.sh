@@ -448,6 +448,70 @@ paper_wait_for_start_window() {
   fi
 }
 
+paper_assert_timed_run_host_power() {
+  local run_purpose="$1"
+  local platform
+  local power_status
+  local battery_percent
+  local minimum_battery_percent=50
+
+  if [[ "${run_purpose}" != "process_drill" \
+    && "${run_purpose}" != "soak" \
+    && "${run_purpose}" != "seven_day" ]]; then
+    echo "MAAIS_RUN_PURPOSE must be process_drill, soak, or seven_day" >&2
+    return 64
+  fi
+
+  platform="$(uname -s)" || return 1
+  if [[ "${run_purpose}" == "process_drill" ]]; then
+    jq -cn \
+      --arg platform "${platform}" \
+      '{platform:$platform,required:false,power_source:"not_checked",battery_percent:null,minimum_battery_percent:null}'
+    return
+  fi
+  if [[ "${platform}" != "Darwin" ]]; then
+    jq -cn \
+      --arg platform "${platform}" \
+      '{platform:$platform,required:true,power_source:"not_applicable",battery_percent:null,minimum_battery_percent:null}'
+    return
+  fi
+  if ! command -v pmset >/dev/null 2>&1; then
+    echo "timed macOS paper runs require pmset host-power verification" >&2
+    return 69
+  fi
+  power_status="$(pmset -g batt)" || {
+    echo "could not read macOS host power status" >&2
+    return 1
+  }
+  if [[ "${power_status}" != *"Now drawing from 'AC Power'"* ]]; then
+    echo "a timed macOS paper run requires AC power; battery power cannot preserve an official run" >&2
+    return 1
+  fi
+
+  battery_percent="$(
+    sed -nE 's/.*[^0-9]([0-9]{1,3})%;.*/\1/p' <<<"${power_status}" | head -n 1
+  )"
+  if [[ "${power_status}" == *"InternalBattery"* && ! "${battery_percent}" =~ ^[0-9]{1,3}$ ]]; then
+    echo "could not read the macOS battery reserve" >&2
+    return 1
+  fi
+  if [[ -n "${battery_percent}" ]] \
+    && ((10#${battery_percent} < minimum_battery_percent)); then
+    echo "macOS battery reserve ${battery_percent}% is below required ${minimum_battery_percent}% for a timed paper run" >&2
+    return 1
+  fi
+  if [[ -z "${battery_percent}" ]]; then
+    jq -cn \
+      --argjson minimum "${minimum_battery_percent}" \
+      '{platform:"macos",required:true,power_source:"ac",battery_percent:null,minimum_battery_percent:$minimum}'
+    return
+  fi
+  jq -cn \
+    --argjson battery "${battery_percent}" \
+    --argjson minimum "${minimum_battery_percent}" \
+    '{platform:"macos",required:true,power_source:"ac",battery_percent:$battery,minimum_battery_percent:$minimum}'
+}
+
 paper_sleep_inhibitor_kind() {
   if command -v caffeinate >/dev/null 2>&1; then
     printf 'caffeinate\n'
@@ -470,7 +534,7 @@ paper_run_sleep_inhibitor() {
   fi
 
   if command -v caffeinate >/dev/null 2>&1; then
-    exec caffeinate -im -w "${worker_pid}"
+    exec caffeinate -ims -w "${worker_pid}"
   fi
 
   if command -v systemd-inhibit >/dev/null 2>&1; then
