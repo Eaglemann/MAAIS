@@ -13,7 +13,7 @@ from maais.config.artifacts import (
 )
 from maais.config.cloud import EU_WEST_RAILWAY_REGION, DeploymentTarget, ServiceRole
 from maais.config.settings import Settings
-from tests.security_support import railway_security_values
+from tests.security_support import railway_observability_values, railway_security_values
 
 
 def _dual_store_values(**overrides: object) -> dict[str, object]:
@@ -37,6 +37,7 @@ def _dual_store_values(**overrides: object) -> dict[str, object]:
 def _railway_values(**overrides: object) -> dict[str, object]:
     values: dict[str, object] = {
         **railway_security_values(),
+        **railway_observability_values(ServiceRole.WORKER),
         "deployment_target": DeploymentTarget.RAILWAY,
         "run_mode": "paper_live",
         "environment": "qualification",

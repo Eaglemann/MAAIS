@@ -11,6 +11,7 @@ from tests.security_support import (
     TEST_MONITOR_TOKEN,
     TEST_SESSION_PEPPER,
     operator_password_hash_for_tests,
+    railway_observability_values,
     railway_security_values,
 )
 
@@ -46,6 +47,9 @@ def _railway_settings(**overrides: object) -> Settings:
         "_env_file": None,
     }
     values.update(overrides)
+    service_role = ServiceRole(values["service_role"])
+    for name, value in railway_observability_values(service_role).items():
+        values.setdefault(name, value)
     return Settings(**values)
 
 
@@ -157,6 +161,7 @@ def test_redacted_summary_is_an_explicit_non_secret_allowlist() -> None:
         ),
         binance_demo_api_key="exchange-canary",  # pragma: allowlist secret
         telegram_bot_token="telegram-canary",  # pragma: allowlist secret
+        log_format="console",
         _env_file=None,
     )
 
@@ -200,6 +205,15 @@ def test_redacted_summary_is_an_explicit_non_secret_allowlist() -> None:
         "monitor_token_configured": False,
         "operator_public_origin": "",
         "operator_public_host": "",
+        "log_format": "console",
+        "sentry_release": "",
+        "backend_sentry_configured": False,
+        "browser_sentry_configured": False,
+        "sentry_traces_sample_rate": 0.0,
+        "sentry_profiles_sample_rate": 0.0,
+        "sentry_send_default_pii": False,
+        "sentry_session_replay_enabled": False,
+        "sentry_cron_monitors_configured": False,
     }
     serialized = json.dumps(summary, sort_keys=True)
     assert "db-canary" not in serialized
@@ -215,6 +229,7 @@ def test_settings_representations_exclude_every_secret_field() -> None:
         "exchange-signing-secret",
         "telegram-token-secret",
         "telegram-chat-secret",
+        "backend-sentry-secret",
     )
     settings = Settings(
         database_url=(
@@ -228,6 +243,10 @@ def test_settings_representations_exclude_every_secret_field() -> None:
         binance_demo_api_secret="exchange-signing-secret",  # pragma: allowlist secret
         telegram_bot_token="telegram-token-secret",  # pragma: allowlist secret
         telegram_chat_id="telegram-chat-secret",  # pragma: allowlist secret
+        sentry_backend_dsn=(
+            "https://backend-sentry-secret@o0.ingest.sentry.io/789"  # pragma: allowlist secret
+        ),
+        railway_git_commit_sha="a" * 40,
         _env_file=None,
     )
 
@@ -267,6 +286,10 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
         "RAILWAY_GIT_COMMIT_SHA": "a" * 40,
         "MAAIS_EXPECTED_SCHEMA_REVISION": "0021",
         "MAAIS_DATABASE_ROLE_NAME": "maais_worker",
+        "MAAIS_LOG_FORMAT": "json",
+        "SENTRY_DSN": (
+            "https://backend-public-key@o0.ingest.sentry.io/123"  # pragma: allowlist secret
+        ),
         "MAAIS_CANDIDATE_DESCRIPTOR_PATH": "/app/candidate.json",
         "MAAIS_AUTH_MODE": "operator_session",
         "MAAIS_OPERATOR_PASSWORD_HASH": operator_password_hash_for_tests(),

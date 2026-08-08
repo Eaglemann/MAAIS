@@ -14,6 +14,7 @@ from maais.config.cloud import (
     ServiceRole,
 )
 from maais.config.modes import RunMode
+from maais.config.observability import LogFormat, ObservabilitySettings
 from maais.config.security import AuthMode, SecuritySettings
 
 
@@ -60,6 +61,48 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:9092"
     log_level: str = "INFO"
     environment: str = "development"
+    log_format: LogFormat = Field(
+        default=LogFormat.CONSOLE,
+        validation_alias="MAAIS_LOG_FORMAT",
+    )
+    sentry_backend_dsn: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="SENTRY_DSN",
+        exclude=True,
+        repr=False,
+    )
+    sentry_browser_dsn: str = Field(
+        default="",
+        validation_alias="VITE_SENTRY_DSN",
+    )
+    sentry_traces_sample_rate: float = Field(
+        default=0.0,
+        validation_alias="SENTRY_TRACES_SAMPLE_RATE",
+    )
+    sentry_profiles_sample_rate: float = Field(
+        default=0.0,
+        validation_alias="SENTRY_PROFILES_SAMPLE_RATE",
+    )
+    sentry_send_default_pii: Literal[False] = Field(
+        default=False,
+        validation_alias="SENTRY_SEND_DEFAULT_PII",
+    )
+    sentry_session_replay_enabled: Literal[False] = Field(
+        default=False,
+        validation_alias="MAAIS_SENTRY_SESSION_REPLAY_ENABLED",
+    )
+    sentry_daily_close_monitor_slug: str = Field(
+        default="",
+        validation_alias="MAAIS_SENTRY_DAILY_CLOSE_MONITOR_SLUG",
+    )
+    sentry_backup_monitor_slug: str = Field(
+        default="",
+        validation_alias="MAAIS_SENTRY_BACKUP_MONITOR_SLUG",
+    )
+    sentry_evidence_monitor_slug: str = Field(
+        default="",
+        validation_alias="MAAIS_SENTRY_EVIDENCE_MONITOR_SLUG",
+    )
     telegram_bot_token: SecretStr = Field(
         default_factory=lambda: SecretStr(""),
         exclude=True,
@@ -223,6 +266,7 @@ class Settings(BaseSettings):
         if self.deployment_target is DeploymentTarget.LOCAL:
             _ = self.artifacts
             _ = self.security
+            _ = self.observability
             return self
         required = {
             "RAILWAY_PROJECT_ID": self.railway_project_id,
@@ -288,6 +332,7 @@ class Settings(BaseSettings):
             raise ValueError("Railway runtime requires MAAIS_ARTIFACT_STORE_MODE=dual_s3")
         if self.security.auth_mode is not AuthMode.OPERATOR_SESSION:
             raise ValueError("Railway runtime requires MAAIS_AUTH_MODE=operator_session")
+        _ = self.observability
         return self
 
     @property
@@ -374,7 +419,26 @@ class Settings(BaseSettings):
             public_origin=self.operator_public_origin,
         )
 
-    def redacted_summary(self) -> dict[str, str | bool | int | None]:
+    @property
+    def observability(self) -> ObservabilitySettings:
+        return ObservabilitySettings(
+            deployment_target=self.deployment_target,
+            service_role=self.service_role,
+            environment=self.environment,
+            release=self.railway_git_commit_sha,
+            log_format=self.log_format,
+            backend_dsn=self.sentry_backend_dsn,
+            browser_dsn=self.sentry_browser_dsn,
+            traces_sample_rate=self.sentry_traces_sample_rate,
+            profiles_sample_rate=self.sentry_profiles_sample_rate,
+            send_default_pii=self.sentry_send_default_pii,
+            session_replay_enabled=self.sentry_session_replay_enabled,
+            daily_close_monitor_slug=self.sentry_daily_close_monitor_slug,
+            backup_monitor_slug=self.sentry_backup_monitor_slug,
+            evidence_monitor_slug=self.sentry_evidence_monitor_slug,
+        )
+
+    def redacted_summary(self) -> dict[str, str | bool | int | float | None]:
         """Return the only settings fields approved for diagnostics and evidence."""
         return {
             "run_mode": self.run_mode.value,
@@ -420,6 +484,15 @@ class Settings(BaseSettings):
             "monitor_token_configured": bool(self.security.monitor_token_value),
             "operator_public_origin": self.security.public_origin,
             "operator_public_host": self.security.public_host,
+            "log_format": self.observability.log_format.value,
+            "sentry_release": self.observability.release,
+            "backend_sentry_configured": bool(self.observability.backend_dsn_value),
+            "browser_sentry_configured": bool(self.observability.browser_dsn),
+            "sentry_traces_sample_rate": self.observability.traces_sample_rate,
+            "sentry_profiles_sample_rate": self.observability.profiles_sample_rate,
+            "sentry_send_default_pii": self.observability.send_default_pii,
+            "sentry_session_replay_enabled": self.observability.session_replay_enabled,
+            "sentry_cron_monitors_configured": bool(self.observability.cron_monitor_slugs),
         }
 
 

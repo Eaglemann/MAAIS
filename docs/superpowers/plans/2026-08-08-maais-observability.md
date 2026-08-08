@@ -90,15 +90,15 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
 **Produces:** Role-aware Sentry/log settings with zero secret serialization.
 
-- [ ] Write failing tests proving production requires JSON logs, release equals 40-character Git SHA, backend DSN is secret, browser DSN is the only client-exposed value, sampling is bounded, and PII/replay cannot be enabled.
+- [x] Write failing tests proving production requires JSON logs, release equals 40-character Git SHA, backend DSN is secret, browser DSN is the only client-exposed value, sampling is bounded, and PII/replay cannot be enabled.
 
-- [ ] Run tests and confirm missing configuration.
+- [x] Run tests and confirm missing configuration.
 
   ```bash
   uv run pytest -q tests/unit/config/test_observability_settings.py
   ```
 
-- [ ] Add backend and frontend SDKs from their lockfile-resolved registries.
+- [x] Add backend and frontend SDKs from their lockfile-resolved registries.
 
   ```bash
   uv add 'sentry-sdk[fastapi]'
@@ -106,9 +106,9 @@ ALLOWED_COMMON_FIELDS = frozenset(
   npm --prefix dashboard install --save-dev @sentry/vite-plugin
   ```
 
-- [ ] Implement `ObservabilitySettings` with backend `SecretStr`, exact environment/release, explicit trace/profile sample rates defaulting to `0.0` for the qualification candidate, and named daily-close/backup/evidence Cron slugs.
+- [x] Implement `ObservabilitySettings` with backend `SecretStr`, exact environment/release, explicit trace/profile sample rates defaulting to `0.0` for the qualification candidate, and named daily-close/backup/evidence Cron slugs.
 
-- [ ] Run focused tests, audits, Ruff, Pyright, and frontend typecheck.
+- [x] Run focused tests, audits, Ruff, Pyright, and frontend typecheck.
 
   ```bash
   uv run pytest -q tests/unit/config/test_observability_settings.py
@@ -121,7 +121,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add pyproject.toml uv.lock dashboard/package.json dashboard/package-lock.json maais/config/observability.py maais/config/settings.py tests/unit/config/test_observability_settings.py

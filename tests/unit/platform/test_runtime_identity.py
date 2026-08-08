@@ -19,7 +19,7 @@ from maais.platform.runtime import (
     build_runtime_identity_evidence,
     process_boot_identity,
 )
-from tests.security_support import railway_security_values
+from tests.security_support import railway_observability_values, railway_security_values
 from tests.unit.platform.test_registry_domain import _descriptor
 
 NOW = datetime(2026, 8, 8, 12, tzinfo=timezone.utc)
@@ -32,6 +32,7 @@ def _settings(tmp_path: Path, descriptor: CandidateDescriptor, **overrides: obje
     candidate_path.write_text(json.dumps(descriptor.to_json_data()), encoding="utf-8")
     values: dict[str, object] = {
         **railway_security_values(),
+        **railway_observability_values(ServiceRole.WORKER),
         "deployment_target": DeploymentTarget.RAILWAY,
         "run_mode": "paper_live",
         "environment": "qualification",

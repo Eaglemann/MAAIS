@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from maais.config.cloud import ServiceRole
 from maais.config.security import AuthMode
 from maais.security.passwords import hash_operator_password
 
@@ -26,3 +27,25 @@ def railway_security_values() -> dict[str, object]:
         "operator_secure_cookies": True,
         "operator_public_origin": "https://mission-control.test",
     }
+
+
+def railway_observability_values(service_role: ServiceRole) -> dict[str, object]:
+    values: dict[str, object] = {
+        "log_format": "json",
+        "sentry_backend_dsn": (
+            "https://backend-public-key@o0.ingest.sentry.io/123"  # pragma: allowlist secret
+        ),
+    }
+    if service_role is ServiceRole.WEB:
+        values["sentry_browser_dsn"] = (
+            "https://browser-public-key@o0.ingest.sentry.io/456"  # pragma: allowlist secret
+        )
+    if service_role is ServiceRole.OPERATIONS:
+        values.update(
+            {
+                "sentry_daily_close_monitor_slug": "maais-qualification-daily-close",
+                "sentry_backup_monitor_slug": "maais-qualification-backup",
+                "sentry_evidence_monitor_slug": "maais-qualification-evidence",
+            }
+        )
+    return values

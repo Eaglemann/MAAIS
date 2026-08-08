@@ -19,7 +19,7 @@ from tests.integration.database_role_support import (
     cleanup_database_roles,
     integration_role_passwords,
 )
-from tests.security_support import railway_security_values
+from tests.security_support import railway_observability_values, railway_security_values
 from tests.unit.platform.test_registry_domain import _descriptor
 
 pytestmark = pytest.mark.integration
@@ -49,6 +49,7 @@ def _settings(
     }
     return Settings(
         **railway_security_values(),
+        **railway_observability_values(service_role),
         deployment_target=DeploymentTarget.RAILWAY,
         run_mode="paper_live",
         environment="qualification",
