@@ -36,7 +36,7 @@ async def collect_database_identity(engine: AsyncEngine) -> dict[str, object]:
 
 
 async def collect_configured_database_identity() -> dict[str, object]:
-    engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
+    engine = create_async_engine(get_settings().database_url_value, pool_pre_ping=True)
     try:
         return await collect_database_identity(engine)
     finally:

@@ -291,8 +291,8 @@ def evaluate_soak_readiness(
     safety_passed = (
         manifest.mode is RunMode.PAPER_LIVE
         and experiment.get("mode") == "paper_live"
-        and not settings.binance_demo_api_key
-        and not settings.binance_demo_api_secret
+        and not settings.binance_demo_api_key_value
+        and not settings.binance_demo_api_secret_value
     )
     postgres_identity_passed = (
         isinstance(docker_context, str)
@@ -1188,7 +1188,7 @@ async def build_configured_soak_readiness(
     generated_at = datetime.now(UTC)
     repository, database_state, database_identity = await asyncio.gather(
         asyncio.to_thread(capture_repository_identity, repository_root),
-        _database_soak_state(settings.database_url, manifest),
+        _database_soak_state(settings.database_url_value, manifest),
         collect_configured_database_identity(),
     )
     (

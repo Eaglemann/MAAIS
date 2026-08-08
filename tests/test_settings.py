@@ -14,8 +14,8 @@ def test_run_modes_are_closed() -> None:
 def test_settings_default_to_replay_without_credentials() -> None:
     settings = Settings(_env_file=None)
     assert settings.run_mode is RunMode.REPLAY
-    assert settings.binance_demo_api_key == ""
-    assert settings.binance_demo_api_secret == ""
+    assert settings.binance_demo_api_key_value == ""
+    assert settings.binance_demo_api_secret_value == ""
 
 
 def test_live_is_not_a_valid_mode() -> None:

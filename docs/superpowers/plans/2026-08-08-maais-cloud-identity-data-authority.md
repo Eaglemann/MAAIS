@@ -169,7 +169,7 @@ class ServiceInstance:
 
 **Produces:** Typed deployment target, service role, region, descriptor path, expected schema, and secret-safe database role settings.
 
-- [ ] Write failing tests proving local defaults remain valid, Railway requires every identity field, official paper mode rejects any exchange credential, and secret fields are absent from `repr` and `model_dump(mode="json")`.
+- [x] Write failing tests proving local defaults remain valid, Railway requires every identity field, official paper mode rejects any exchange credential, and secret fields are absent from `repr` and `model_dump(mode="json")`.
 
   ```python
   def test_railway_paper_settings_require_complete_identity_and_no_exchange_credentials() -> None:
@@ -200,7 +200,7 @@ class ServiceInstance:
           )
   ```
 
-- [ ] Run the focused tests and confirm they fail because the cloud fields and validators do not exist.
+- [x] Run the focused tests and confirm they fail because the cloud fields and validators do not exist.
 
   ```bash
   uv run pytest -q tests/unit/config/test_cloud_settings.py tests/test_settings.py
@@ -208,7 +208,7 @@ class ServiceInstance:
 
   Expected: new Railway configuration assertions fail; existing local settings tests remain green.
 
-- [ ] Implement `CloudSettings` as a nested frozen Pydantic model and add a model-level validator in `Settings` that is inactive for `DeploymentTarget.LOCAL` and fail closed for Railway.
+- [x] Keep Railway environment variables as top-level `Settings` fields, expose them through a frozen `CloudSettings` view, and add a model-level validator in `Settings` that is inactive for `DeploymentTarget.LOCAL` and fail closed for Railway. This preserves Railway's built-in variable names instead of requiring nested environment syntax.
 
   ```python
   class CloudSettings(BaseModel):
@@ -226,11 +226,21 @@ class ServiceInstance:
       candidate_descriptor_path: Path = Path("/app/candidate.json")
       expected_schema_revision: str = ""
       database_role_name: str = ""
+
+
+  class Settings(BaseSettings):
+      deployment_target: DeploymentTarget = DeploymentTarget.LOCAL
+      service_role: ServiceRole | None = None
+      railway_project_id: str = ""
+
+      @property
+      def cloud(self) -> CloudSettings:
+          raise NotImplementedError
   ```
 
-- [ ] Add an explicit `Settings.redacted_summary()` allowlist instead of serializing the settings model in logs.
+- [x] Add an explicit `Settings.redacted_summary()` allowlist instead of serializing the settings model in logs.
 
-- [ ] Re-run focused tests, Ruff, and Pyright.
+- [x] Re-run focused tests, Ruff, and Pyright.
 
   ```bash
   uv run pytest -q tests/unit/config/test_cloud_settings.py tests/test_settings.py
@@ -240,7 +250,7 @@ class ServiceInstance:
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/config/cloud.py maais/config/settings.py tests/unit/config/test_cloud_settings.py tests/test_settings.py

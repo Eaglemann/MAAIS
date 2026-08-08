@@ -8,6 +8,7 @@ from functools import partial
 from uuid import UUID
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import delete, event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -239,7 +240,7 @@ async def test_health_verification_keeps_one_snapshot_during_concurrent_write(
     manifest, bundle = await _prepare_bundle(uow_factory)
     first_read_complete = asyncio.Event()
     concurrent_write_complete = asyncio.Event()
-    settings = get_settings().model_copy(update={"database_url": test_database_url})
+    settings = get_settings().model_copy(update={"database_url": SecretStr(test_database_url)})
 
     monkeypatch.setattr(
         "maais.operations.health.get_settings",
@@ -292,7 +293,7 @@ async def test_daily_report_keeps_one_snapshot_during_concurrent_write(
     manifest, bundle = await _prepare_bundle(uow_factory, mode=RunMode.PAPER_LIVE)
     first_read_complete = asyncio.Event()
     concurrent_write_complete = asyncio.Event()
-    settings = get_settings().model_copy(update={"database_url": test_database_url})
+    settings = get_settings().model_copy(update={"database_url": SecretStr(test_database_url)})
 
     async def build_snapshot_probe(session, *_args, **_kwargs) -> dict[str, object]:
         result = await _snapshot_consistency_probe(

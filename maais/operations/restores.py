@@ -273,12 +273,12 @@ async def restore_configured_database(
     backup = load_verified_backup(backup_directory)
     await asyncio.to_thread(
         restore_archive,
-        settings.database_url,
+        settings.database_url_value,
         backup,
         target_database=target_database,
         confirmation=confirmation,
     )
-    restored_url = restored_database_url(settings.database_url, target_database)
+    restored_url = restored_database_url(settings.database_url_value, target_database)
     restored = await collect_backup_metadata(restored_url)
     return write_restore_verification(
         backup,

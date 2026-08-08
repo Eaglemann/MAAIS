@@ -93,7 +93,7 @@ async def apply_configured_incident_action(
     operator_confirmed: bool = False,
 ) -> dict[str, object]:
     """Apply an operator transition against the configured local database."""
-    engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
+    engine = create_async_engine(get_settings().database_url_value, pool_pre_ping=True)
     try:
         return await apply_incident_action(
             UnitOfWork(async_sessionmaker(engine, expire_on_commit=False)),

@@ -43,7 +43,7 @@ async def verify_ledger_with_factory(
 
 async def verify_configured_ledger() -> dict[str, object]:
     """Verify the configured database using an isolated, quiet connection pool."""
-    engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
+    engine = create_async_engine(get_settings().database_url_value, pool_pre_ping=True)
     try:
         return await verify_ledger_with_factory(async_sessionmaker(engine, expire_on_commit=False))
     finally:

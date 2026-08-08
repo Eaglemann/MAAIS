@@ -239,10 +239,10 @@ async def collect_backup_metadata(database_url: str) -> BackupMetadata:
 
 async def backup_configured_database(output_directory: Path) -> BackupBundlePaths:
     settings = get_settings()
-    metadata = await collect_backup_metadata(settings.database_url)
+    metadata = await collect_backup_metadata(settings.database_url_value)
     return await asyncio.to_thread(
         create_database_backup,
-        settings.database_url,
+        settings.database_url_value,
         output_directory,
         metadata,
         generated_at=datetime.now(UTC),

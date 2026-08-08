@@ -374,7 +374,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if passed else 1
     if arguments.command == "qualify-candidate":
         test_database_url = (
-            os.environ.get("MAAIS_TEST_DATABASE_URL") or settings.maais_test_database_url
+            os.environ.get("MAAIS_TEST_DATABASE_URL") or settings.maais_test_database_url_value
         )
         if not test_database_url:
             raise ValueError(

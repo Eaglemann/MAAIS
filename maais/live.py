@@ -81,11 +81,11 @@ async def run_live_paper_manifest(
 ) -> None:
     if manifest.mode is not RunMode.PAPER_LIVE or settings.run_mode is not RunMode.PAPER_LIVE:
         raise ValueError("paper-live command requires manifest and RUN_MODE=paper_live")
-    if settings.binance_demo_api_key or settings.binance_demo_api_secret:
+    if settings.binance_demo_api_key_value or settings.binance_demo_api_secret_value:
         raise ValueError("paper-live refuses configured exchange credentials")
     writer = status_writer or _print_status
     engine = create_async_engine(
-        settings.database_url,
+        settings.database_url_value,
         pool_size=5,
         max_overflow=10,
         pool_pre_ping=True,

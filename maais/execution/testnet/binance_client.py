@@ -161,9 +161,9 @@ def build_authenticated_execution_client(settings: Settings) -> BinanceDemoFutur
 
     if settings.run_mode is not RunMode.TESTNET_SMOKE:
         raise ValueError("authenticated execution is limited to testnet_smoke")
-    if not settings.binance_demo_api_key or not settings.binance_demo_api_secret:
+    if not settings.binance_demo_api_key_value or not settings.binance_demo_api_secret_value:
         raise ValueError("both Binance Demo credentials are required")
     return BinanceDemoFuturesClient(
-        api_key=settings.binance_demo_api_key,
-        api_secret=settings.binance_demo_api_secret,
+        api_key=settings.binance_demo_api_key_value,
+        api_secret=settings.binance_demo_api_secret_value,
     )
