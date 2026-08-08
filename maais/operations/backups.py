@@ -13,11 +13,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from maais.artifacts.models import validate_sha256
 from maais.config.settings import get_settings
 from maais.db.replay import verify_ledger_consistency
 from maais.domain.json import content_hash, to_json_data
@@ -34,6 +37,105 @@ class BackupMetadata:
     database_size_bytes: int
     table_counts: dict[str, int]
     ledger: dict[str, object]
+    producer: BackupProducerIdentity | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BackupProducerIdentity:
+    artifact_schema_version: Literal[1]
+    environment: str
+    candidate_hash: str
+    experiment_id: UUID
+    run_id: UUID
+    operation_id: UUID
+    database_system_identifier_sha256: str
+    railway_deployment_id: str
+    railway_replica_id: str
+    railway_region: str
+
+    def __post_init__(self) -> None:
+        if self.artifact_schema_version != 1:
+            raise ValueError("artifact_schema_version must be 1")
+        if self.environment not in {"qualification", "production"}:
+            raise ValueError("backup environment must be qualification or production")
+        try:
+            validate_sha256(self.candidate_hash)
+        except ValueError as error:
+            raise ValueError("backup candidate_hash must be lowercase SHA-256") from error
+        try:
+            validate_sha256(self.database_system_identifier_sha256)
+        except ValueError as error:
+            raise ValueError(
+                "backup database_system_identifier_sha256 must be lowercase SHA-256"
+            ) from error
+        for name, value in (
+            ("experiment_id", self.experiment_id),
+            ("run_id", self.run_id),
+            ("operation_id", self.operation_id),
+        ):
+            if not isinstance(value, UUID) or value.int == 0:
+                raise ValueError(f"backup {name} must be a non-nil UUID")
+        for name, value in (
+            ("railway_deployment_id", self.railway_deployment_id),
+            ("railway_replica_id", self.railway_replica_id),
+            ("railway_region", self.railway_region),
+        ):
+            if not value or value != value.strip() or len(value) > 128:
+                raise ValueError(f"backup {name} must be nonempty, trimmed, and bounded")
+
+    def to_json_data(self) -> dict[str, object]:
+        return {
+            "artifact_schema_version": self.artifact_schema_version,
+            "candidate_hash": self.candidate_hash,
+            "database_system_identifier_sha256": self.database_system_identifier_sha256,
+            "environment": self.environment,
+            "experiment_id": str(self.experiment_id),
+            "operation_id": str(self.operation_id),
+            "railway_deployment_id": self.railway_deployment_id,
+            "railway_region": self.railway_region,
+            "railway_replica_id": self.railway_replica_id,
+            "run_id": str(self.run_id),
+        }
+
+    @classmethod
+    def from_json_data(cls, value: object) -> BackupProducerIdentity:
+        expected = {
+            "artifact_schema_version",
+            "candidate_hash",
+            "database_system_identifier_sha256",
+            "environment",
+            "experiment_id",
+            "operation_id",
+            "railway_deployment_id",
+            "railway_region",
+            "railway_replica_id",
+            "run_id",
+        }
+        if not isinstance(value, dict) or set(value) != expected:
+            raise ValueError("backup producer identity must contain exact fields")
+        if (
+            type(value["artifact_schema_version"]) is not int
+            or value["artifact_schema_version"] != 1
+        ):
+            raise ValueError("backup producer identity artifact schema is invalid")
+        string_fields = expected - {"artifact_schema_version"}
+        if any(type(value[field]) is not str for field in string_fields):
+            raise ValueError("backup producer identity must contain string fields")
+        try:
+            return cls(
+                artifact_schema_version=1,
+                environment=value["environment"],
+                candidate_hash=value["candidate_hash"],
+                experiment_id=UUID(value["experiment_id"]),
+                run_id=UUID(value["run_id"]),
+                operation_id=UUID(value["operation_id"]),
+                database_system_identifier_sha256=value["database_system_identifier_sha256"],
+                railway_deployment_id=value["railway_deployment_id"],
+                railway_replica_id=value["railway_replica_id"],
+                railway_region=value["railway_region"],
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("backup producer identity is invalid") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +143,8 @@ class BackupBundlePaths:
     directory: Path
     dump_path: Path
     manifest_path: Path
+    report_id: str | None = None
+    bundle_manifest_path: Path | None = None
 
 
 def postgres_cli_connection(database_url: str) -> tuple[list[str], dict[str, str]]:
@@ -116,15 +220,16 @@ def create_database_backup(
     if not re.fullmatch(r"[A-Za-z0-9_-]+", metadata.database_name):
         raise ValueError("database name is not safe for a backup bundle path")
 
-    inventory_hash = content_hash(
-        {
-            "database": metadata.database_name,
-            "schema_revision": metadata.schema_revision,
-            "database_size_bytes": metadata.database_size_bytes,
-            "table_counts": metadata.table_counts,
-            "ledger": metadata.ledger,
-        }
-    )
+    inventory_payload: dict[str, object] = {
+        "database": metadata.database_name,
+        "schema_revision": metadata.schema_revision,
+        "database_size_bytes": metadata.database_size_bytes,
+        "table_counts": metadata.table_counts,
+        "ledger": metadata.ledger,
+    }
+    if metadata.producer is not None:
+        inventory_payload["producer"] = metadata.producer.to_json_data()
+    inventory_hash = content_hash(inventory_payload)
     timestamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
     bundle_name = f"{timestamp}-{metadata.database_name}-{inventory_hash[:12]}"
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -141,6 +246,7 @@ def create_database_backup(
         temporary_path = Path(temporary)
         dump_path = temporary_path / "database.dump"
         manifest_path = temporary_path / "backup-manifest.json"
+        bundle_manifest_path = temporary_path / "bundle-manifest.json"
         _run_checked(
             runner,
             [
@@ -162,35 +268,66 @@ def create_database_backup(
             ["pg_restore", "--list", str(dump_path)],
             environment=environment,
         )
-        manifest = to_json_data(
-            {
-                "backup_schema_version": 1,
-                "created_at": generated_at,
-                "database_name": metadata.database_name,
-                "schema_revision": metadata.schema_revision,
-                "database_size_bytes": metadata.database_size_bytes,
-                "table_counts": dict(sorted(metadata.table_counts.items())),
-                "ledger": metadata.ledger,
-                "inventory_hash": inventory_hash,
-                "pg_dump_version": pg_dump_version,
-                "dump": {
-                    "filename": dump_path.name,
-                    "bytes": dump_path.stat().st_size,
-                    "sha256": _sha256(dump_path),
-                    "format": "postgresql_custom",
-                    "compression": 9,
-                },
-            }
-        )
+        manifest_payload: dict[str, object] = {
+            "backup_schema_version": 2 if metadata.producer is not None else 1,
+            "created_at": generated_at,
+            "database_name": metadata.database_name,
+            "schema_revision": metadata.schema_revision,
+            "database_size_bytes": metadata.database_size_bytes,
+            "table_counts": dict(sorted(metadata.table_counts.items())),
+            "ledger": metadata.ledger,
+            "inventory_hash": inventory_hash,
+            "pg_dump_version": pg_dump_version,
+            "dump": {
+                "filename": dump_path.name,
+                "bytes": dump_path.stat().st_size,
+                "sha256": _sha256(dump_path),
+                "format": "postgresql_custom",
+                "compression": 9,
+            },
+        }
+        report_id: str | None = None
+        if metadata.producer is not None:
+            producer = metadata.producer.to_json_data()
+            manifest_payload.update(
+                artifact_schema_version=metadata.producer.artifact_schema_version,
+                producer=producer,
+            )
+            report_id = content_hash(to_json_data(manifest_payload))
+            manifest_payload["report_id"] = report_id
+        manifest = to_json_data(manifest_payload)
         manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        if report_id is not None:
+            artifacts = (manifest_path, dump_path)
+            bundle_manifest_path.write_text(
+                json.dumps(
+                    {
+                        "artifact_schema_version": 1,
+                        "report_id": report_id,
+                        "artifacts": {
+                            path.name: {
+                                "bytes": path.stat().st_size,
+                                "sha256": _sha256(path),
+                            }
+                            for path in artifacts
+                        },
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         temporary_path.replace(target)
     return BackupBundlePaths(
         directory=target,
         dump_path=target / "database.dump",
         manifest_path=target / "backup-manifest.json",
+        report_id=report_id,
+        bundle_manifest_path=(target / "bundle-manifest.json" if report_id is not None else None),
     )
 
 

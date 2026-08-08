@@ -267,6 +267,20 @@ class ArtifactRepository:
                 return record
         return None
 
+    async def get_record(self, record_id: UUID) -> ArtifactRecord:
+        row = await self._session.get(ArtifactRecordModel, record_id)
+        if row is None:
+            raise LookupError("artifact catalog record does not exist")
+        records = await self.list_stream(
+            environment=row.environment,
+            candidate_hash=row.candidate_hash,
+            experiment_id=row.experiment_id,
+        )
+        for record in records:
+            if record.id == record_id:
+                return record
+        raise ArtifactCatalogIntegrityError("artifact catalog record is absent from its stream")
+
     async def next_stream_position(
         self,
         *,
