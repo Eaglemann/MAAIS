@@ -10,6 +10,7 @@ from uuid import UUID
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import delete, event, func, select, update
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from maais.config.modes import RunMode
@@ -490,8 +491,8 @@ async def test_backup_inventory_reconciles_database_before_dump(
 
     metadata = await collect_backup_metadata(test_database_url)
 
-    assert metadata.database_name == "maais_test"
-    assert metadata.schema_revision == "0018"
+    assert metadata.database_name == make_url(test_database_url).database
+    assert metadata.schema_revision == "0019"
     assert metadata.table_counts["decision_cycles"] == 1
     assert metadata.table_counts["agent_evaluations"] == 8
     assert metadata.ledger == {"ok": True, "error_count": 0, "errors": []}

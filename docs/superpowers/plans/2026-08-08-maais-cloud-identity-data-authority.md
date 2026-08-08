@@ -338,15 +338,17 @@ class ServiceInstance:
 - Create: `alembic/versions/0019_cloud_platform_registry.py`
 - Create: `maais/db/models/platform.py`
 - Modify: `maais/db/models/__init__.py`
+- Modify: `alembic/env.py`
 - Modify: `tests/integration/conftest.py`
 - Modify: `.github/workflows/ci.yml`
 - Test: `tests/integration/test_platform_schema.py`
+- Test: `tests/unit/db/test_platform_models.py`
 
 **Consumes:** Candidate descriptor and runtime/run domain interfaces.
 
 **Produces:** `platform_candidates`, `run_instances`, and `service_instances` with immutable identities and monotonic lifecycle constraints.
 
-- [ ] Write a failing schema parity test and assert the exact columns, foreign keys, unique constraints, checks, and indexes.
+- [x] Write a failing schema parity test and assert the exact columns, foreign keys, unique constraints, checks, and indexes.
 
   ```python
   PLATFORM_TABLES = (
@@ -360,13 +362,13 @@ class ServiceInstance:
       await assert_schema_matches_models(db_connection, PLATFORM_TABLES)
   ```
 
-- [ ] Run the test and confirm it fails because migration `0019` and models are absent.
+- [x] Run the test and confirm it fails because migration `0019` and models are absent.
 
   ```bash
   uv run pytest -q tests/integration/test_platform_schema.py
   ```
 
-- [ ] Create tables with UUID primary keys, UTC timestamps, JSONB descriptor/runtime evidence, 64-character hash checks, lifecycle checks, unique candidate hash, unique boot ID, and indexes on candidate status, run environment/status, and service heartbeat.
+- [x] Create tables with UUID primary keys, UTC timestamps, JSONB descriptor/runtime evidence, 64-character hash checks, lifecycle checks, unique candidate hash, unique boot ID, and indexes on candidate status, run environment/status, and service heartbeat.
 
   ```python
   revision: str = "0019"
@@ -394,9 +396,9 @@ class ServiceInstance:
 
   Continue the migration with the exact `run_instances` and `service_instances` columns defined by `PlatformRun` and `ServiceInstance`. Enforce at most one active official run per Railway environment with a partial unique index; bind activation to an operator command and worker boot; persist `continuity_invalidated` and its immutable reason; allow a nullable snapshot only when Railway does not expose one. The downgrade drops in reverse dependency order.
 
-- [ ] Add all three tables to `_PHASE_ONE_TABLES` before `experiments`, and change the CI head assertion from `0018` to `0019` in this commit.
+- [x] Add all three tables to `_PHASE_ONE_TABLES` before `experiments`, and change the CI head assertion from `0018` to `0019` in this commit.
 
-- [ ] Run migration upgrade/downgrade/re-upgrade and parity tests against the isolated PostgreSQL test database.
+- [x] Run migration upgrade/downgrade/re-upgrade and parity tests against the isolated PostgreSQL test database.
 
   ```bash
   uv run alembic upgrade head
@@ -408,7 +410,7 @@ class ServiceInstance:
 
   Expected: both test runs pass and `alembic_version.version_num` is `0019`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add alembic/versions/0019_cloud_platform_registry.py maais/db/models/platform.py maais/db/models/__init__.py tests/integration/conftest.py tests/integration/test_platform_schema.py .github/workflows/ci.yml

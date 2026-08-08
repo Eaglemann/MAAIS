@@ -35,6 +35,11 @@ from maais.db.models.operations import (
     WorkerCheckpointModel,
     WorkerLeaseModel,
 )
+from maais.db.models.platform import (
+    PlatformCandidateModel,
+    RunInstanceModel,
+    ServiceInstanceModel,
+)
 
 __all__ = [
     "AccountSnapshotModel",
@@ -63,6 +68,9 @@ __all__ = [
     "OperatorCommandModel",
     "PositionLotModel",
     "PositionModel",
+    "PlatformCandidateModel",
+    "RunInstanceModel",
+    "ServiceInstanceModel",
     "StrategyVersionModel",
     "TradeProposalModel",
     "TradingControlModel",

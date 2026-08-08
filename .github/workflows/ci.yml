@@ -88,6 +88,9 @@ jobs:
           enable-cache: true
       - run: uv sync --locked --dev
       - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      - run: uv run alembic downgrade -1
+      - run: uv run alembic upgrade head
       - run: >-
           uv run pytest -q
           --cov=maais.execution.paper
@@ -100,4 +103,4 @@ jobs:
           --cov-fail-under=80
       - run: >-
           PGPASSWORD=maais psql -h localhost -U maais -d maais_test -Atc
-          'select version_num from alembic_version' | grep -Fx 0018
+          'select version_num from alembic_version' | grep -Fx 0019

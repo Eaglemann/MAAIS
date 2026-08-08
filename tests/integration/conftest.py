@@ -46,6 +46,9 @@ _PHASE_ONE_TABLES = (
     "event_streams",
     "agent_versions",
     "strategy_versions",
+    "service_instances",
+    "run_instances",
+    "platform_candidates",
     "experiments",
 )
 
