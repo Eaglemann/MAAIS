@@ -19,6 +19,7 @@ from maais.db.repositories.operator_commands import OperatorCommandRepository
 from maais.db.repositories.orchestration import OrchestrationRepository
 from maais.db.repositories.platform import PlatformRepository
 from maais.db.repositories.scheduled_operations import ScheduledOperationRepository
+from maais.db.repositories.sessions import OperatorSessionRepository
 from maais.db.repositories.workers import WorkerLeaseRepository
 
 
@@ -39,6 +40,7 @@ class UnitOfWorkContext:
     platform: PlatformRepository
     artifacts: ArtifactRepository
     scheduled_operations: ScheduledOperationRepository
+    sessions: OperatorSessionRepository
 
 
 class UnitOfWork:
@@ -68,4 +70,5 @@ class UnitOfWork:
                     platform=PlatformRepository(session),
                     artifacts=ArtifactRepository(session),
                     scheduled_operations=ScheduledOperationRepository(session),
+                    sessions=OperatorSessionRepository(session),
                 )

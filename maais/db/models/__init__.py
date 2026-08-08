@@ -13,6 +13,7 @@ from maais.db.models.artifacts import (
     ArtifactRecordModel,
     ScheduledOperationModel,
 )
+from maais.db.models.auth import OperatorAuthStateModel, OperatorSessionModel
 from maais.db.models.counterfactuals import CounterfactualModel
 from maais.db.models.decisions import (
     AgentEvaluationModel,
@@ -73,6 +74,8 @@ __all__ = [
     "OrderEventModel",
     "OrderIntentModel",
     "OperatorCommandModel",
+    "OperatorAuthStateModel",
+    "OperatorSessionModel",
     "PositionLotModel",
     "PositionModel",
     "PlatformCandidateModel",

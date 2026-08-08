@@ -416,7 +416,7 @@ BEGIN
         FOREACH table_name IN ARRAY ARRAY['operator_sessions', 'operator_auth_state'] LOOP
             IF pg_catalog.to_regclass('maais_auth.' || table_name) IS NOT NULL THEN
                 EXECUTE pg_catalog.format(
-                    'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE maais_auth.%I TO maais_web',
+                    'GRANT SELECT, INSERT, UPDATE ON TABLE maais_auth.%I TO maais_web',
                     table_name
                 );
             END IF;

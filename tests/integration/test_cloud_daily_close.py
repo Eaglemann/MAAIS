@@ -106,7 +106,7 @@ async def _backup_metadata(database_url: str) -> BackupMetadata:
     assert database_url == SOURCE_URL
     return BackupMetadata(
         database_name="maais",
-        schema_revision="0020",
+        schema_revision="0021",
         database_size_bytes=123_456,
         table_counts={"artifact_records": 0, "domain_events": 210},
         ledger={"ok": True, "error_count": 0, "errors": []},

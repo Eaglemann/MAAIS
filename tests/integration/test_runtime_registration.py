@@ -63,7 +63,7 @@ def _settings(
         expected_railway_region=EU_WEST_RAILWAY_REGION,
         railway_git_commit_sha=_descriptor().git_sha,
         candidate_descriptor_path=candidate_path,
-        expected_schema_revision="0020",
+        expected_schema_revision="0021",
         database_role_name=database_roles[service_role],
         artifact_store_mode="dual_s3",
         artifact_replica_endpoint_url="https://storage.railway.example",
@@ -131,7 +131,7 @@ async def test_runtime_registration_uses_real_database_identity_and_freezes_boot
             )
             assert evidence.identity.boot_id == ROLE_BOOT_IDS[role]
             assert evidence.identity.service_role is role
-            assert evidence.schema_revision == "0020"
+            assert evidence.schema_revision == "0021"
             assert len(evidence.database_system_identifier_sha256) == 64
 
         async with db_engine.connect() as connection:

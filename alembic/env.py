@@ -19,6 +19,12 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def include_name(name: str | None, type_: str, _parent_names: dict[str, str | None]) -> bool:
+    if type_ == "schema":
+        return name in (None, "public", "maais_auth")
+    return True
+
+
 def get_url() -> str:
     override = config.attributes.get("database_url")
     if isinstance(override, str) and override:
@@ -32,13 +38,20 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=True,
+        include_name=include_name,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_schemas=True,
+        include_name=include_name,
+    )
     with context.begin_transaction():
         context.run_migrations()
 

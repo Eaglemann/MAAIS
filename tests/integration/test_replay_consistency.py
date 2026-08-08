@@ -492,7 +492,7 @@ async def test_backup_inventory_reconciles_database_before_dump(
     metadata = await collect_backup_metadata(test_database_url)
 
     assert metadata.database_name == make_url(test_database_url).database
-    assert metadata.schema_revision == "0020"
+    assert metadata.schema_revision == "0021"
     assert metadata.table_counts["decision_cycles"] == 1
     assert metadata.table_counts["agent_evaluations"] == 8
     assert metadata.ledger == {"ok": True, "error_count": 0, "errors": []}

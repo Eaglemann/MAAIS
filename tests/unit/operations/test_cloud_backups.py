@@ -49,7 +49,7 @@ def _producer() -> BackupProducerIdentity:
 def _metadata(*, producer: BackupProducerIdentity | None) -> BackupMetadata:
     return BackupMetadata(
         database_name="maais",
-        schema_revision="0020",
+        schema_revision="0021",
         database_size_bytes=123_456,
         table_counts={"artifact_records": 1, "domain_events": 210},
         ledger={"ok": True, "error_count": 0, "errors": []},

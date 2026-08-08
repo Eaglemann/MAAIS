@@ -179,9 +179,9 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
 **Produces:** Expiring/revocable operator sessions and a durable global login throttle with no PII in the isolated `maais_auth` schema.
 
-- [ ] Write failing domain tests for token entropy, distinct session/CSRF tokens, UTC timestamps, idle/absolute expiry, rotation, revocation idempotency, and constant public error behavior.
+- [x] Write failing domain tests for token entropy, distinct session/CSRF tokens, UTC timestamps, idle/absolute expiry, rotation, revocation idempotency, and constant public error behavior.
 
-- [ ] Write failing PostgreSQL tests for schema parity, unique hashes, one-row `operator_auth_state`, row-locked failure counting, lockout, successful reset, expired-session rejection, and concurrent logout/authentication.
+- [x] Write failing PostgreSQL tests for schema parity, unique hashes, one-row `operator_auth_state`, row-locked failure counting, lockout, successful reset, expired-session rejection, and concurrent logout/authentication.
 
   ```python
   def test_issued_tokens_are_independent_and_high_entropy() -> None:
@@ -191,24 +191,24 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
       assert len(base64.urlsafe_b64decode(issued.csrf_token + "==")) >= 32
   ```
 
-- [ ] Run tests and confirm schema/session behavior is absent.
+- [x] Run tests and confirm schema/session behavior is absent.
 
   ```bash
   uv run pytest -q tests/unit/security/test_sessions.py tests/integration/test_operator_sessions.py
   ```
 
-- [ ] Create schema `maais_auth`, then migration `0021` tables `maais_auth.operator_sessions` and singleton `maais_auth.operator_auth_state`. Enforce 64-character hashes, positive versions/counts, lifecycle time order, and active-session indexes; downgrade drops tables before the schema.
+- [x] Create schema `maais_auth`, then migration `0021` tables `maais_auth.operator_sessions` and singleton `maais_auth.operator_auth_state`. Enforce 64-character hashes, positive versions/counts, lifecycle time order, and active-session indexes; downgrade drops tables before the schema.
 
   ```python
   revision: str = "0021"
   down_revision: str | None = "0020"
   ```
 
-- [ ] Implement session issuance with `secrets.token_urlsafe(32)`, HMAC hashes, row locks for authentication/rotation/revocation, and `hmac.compare_digest` for CSRF verification.
+- [x] Implement session issuance with `secrets.token_urlsafe(32)`, HMAC hashes, row locks for authentication/rotation/revocation, and `hmac.compare_digest` for CSRF verification.
 
-- [ ] Add `sessions: OperatorSessionRepository` to `UnitOfWorkContext`, add schema-qualified tables to integration cleanup, and update CI head assertion to `0021`.
+- [x] Add `sessions: OperatorSessionRepository` to `UnitOfWorkContext`, add schema-qualified tables to integration cleanup, and update CI head assertion to `0021`.
 
-- [ ] Run migration cycle and all focused tests.
+- [x] Run migration cycle and all focused tests.
 
   ```bash
   uv run alembic upgrade head
@@ -220,7 +220,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
   Expected: head is `0021`; all tests pass.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add alembic/versions/0021_operator_sessions.py maais/db/models/auth.py maais/security/sessions.py maais/db/repositories/sessions.py maais/db/models/__init__.py maais/db/unit_of_work.py tests/integration/conftest.py tests/unit/security/test_sessions.py tests/integration/test_operator_sessions.py .github/workflows/ci.yml

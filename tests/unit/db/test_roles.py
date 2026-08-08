@@ -112,6 +112,8 @@ def test_runtime_roles_are_explicitly_unprivileged_and_web_has_no_public_dml() -
         "operator_sessions",
         "operator_auth_state",
     )
+    assert "SELECT, INSERT, UPDATE, DELETE" not in rendered
+    assert "SELECT, INSERT, UPDATE ON TABLE MAAIS_AUTH" in rendered
     assert "ALTER ROLE MAAIS_VERIFIER SET DEFAULT_TRANSACTION_READ_ONLY = ON" in rendered
 
 

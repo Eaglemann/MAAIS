@@ -43,7 +43,6 @@ async def cleanup_database_roles(db_engine: AsyncEngine) -> None:
         await connection.execute(
             text("DROP FUNCTION IF EXISTS public._maais_utc_iso(timestamp with time zone)")
         )
-        await connection.execute(text("DROP SCHEMA IF EXISTS maais_auth CASCADE"))
         existing = set(
             await connection.scalars(
                 text(

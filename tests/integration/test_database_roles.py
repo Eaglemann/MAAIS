@@ -74,7 +74,7 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
 ) -> None:
     await _assert_roles_absent(db_engine)
     descriptor = _descriptor()
-    manifest = _manifest(experiment_id=EXPERIMENT_ONE, schema_revision="0020")
+    manifest = _manifest(experiment_id=EXPERIMENT_ONE, schema_revision="0021")
     async with uow_factory.begin() as uow:
         await uow.experiments.create(manifest)
         await uow.platform.register_candidate(
@@ -83,13 +83,6 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
             registered_at=NOW,
         )
     async with db_engine.begin() as connection:
-        await connection.execute(text("CREATE SCHEMA maais_auth"))
-        await connection.execute(
-            text("CREATE TABLE maais_auth.operator_sessions (id uuid PRIMARY KEY)")
-        )
-        await connection.execute(
-            text("CREATE TABLE maais_auth.operator_auth_state (id integer PRIMARY KEY)")
-        )
         await connection.execute(
             text("CREATE TABLE public.health_evaluations (id integer PRIMARY KEY)")
         )
@@ -152,10 +145,20 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
         async with web.begin() as connection:
             await connection.execute(
                 text(
-                    "INSERT INTO maais_auth.operator_sessions (id) "
-                    "VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')"
-                )
+                    "INSERT INTO maais_auth.operator_sessions "
+                    "(id, token_hash, csrf_hash, actor, created_at, last_seen_at, "
+                    "expires_at, revoked_at, version) VALUES "
+                    "('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', :token_hash, :csrf_hash, "
+                    "'sole_operator', :now, :now, :expires_at, NULL, 1)"
+                ),
+                {
+                    "token_hash": "a" * 64,
+                    "csrf_hash": "b" * 64,
+                    "now": NOW,
+                    "expires_at": NOW + timedelta(hours=12),
+                },
             )
+        await _expect_denied(web, "DELETE FROM maais_auth.operator_sessions")
 
         command = OperatorCommand.request(
             command_id=COMMAND_ONE,
@@ -303,10 +306,10 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
                     "maais_migrator",
                     _passwords().migrator,
                 ).render_as_string(hide_password=False),
-                expected_revision="0020",
+                expected_revision="0021",
                 repository_root=Path(__file__).resolve().parents[2],
             )
-            == "0020"
+            == "0021"
         )
     finally:
         for engine in engines:

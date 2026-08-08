@@ -77,7 +77,7 @@ async def test_cloud_restore_downloads_exact_versions_to_private_temporary_bundl
         tmp_path / "backups",
         BackupMetadata(
             database_name="maais",
-            schema_revision="0020",
+            schema_revision="0021",
             database_size_bytes=123_456,
             table_counts={"artifact_records": 0, "domain_events": 210},
             ledger={"ok": True, "error_count": 0, "errors": []},
@@ -128,7 +128,7 @@ async def test_cloud_restore_downloads_exact_versions_to_private_temporary_bundl
     async def collect_restored(_url: str) -> BackupMetadata:
         return BackupMetadata(
             database_name="maais_cloud_restore_test",
-            schema_revision="0020",
+            schema_revision="0021",
             database_size_bytes=123_999,
             table_counts={"artifact_records": 0, "domain_events": 210},
             ledger={"ok": True, "error_count": 0, "errors": []},
