@@ -114,7 +114,8 @@ def upgrade() -> None:
             name="ck_run_instance_status",
         ),
         sa.CheckConstraint(
-            "(status = 'standby' AND started_at IS NULL AND "
+            "(status = 'standby' AND requested_operator_command_id IS NULL AND "
+            "started_at IS NULL AND "
             "activating_worker_boot_id IS NULL AND NOT continuity_invalidated AND "
             "invalidated_at IS NULL AND invalidation_reason IS NULL) OR "
             "(status = 'active' AND started_at IS NOT NULL AND "
@@ -123,8 +124,10 @@ def upgrade() -> None:
             "invalidated_at IS NULL AND invalidation_reason IS NULL) OR "
             "(status = 'invalidated' AND continuity_invalidated AND "
             "invalidated_at IS NOT NULL AND invalidation_reason IS NOT NULL AND "
-            "((started_at IS NULL AND activating_worker_boot_id IS NULL) OR "
-            "(started_at IS NOT NULL AND activating_worker_boot_id IS NOT NULL))) OR "
+            "((started_at IS NULL AND requested_operator_command_id IS NULL AND "
+            "activating_worker_boot_id IS NULL) OR "
+            "(started_at IS NOT NULL AND requested_operator_command_id IS NOT NULL AND "
+            "activating_worker_boot_id IS NOT NULL))) OR "
             "(status = 'completed' AND started_at IS NOT NULL AND "
             "requested_operator_command_id IS NOT NULL AND "
             "activating_worker_boot_id IS NOT NULL AND NOT continuity_invalidated AND "

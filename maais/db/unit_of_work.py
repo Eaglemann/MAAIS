@@ -16,6 +16,7 @@ from maais.db.repositories.incidents import IncidentRepository
 from maais.db.repositories.market_data import MarketDataRepository
 from maais.db.repositories.operator_commands import OperatorCommandRepository
 from maais.db.repositories.orchestration import OrchestrationRepository
+from maais.db.repositories.platform import PlatformRepository
 from maais.db.repositories.workers import WorkerLeaseRepository
 
 
@@ -33,6 +34,7 @@ class UnitOfWorkContext:
     workers: WorkerLeaseRepository
     controls: TradingControlRepository
     commands: OperatorCommandRepository
+    platform: PlatformRepository
 
 
 class UnitOfWork:
@@ -59,4 +61,5 @@ class UnitOfWork:
                     workers=WorkerLeaseRepository(session, events),
                     controls=TradingControlRepository(session, events),
                     commands=OperatorCommandRepository(session, events),
+                    platform=PlatformRepository(session),
                 )

@@ -432,7 +432,7 @@ class ServiceInstance:
 
 **Produces:** Append-only candidate registration, explicit run lifecycle, immutable service boot registration, monotonic heartbeat, and durable invalidation.
 
-- [ ] Write failing domain tests for candidate qualification transitions, legal run transitions, and invalidation permanence.
+- [x] Write failing domain tests for candidate qualification transitions, legal run transitions, and invalidation permanence.
 
   ```python
   def test_invalidated_run_cannot_be_reactivated() -> None:
@@ -443,15 +443,15 @@ class ServiceInstance:
           invalid.activate(NOW + timedelta(seconds=2))
   ```
 
-- [ ] Write failing PostgreSQL tests for idempotent identical registration, hash collision rejection, candidate freeze after qualification, duplicate active run per environment rejection, activation without command/worker rejection, heartbeat regression rejection, immutable boot identity, and service continuity queries.
+- [x] Write failing PostgreSQL tests for idempotent identical registration, hash collision rejection, candidate freeze after qualification, duplicate active run per environment rejection, activation without command/worker rejection, heartbeat regression rejection, immutable boot identity, and service continuity queries.
 
-- [ ] Run the tests and confirm missing domain/repository behavior.
+- [x] Run the tests and confirm missing domain/repository behavior.
 
   ```bash
   uv run pytest -q tests/unit/platform/test_registry_domain.py tests/integration/test_platform_repository.py
   ```
 
-- [ ] Implement pure domain transition methods, then repository methods using row locks and PostgreSQL uniqueness as the final concurrency boundary.
+- [x] Implement pure domain transition methods, then repository methods using row locks and PostgreSQL uniqueness as the final concurrency boundary.
 
   ```python
   class PlatformRepository:
@@ -476,9 +476,9 @@ class ServiceInstance:
           raise NotImplementedError
   ```
 
-- [ ] Add `platform: PlatformRepository` to `UnitOfWorkContext` without granting it event-ledger mutation authority; platform lifecycle rows are operational evidence, not trading domain events.
+- [x] Add `platform: PlatformRepository` to `UnitOfWorkContext` without granting it event-ledger mutation authority; platform lifecycle rows are operational evidence, not trading domain events.
 
-- [ ] Re-run focused tests and the full integration repository suite.
+- [x] Re-run focused tests and the full integration repository suite.
 
   ```bash
   uv run pytest -q tests/unit/platform/test_registry_domain.py tests/integration/test_platform_repository.py tests/integration/test_operational_state_repository.py

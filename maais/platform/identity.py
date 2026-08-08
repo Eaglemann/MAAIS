@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from uuid import UUID
 
+from maais.config.cloud import ServiceRole
 from maais.config.constants import ALL_AGENTS
-from maais.domain.json import JsonValue, content_hash
+from maais.domain.json import JsonValue, MutableJsonValue, content_hash, to_json_data
 
 _SCHEMA_VERSION = 1
 _PAYLOAD_KEYS = frozenset(
@@ -122,6 +125,10 @@ class CandidateDescriptor:
             raw = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError(f"candidate descriptor is not readable valid JSON: {path}") from exc
+        return cls.from_json_data(raw)
+
+    @classmethod
+    def from_json_data(cls, raw: object) -> CandidateDescriptor:
         if not isinstance(raw, dict) or set(raw) != _DOCUMENT_KEYS:
             raise ValueError("candidate descriptor must contain exact keys")
         agent_hashes = raw["agent_implementation_hashes"]
@@ -155,6 +162,66 @@ class CandidateDescriptor:
         return {**_descriptor_payload(self), "descriptor_hash": self.descriptor_hash}
 
 
+@dataclass(frozen=True, slots=True)
+class RailwayRuntimeIdentity:
+    """Public Railway identity frozen once for the lifetime of one process boot."""
+
+    project_id: str
+    environment_id: str
+    service_id: str
+    deployment_id: str
+    snapshot_id: str | None
+    replica_id: str
+    region: str
+    service_role: ServiceRole
+    boot_id: UUID
+    candidate_hash: str
+    started_at: datetime
+
+    def __post_init__(self) -> None:
+        for field in (
+            "project_id",
+            "environment_id",
+            "service_id",
+            "deployment_id",
+            "replica_id",
+            "region",
+        ):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"{field} must be nonempty and trimmed")
+        if self.snapshot_id is not None and (
+            not self.snapshot_id or self.snapshot_id != self.snapshot_id.strip()
+        ):
+            raise ValueError("snapshot_id must be null or nonempty and trimmed")
+        if not isinstance(self.service_role, ServiceRole):
+            raise ValueError("service_role must be a ServiceRole")
+        if not isinstance(self.boot_id, UUID) or self.boot_id.int == 0:
+            raise ValueError("boot_id must be a non-nil UUID")
+        _hex_hash("candidate_hash", self.candidate_hash)
+        _require_utc(self.started_at, "started_at")
+
+    def to_json_data(self) -> dict[str, MutableJsonValue]:
+        normalized = to_json_data(
+            {
+                "project_id": self.project_id,
+                "environment_id": self.environment_id,
+                "service_id": self.service_id,
+                "deployment_id": self.deployment_id,
+                "snapshot_id": self.snapshot_id,
+                "replica_id": self.replica_id,
+                "region": self.region,
+                "service_role": self.service_role,
+                "boot_id": self.boot_id,
+                "candidate_hash": self.candidate_hash,
+                "started_at": self.started_at,
+            }
+        )
+        if not isinstance(normalized, dict):
+            raise TypeError("Railway runtime identity must serialize as an object")
+        return normalized
+
+
 def _descriptor_payload(descriptor: CandidateDescriptor) -> dict[str, JsonValue]:
     return {
         "schema_version": descriptor.schema_version,
@@ -176,6 +243,11 @@ def _hex_hash(name: str, value: object, *, length: int = 64) -> None:
         or any(character not in "0123456789abcdef" for character in value)
     ):
         raise ValueError(f"{name} must be {length} lowercase hexadecimal characters")
+
+
+def _require_utc(value: datetime, field: str) -> None:
+    if value.tzinfo is None or value.utcoffset() != timedelta(0):
+        raise ValueError(f"{field} must be UTC-aware")
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
