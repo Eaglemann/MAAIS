@@ -14,6 +14,7 @@ from maais.config.cloud import (
     ServiceRole,
 )
 from maais.config.modes import RunMode
+from maais.config.security import AuthMode, SecuritySettings
 
 
 class Settings(BaseSettings):
@@ -180,11 +181,44 @@ class Settings(BaseSettings):
         default=True,
         validation_alias="MAAIS_ARTIFACT_CANONICAL_OBJECT_LOCK_REQUIRED",
     )
+    auth_mode: AuthMode = Field(
+        default=AuthMode.LOCAL_TOKEN,
+        validation_alias="MAAIS_AUTH_MODE",
+    )
+    operator_password_hash: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_OPERATOR_PASSWORD_HASH",
+        exclude=True,
+        repr=False,
+    )
+    session_pepper: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_SESSION_PEPPER",
+        exclude=True,
+        repr=False,
+    )
+    csrf_pepper: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_CSRF_PEPPER",
+        exclude=True,
+        repr=False,
+    )
+    monitor_token: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_MONITOR_TOKEN",
+        exclude=True,
+        repr=False,
+    )
+    operator_secure_cookies: bool = Field(
+        default=True,
+        validation_alias="MAAIS_OPERATOR_SECURE_COOKIES",
+    )
 
     @model_validator(mode="after")
     def validate_railway_identity(self) -> Self:
         if self.deployment_target is DeploymentTarget.LOCAL:
             _ = self.artifacts
+            _ = self.security
             return self
         required = {
             "RAILWAY_PROJECT_ID": self.railway_project_id,
@@ -248,6 +282,8 @@ class Settings(BaseSettings):
             )
         if self.artifacts.mode is not ArtifactStoreMode.DUAL_S3:
             raise ValueError("Railway runtime requires MAAIS_ARTIFACT_STORE_MODE=dual_s3")
+        if self.security.auth_mode is not AuthMode.OPERATOR_SESSION:
+            raise ValueError("Railway runtime requires MAAIS_AUTH_MODE=operator_session")
         return self
 
     @property
@@ -321,6 +357,18 @@ class Settings(BaseSettings):
             canonical_object_lock_required=self.artifact_canonical_object_lock_required,
         )
 
+    @property
+    def security(self) -> SecuritySettings:
+        return SecuritySettings(
+            deployment_target=self.deployment_target,
+            auth_mode=self.auth_mode,
+            operator_password_hash=self.operator_password_hash,
+            session_pepper=self.session_pepper,
+            csrf_pepper=self.csrf_pepper,
+            monitor_token=self.monitor_token,
+            secure_cookies=self.operator_secure_cookies,
+        )
+
     def redacted_summary(self) -> dict[str, str | bool | int | None]:
         """Return the only settings fields approved for diagnostics and evidence."""
         return {
@@ -354,6 +402,17 @@ class Settings(BaseSettings):
             "artifact_official_evidence_retention_days": (
                 self.artifacts.retention.official_evidence_days
             ),
+            "auth_mode": self.security.auth_mode.value,
+            "operator_session_configured": self.security.operator_session_configured,
+            "operator_secure_cookies": self.security.secure_cookies,
+            "session_absolute_ttl_seconds": self.security.session_absolute_ttl_seconds,
+            "session_idle_ttl_seconds": self.security.session_idle_ttl_seconds,
+            "login_window_seconds": self.security.login_window_seconds,
+            "login_max_failures": self.security.login_max_failures,
+            "login_lockout_seconds": self.security.login_lockout_seconds,
+            "session_pepper_configured": bool(self.security.session_pepper_value),
+            "csrf_pepper_configured": bool(self.security.csrf_pepper_value),
+            "monitor_token_configured": bool(self.security.monitor_token_value),
         }
 
 

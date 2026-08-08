@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import os
-from collections.abc import Sequence
+import secrets
+import sys
+from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
@@ -55,6 +58,7 @@ from maais.operations.soak_readiness import (
 from maais.operations.verification import verify_configured_ledger
 from maais.platform.candidate import build_candidate_descriptor, write_candidate_descriptor
 from maais.platform.runtime import verify_configured_runtime_identity
+from maais.security.passwords import hash_operator_password
 
 
 def _localhost_port(value: str) -> int:
@@ -105,6 +109,14 @@ def _sha256(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="maais")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser(
+        "operator-password-hash",
+        help="interactively derive an Argon2id operator hash without shell arguments",
+    )
+    commands.add_parser(
+        "generate-secret-token",
+        help="generate one high-entropy provider secret without shell arguments",
+    )
     candidate = commands.add_parser(
         "candidate-descriptor",
         help="derive and write the canonical secret-free cloud candidate identity",
@@ -324,6 +336,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
+    if arguments.command == "operator-password-hash":
+        return operator_password_hash_command()
+    if arguments.command == "generate-secret-token":
+        return generate_secret_token_command()
     if arguments.command == "candidate-descriptor":
         descriptor = build_candidate_descriptor(
             repository_root=arguments.repository,
@@ -706,6 +722,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             flush=True,
         )
         return 1
+    return 0
+
+
+def operator_password_hash_command(
+    *,
+    reader: Callable[[str], str] | None = None,
+    output: Callable[[str], object] | None = None,
+    input_is_tty: bool | None = None,
+) -> int:
+    if (sys.stdin.isatty() if input_is_tty is None else input_is_tty) is not True:
+        raise RuntimeError("operator password hashing requires an interactive TTY")
+    read_secret = reader or getpass.getpass
+    write = output or (lambda value: print(value, end=""))
+    passphrase = read_secret("Operator passphrase: ")
+    confirmation = read_secret("Confirm operator passphrase: ")
+    if not secrets.compare_digest(passphrase, confirmation):
+        raise ValueError("operator passphrase confirmation does not match")
+    write(hash_operator_password(passphrase) + "\n")
+    return 0
+
+
+def generate_secret_token_command(
+    *,
+    output: Callable[[str], object] | None = None,
+) -> int:
+    write = output or (lambda value: print(value, end=""))
+    write(secrets.token_urlsafe(32) + "\n")
     return 0
 
 

@@ -97,7 +97,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
 **Produces:** Validated auth mode, password verifier, cookie/session policy, and secret-safe configuration.
 
-- [ ] Write failing tests proving Railway requires session auth, three independent high-entropy secrets, an Argon2id hash, production secure cookies, bounded TTL, and no secrets in representations.
+- [x] Write failing tests proving Railway requires session auth, three independent high-entropy secrets, an Argon2id hash, production secure cookies, bounded TTL, and no secrets in representations.
 
   ```python
   def test_railway_rejects_local_token_auth() -> None:
@@ -108,21 +108,21 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
           )
   ```
 
-- [ ] Write password tests for valid, invalid, malformed, and rehash-needed Argon2id values; all invalid credentials return the same public error code.
+- [x] Write password tests for valid, invalid, malformed, and rehash-needed Argon2id values; all invalid credentials return the same public error code.
 
-- [ ] Run focused tests and confirm missing dependency/module failures.
+- [x] Run focused tests and confirm missing dependency/module failures.
 
   ```bash
   uv run pytest -q tests/unit/security/test_passwords.py tests/unit/config/test_security_settings.py
   ```
 
-- [ ] Add Argon2 from the lockfile-resolved package index.
+- [x] Add Argon2 from the lockfile-resolved package index.
 
   ```bash
   uv add argon2-cffi
   ```
 
-- [ ] Implement a fixed password policy: Argon2id, minimum memory `65536` KiB, time cost `3`, parallelism `4`, hash length `32`, salt length `16`; accept a stronger existing hash and report `needs_rehash` separately.
+- [x] Implement a fixed password policy: Argon2id, minimum memory `65536` KiB, time cost `3`, parallelism `4`, hash length `32`, salt length `16`; accept a stronger existing hash and report `needs_rehash` separately.
 
   ```python
   PASSWORD_HASHER = PasswordHasher(
@@ -135,13 +135,13 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
   )
   ```
 
-- [ ] Implement `SecuritySettings` with a 12-hour absolute session TTL, 30-minute idle TTL, 15-minute login window, 5 failed attempts, and 30-minute lockout; freeze these for the initial candidate.
+- [x] Implement `SecuritySettings` with a 12-hour absolute session TTL, 30-minute idle TTL, 15-minute login window, 5 failed attempts, and 30-minute lockout; freeze these for the initial candidate.
 
-- [ ] Add `maais operator-password-hash` using `getpass` twice on a real TTY and `maais generate-secret-token` using `secrets.token_urlsafe(32)`. Reject password/secret command-line arguments and redirected password input so values never enter shell history or agent tool output. The runbook instructs the operator to run these commands personally and paste outputs directly into provider secret fields.
+- [x] Add `maais operator-password-hash` using `getpass` twice on a real TTY and `maais generate-secret-token` using `secrets.token_urlsafe(32)`. Reject password/secret command-line arguments and redirected password input so values never enter shell history or agent tool output. The runbook instructs the operator to run these commands personally and paste outputs directly into provider secret fields.
 
-- [ ] Add tests proving the helper never echoes the passphrase, requires confirmation, enforces the documented minimum passphrase policy, emits a valid Argon2id hash/high-entropy token, and produces no structured log or Sentry event.
+- [x] Add tests proving the helper never echoes the passphrase, requires confirmation, enforces the documented minimum passphrase policy, emits a valid Argon2id hash/high-entropy token, and produces no structured log or Sentry event.
 
-- [ ] Run tests, audit, Ruff, and Pyright.
+- [x] Run tests, audit, Ruff, and Pyright.
 
   ```bash
   uv run pytest -q tests/unit/security/test_passwords.py tests/unit/config/test_security_settings.py tests/test_settings.py
@@ -152,7 +152,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add pyproject.toml uv.lock maais/config/security.py maais/config/settings.py maais/security maais/cli.py tests/unit/security/test_passwords.py tests/unit/config/test_security_settings.py

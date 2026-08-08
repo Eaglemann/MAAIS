@@ -26,6 +26,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.52.1",
     "boto3>=1.43.67",
+    "argon2-cffi>=25.1.0",
 ]
 
 [project.scripts]

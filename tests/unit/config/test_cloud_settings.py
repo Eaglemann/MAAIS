@@ -6,10 +6,18 @@ from pydantic import ValidationError
 from maais.config.cloud import EU_WEST_RAILWAY_REGION, DeploymentTarget, ServiceRole
 from maais.config.modes import RunMode
 from maais.config.settings import Settings
+from tests.security_support import (
+    TEST_CSRF_PEPPER,
+    TEST_MONITOR_TOKEN,
+    TEST_SESSION_PEPPER,
+    operator_password_hash_for_tests,
+    railway_security_values,
+)
 
 
 def _railway_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
+        **railway_security_values(),
         "deployment_target": DeploymentTarget.RAILWAY,
         "run_mode": RunMode.PAPER_LIVE,
         "environment": "qualification",
@@ -179,6 +187,17 @@ def test_redacted_summary_is_an_explicit_non_secret_allowlist() -> None:
         "artifact_qualification_retention_days": 30,
         "artifact_operational_retention_days": 90,
         "artifact_official_evidence_retention_days": 365,
+        "auth_mode": "local_token",
+        "operator_session_configured": False,
+        "operator_secure_cookies": True,
+        "session_absolute_ttl_seconds": 43_200,
+        "session_idle_ttl_seconds": 1_800,
+        "login_window_seconds": 900,
+        "login_max_failures": 5,
+        "login_lockout_seconds": 1_800,
+        "session_pepper_configured": False,
+        "csrf_pepper_configured": False,
+        "monitor_token_configured": False,
     }
     serialized = json.dumps(summary, sort_keys=True)
     assert "db-canary" not in serialized
@@ -247,6 +266,12 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
         "MAAIS_EXPECTED_SCHEMA_REVISION": "0020",
         "MAAIS_DATABASE_ROLE_NAME": "maais_worker",
         "MAAIS_CANDIDATE_DESCRIPTOR_PATH": "/app/candidate.json",
+        "MAAIS_AUTH_MODE": "operator_session",
+        "MAAIS_OPERATOR_PASSWORD_HASH": operator_password_hash_for_tests(),
+        "MAAIS_SESSION_PEPPER": TEST_SESSION_PEPPER,
+        "MAAIS_CSRF_PEPPER": TEST_CSRF_PEPPER,
+        "MAAIS_MONITOR_TOKEN": TEST_MONITOR_TOKEN,
+        "MAAIS_OPERATOR_SECURE_COOKIES": "true",
         "MAAIS_ARTIFACT_STORE_MODE": "dual_s3",
         "MAAIS_ARTIFACT_REPLICA_ENDPOINT_URL": "https://storage.railway.example",
         "MAAIS_ARTIFACT_REPLICA_REGION": "auto",
