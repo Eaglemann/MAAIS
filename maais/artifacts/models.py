@@ -169,6 +169,8 @@ class ArtifactWriteRequest:
 
     def __post_init__(self) -> None:
         validate_object_key(self.key)
+        if not self.source_path.is_absolute():
+            raise ValueError("artifact source path must be absolute")
         validate_sha256(self.sha256)
         if self.size_bytes < 0:
             raise ValueError("artifact size must be non-negative")
@@ -201,7 +203,8 @@ class ArtifactPutDisposition(StrEnum):
 class StoredArtifact:
     store_name: str
     key: str
-    version_id: str
+    etag: str
+    version_id: str | None
     sha256: str
     size_bytes: int
     content_type: str
@@ -212,7 +215,9 @@ class StoredArtifact:
         if not self.store_name.strip():
             raise ValueError("artifact store name must not be empty")
         validate_object_key(self.key)
-        if not self.version_id.strip():
+        if not self.etag.strip():
+            raise ValueError("artifact ETag must not be empty")
+        if self.version_id is not None and not self.version_id.strip():
             raise ValueError("artifact version ID must not be empty")
         validate_sha256(self.sha256)
         if self.size_bytes < 0:

@@ -116,4 +116,4 @@ class ArtifactStoreContract:
 
         assert capabilities.store_name
         assert capabilities.immutable_create is True
-        assert capabilities.exact_version_reads is True
+        assert isinstance(capabilities.exact_version_reads, bool)

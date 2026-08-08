@@ -306,9 +306,9 @@ class ArtifactStore(Protocol):
 
 **Produces:** Exclusive filesystem object creation and provider-neutral S3 streaming with explicit Object Lock verification.
 
-- [ ] Instantiate the conformance suite for `FilesystemArtifactStore` and write failing tests for symlink escapes, permission mode, atomic exclusive creation, concurrent identical retry, and collision handling.
+- [x] Instantiate the conformance suite for `FilesystemArtifactStore` and write failing tests for symlink escapes, permission mode, atomic exclusive creation, concurrent identical retry, and collision handling.
 
-- [ ] Write S3 tests with botocore `Stubber` for versioning disabled, missing Object Lock, governance/compliance retention, absent version ID, multipart ETag, exact version read, credential-safe errors, and 8 MiB streaming upload chunks.
+- [x] Write S3 tests with botocore `Stubber` for Railway's explicitly unsupported versioning/Object Lock capabilities, canonical versioning disabled, missing canonical Object Lock, governance/compliance retention, absent canonical version ID, multipart ETag, exact canonical-version read, credential-safe errors, and 8 MiB streaming upload chunks.
 
   ```python
   def test_canonical_capabilities_require_enabled_versioning_and_object_lock() -> None:
@@ -318,15 +318,15 @@ class ArtifactStore(Protocol):
           asyncio.run(store.capabilities())
   ```
 
-- [ ] Run focused tests and confirm adapter imports fail.
+- [x] Run focused tests and confirm adapter imports fail.
 
   ```bash
   uv run pytest -q tests/unit/artifacts/test_filesystem_store.py tests/unit/artifacts/test_s3_store.py tests/contracts/test_artifact_stores.py
   ```
 
-- [ ] Implement filesystem writes with `os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)`, `fsync`, parent-directory containment checks, and streamed read-back.
+- [x] Implement filesystem writes with `os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)`, `fsync`, parent-directory containment checks, and streamed read-back.
 
-- [ ] Implement `S3ArtifactStore` using boto3 calls inside `asyncio.to_thread`, exact `VersionId` reads, `ContentLength`, provider retention APIs, and `before-call` exception redaction. Do not compare ETag to MD5.
+- [x] Implement `S3ArtifactStore` using boto3 calls inside `asyncio.to_thread`, exact `VersionId` reads, `ContentLength`, provider retention APIs, and secret-safe exception translation. Do not compare ETag to MD5.
 
   ```python
   class S3ArtifactStore:
@@ -344,9 +344,9 @@ class ArtifactStore(Protocol):
           self._chunk_size = chunk_size
   ```
 
-- [ ] Ensure `put_verified` always reads back from the returned version and recomputes SHA-256 before returning.
+- [x] Ensure `put_verified` always recomputes SHA-256 from read-back bytes before returning: by immutable content-addressed key for the non-versioned Railway replica and by the exact returned provider version for the canonical store.
 
-- [ ] Run conformance tests, dependency audit, Ruff, and Pyright.
+- [x] Run conformance tests, dependency audit, Ruff, and Pyright.
 
   ```bash
   uv run pytest -q tests/unit/artifacts tests/contracts/test_artifact_stores.py
@@ -357,7 +357,7 @@ class ArtifactStore(Protocol):
 
   Expected: all commands exit `0`; provider errors expose only stable error codes.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/artifacts/filesystem.py maais/artifacts/s3.py tests/unit/artifacts tests/contracts/test_artifact_stores.py
@@ -404,7 +404,7 @@ class ArtifactStore(Protocol):
   uv run pytest -q tests/integration/test_artifact_repository.py
   ```
 
-- [ ] Create migration `0020` with `scheduled_operations`, `artifact_publication_attempts`, and `artifact_records`; JSONB inventories must be objects/arrays as appropriate, hashes must be 64 characters, status/operation type values are closed, and successful records require both target versions, canonical retention metadata, `previous_evidence_hash`, and catalog-row `content_hash`.
+- [ ] Create migration `0020` with `scheduled_operations`, `artifact_publication_attempts`, and `artifact_records`; JSONB inventories must be objects/arrays as appropriate, hashes must be 64 characters, status/operation type values are closed, and successful records require verified identities for both targets, a provider version plus retention metadata for the canonical target, `previous_evidence_hash`, and catalog-row `content_hash`.
 
   ```python
   revision: str = "0020"
@@ -590,7 +590,7 @@ class ArtifactStore(Protocol):
 
 - All adapters pass the same conformance suite.
 - Canonical capability checks prove versioning and Object Lock through provider APIs.
-- Official publication cannot return success with only one target, unread bytes, missing version ID, missing retention, or missing catalog record.
+- Official publication cannot return success with only one target, unread bytes, a missing canonical version ID, missing canonical retention, or a missing catalog record.
 - Migration `0020` is reversible and schema/model parity passes.
 - Logical backups include complete producer identity and retain existing inventory/ledger evidence.
 - Restore verification uses an exact version into a fresh suffix-constrained database and never mutates the source.
