@@ -227,7 +227,7 @@ class ArtifactStore(Protocol):
 
 **Produces:** Strict object-key, retention, size, stream, and read-back contracts shared by all adapters.
 
-- [ ] Write failing tests that reject absolute paths, traversal, backslashes, mutable `latest` segments, empty path components, non-UTC retention, mismatched file size/hash, duplicate bundle paths, symlinks, and files outside the bundle root.
+- [x] Write failing tests that reject absolute paths, traversal, backslashes, mutable `latest` segments, empty path components, non-UTC retention, mismatched file size/hash, duplicate bundle paths, symlinks, and files outside the bundle root.
 
   ```python
   @pytest.mark.parametrize(
@@ -239,13 +239,13 @@ class ArtifactStore(Protocol):
           validate_object_key(key)
   ```
 
-- [ ] Run focused tests and confirm missing modules fail.
+- [x] Run focused tests and confirm missing modules fail.
 
   ```bash
   uv run pytest -q tests/unit/artifacts/test_models.py
   ```
 
-- [ ] Implement chunked SHA-256 helpers with a fixed default chunk size of 1 MiB, exact byte count verification, MIME allowlisting, and canonical key construction.
+- [x] Implement chunked SHA-256 helpers with a fixed default chunk size of 1 MiB, exact byte count verification, MIME allowlisting, and canonical key construction.
 
   ```python
   def artifact_key(
@@ -272,9 +272,9 @@ class ArtifactStore(Protocol):
       return key
   ```
 
-- [ ] Create a reusable async conformance suite that tests new put, identical retry, collision rejection, `head`, chunked read, missing object, and capability reporting against any `ArtifactStore` fixture.
+- [x] Create a reusable async conformance suite that tests new put, identical retry, collision rejection, `head`, chunked read, missing object, and capability reporting against any `ArtifactStore` fixture.
 
-- [ ] Re-run unit tests, Ruff, and Pyright.
+- [x] Re-run unit tests, Ruff, and Pyright.
 
   ```bash
   uv run pytest -q tests/unit/artifacts/test_models.py
@@ -284,7 +284,7 @@ class ArtifactStore(Protocol):
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/artifacts tests/contracts/artifacts.py tests/unit/artifacts/test_models.py
