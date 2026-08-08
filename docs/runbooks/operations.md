@@ -31,9 +31,10 @@ to investigate and cannot be used by the soak.
 
 ### 24-hour soak
 
-On a MacBook, connect AC power, charge the battery to at least 50%, and keep the
-lid open for the entire timed run. The launcher verifies AC power and battery
-reserve before startup and again immediately before activation. `caffeinate`
+On a MacBook, connect AC power, charge the battery to at least 50%, confirm that
+macOS is not reporting the battery as discharging, and keep the lid open for the
+entire timed run. The launcher verifies AC power, battery reserve, and charging
+state before startup and again immediately before activation. `caffeinate`
 prevents idle sleep but cannot override macOS clamshell sleep; closing the lid
 invalidates the run. For a seven-day experiment, an always-on desktop host is
 more reliable than a laptop.
