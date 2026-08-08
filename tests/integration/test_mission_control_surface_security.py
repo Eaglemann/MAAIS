@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 import pytest
@@ -76,11 +77,17 @@ def _security_settings() -> SecuritySettings:
     )
 
 
-def _app(uow_factory: UnitOfWork, clock: MutableClock):
+def _app(
+    uow_factory: UnitOfWork,
+    clock: MutableClock,
+    *,
+    dashboard_dir: Path | None = None,
+):
     return create_app(
         uow_factory._session_factory,
         security_settings=_security_settings(),
         clock=clock,
+        dashboard_dir=dashboard_dir,
     )
 
 
@@ -94,8 +101,16 @@ def _concrete_path(path: str) -> str:
 
 def test_every_production_route_is_explicitly_public_protected_or_static(
     uow_factory: UnitOfWork,
+    tmp_path: Path,
 ) -> None:
-    application = _app(uow_factory, MutableClock(NOW))
+    dashboard_dir = tmp_path / "dashboard"
+    dashboard_dir.mkdir()
+    (dashboard_dir / "index.html").write_text("MAAIS", encoding="utf-8")
+    application = _app(
+        uow_factory,
+        MutableClock(NOW),
+        dashboard_dir=dashboard_dir,
+    )
     registered_http = {
         (method, route.path)
         for route in application.routes
