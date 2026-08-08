@@ -44,6 +44,7 @@ from maais.operations.soak_readiness import (
     write_soak_readiness_bundle,
 )
 from maais.operations.verification import verify_configured_ledger
+from maais.platform.candidate import build_candidate_descriptor, write_candidate_descriptor
 
 
 def _localhost_port(value: str) -> int:
@@ -73,9 +74,24 @@ def _nonempty(value: str) -> str:
     return value
 
 
+def _clean_source_assertion(value: str) -> bool:
+    if value != "true":
+        raise argparse.ArgumentTypeError("source-clean must be exactly true")
+    return True
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="maais")
     commands = parser.add_subparsers(dest="command", required=True)
+    candidate = commands.add_parser(
+        "candidate-descriptor",
+        help="derive and write the canonical secret-free cloud candidate identity",
+    )
+    candidate.add_argument("--repository", type=Path, required=True)
+    candidate.add_argument("--dashboard-dir", type=Path, required=True)
+    candidate.add_argument("--git-sha", required=True)
+    candidate.add_argument("--source-clean", type=_clean_source_assertion, required=True)
+    candidate.add_argument("--output", type=Path, required=True)
     prepare = commands.add_parser(
         "prepare-paper-live",
         help="preflight public venues and write an immutable paper manifest",
@@ -234,6 +250,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
+    if arguments.command == "candidate-descriptor":
+        descriptor = build_candidate_descriptor(
+            repository_root=arguments.repository,
+            dashboard_dist=arguments.dashboard_dir,
+            git_sha=arguments.git_sha,
+            source_clean=arguments.source_clean,
+        )
+        write_candidate_descriptor(descriptor, arguments.output)
+        print(
+            json.dumps(
+                {
+                    "descriptor_hash": descriptor.descriptor_hash,
+                    "path": str(arguments.output),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
     settings = get_settings()
     configure_logging(settings.log_level, settings.is_production)
     if arguments.command == "prepare-paper-live":

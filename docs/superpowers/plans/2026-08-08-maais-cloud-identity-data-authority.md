@@ -273,7 +273,7 @@ class ServiceInstance:
 
 **Produces:** `/app/candidate.json`, canonical `descriptor_hash`, and the `maais candidate-descriptor` command.
 
-- [ ] Write failing canonicalization tests: input mapping order cannot change the hash, a single byte change must change it, unknown/missing keys are rejected, a dirty source flag is rejected for official candidates, and reading re-verifies the stored hash.
+- [x] Write failing canonicalization tests: input mapping order cannot change the hash, a single byte change must change it, unknown/missing keys are rejected, a dirty source flag is rejected for official candidates, and reading re-verifies the stored hash.
 
   ```python
   def test_candidate_descriptor_hash_covers_every_identity_input(tmp_path: Path) -> None:
@@ -286,13 +286,13 @@ class ServiceInstance:
       assert CandidateDescriptor.from_path(path) == first
   ```
 
-- [ ] Run the focused test and confirm import failures identify the missing module.
+- [x] Run the focused test and confirm import failures identify the missing module.
 
   ```bash
   uv run pytest -q tests/unit/platform/test_candidate_identity.py
   ```
 
-- [ ] Implement strict validators and canonical JSON hashing using `maais.domain.hashing.content_hash`; do not hash the `descriptor_hash` field into itself.
+- [x] Implement strict validators and canonical JSON hashing using the existing `maais.domain.json.content_hash`; do not hash the `descriptor_hash` field into itself.
 
   ```python
   def _descriptor_payload(descriptor: CandidateDescriptor) -> dict[str, JsonValue]:
@@ -309,21 +309,21 @@ class ServiceInstance:
       }
   ```
 
-- [ ] Implement `build_candidate_descriptor(repository_root, dashboard_dist, git_sha, source_clean)` so it derives all hashes from bytes, discovers the single Alembic head, uses the existing agent implementation hashing rules, and rejects missing or duplicate asset paths.
+- [x] Implement `build_candidate_descriptor(repository_root, dashboard_dist, git_sha, source_clean)` so it derives all hashes from bytes, discovers the single Alembic head, uses the existing agent implementation hashing rules, and rejects missing or duplicate asset paths.
 
-- [ ] Add CLI arguments `--repository`, `--dashboard-dir`, `--git-sha`, `--source-clean`, and `--output`; write atomically with mode `0644` because the descriptor contains no secrets.
+- [x] Add CLI arguments `--repository`, `--dashboard-dir`, `--git-sha`, `--source-clean`, and `--output`; write atomically with mode `0644` because the descriptor contains no secrets.
 
-- [ ] Run focused tests plus manifest identity regressions.
+- [x] Run focused tests plus manifest identity regressions.
 
   ```bash
-  uv run pytest -q tests/unit/platform/test_candidate_identity.py tests/unit/experiments/test_prepare.py tests/unit/experiments/test_manifest.py
+  uv run pytest -q tests/unit/platform/test_candidate_identity.py tests/unit/experiments/test_prepare_live.py tests/unit/experiments/test_manifest.py
   uv run ruff check maais/platform maais/cli.py tests/unit/platform
   uv run pyright maais/platform maais/cli.py
   ```
 
   Expected: all commands exit `0` and no descriptor field can be omitted without failure.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/platform maais/cli.py tests/unit/platform tests/fixtures/platform
