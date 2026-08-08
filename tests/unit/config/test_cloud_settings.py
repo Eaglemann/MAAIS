@@ -24,6 +24,17 @@ def _railway_settings(**overrides: object) -> Settings:
         "railway_git_commit_sha": "a" * 40,
         "expected_schema_revision": "0019",
         "database_role_name": "maais_worker",
+        "artifact_store_mode": "dual_s3",
+        "artifact_replica_endpoint_url": "https://storage.railway.example",
+        "artifact_replica_region": "auto",
+        "artifact_replica_bucket": "maais-replica",
+        "artifact_replica_access_key": "replica-access",  # pragma: allowlist secret
+        "artifact_replica_secret_key": "replica-secret",  # pragma: allowlist secret
+        "artifact_canonical_endpoint_url": "https://s3.worm-provider.example",
+        "artifact_canonical_region": "eu-central-1",
+        "artifact_canonical_bucket": "maais-canonical",
+        "artifact_canonical_access_key": "canonical-access",  # pragma: allowlist secret
+        "artifact_canonical_secret_key": "canonical-secret",  # pragma: allowlist secret
         "_env_file": None,
     }
     values.update(overrides)
@@ -161,6 +172,13 @@ def test_redacted_summary_is_an_explicit_non_secret_allowlist() -> None:
         "railway_git_commit_sha": "",
         "expected_schema_revision": "",
         "database_role_name": "",
+        "artifact_store_mode": "filesystem",
+        "artifact_replica_configured": False,
+        "artifact_canonical_configured": False,
+        "artifact_canonical_object_lock_required": True,
+        "artifact_qualification_retention_days": 30,
+        "artifact_operational_retention_days": 90,
+        "artifact_official_evidence_retention_days": 365,
     }
     serialized = json.dumps(summary, sort_keys=True)
     assert "db-canary" not in serialized
@@ -229,6 +247,17 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
         "MAAIS_EXPECTED_SCHEMA_REVISION": "0019",
         "MAAIS_DATABASE_ROLE_NAME": "maais_worker",
         "MAAIS_CANDIDATE_DESCRIPTOR_PATH": "/app/candidate.json",
+        "MAAIS_ARTIFACT_STORE_MODE": "dual_s3",
+        "MAAIS_ARTIFACT_REPLICA_ENDPOINT_URL": "https://storage.railway.example",
+        "MAAIS_ARTIFACT_REPLICA_REGION": "auto",
+        "MAAIS_ARTIFACT_REPLICA_BUCKET": "maais-replica",
+        "MAAIS_ARTIFACT_REPLICA_ACCESS_KEY": "replica-access",  # pragma: allowlist secret
+        "MAAIS_ARTIFACT_REPLICA_SECRET_KEY": "replica-secret",  # pragma: allowlist secret
+        "MAAIS_ARTIFACT_CANONICAL_ENDPOINT_URL": "https://s3.worm-provider.example",
+        "MAAIS_ARTIFACT_CANONICAL_REGION": "eu-central-1",
+        "MAAIS_ARTIFACT_CANONICAL_BUCKET": "maais-canonical",
+        "MAAIS_ARTIFACT_CANONICAL_ACCESS_KEY": "canonical-access",  # pragma: allowlist secret
+        "MAAIS_ARTIFACT_CANONICAL_SECRET_KEY": "canonical-secret",  # pragma: allowlist secret
     }
     for name, value in environment.items():
         monkeypatch.setenv(name, value)

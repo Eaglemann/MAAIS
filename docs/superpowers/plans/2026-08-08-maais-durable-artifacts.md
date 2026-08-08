@@ -156,7 +156,7 @@ class ArtifactStore(Protocol):
 
 **Produces:** Two independently validated S3 targets and frozen retention policy without serializable secrets.
 
-- [ ] Add failing tests proving cloud official mode requires distinct replica and canonical buckets/credentials, canonical Object Lock expectations cannot be disabled, retention days are exactly `30`, `90`, and `365`, and all credentials remain redacted.
+- [x] Add failing tests proving cloud official mode requires distinct replica and canonical buckets/credentials, canonical Object Lock expectations cannot be disabled, retention days are exactly `30`, `90`, and `365`, and all credentials remain redacted.
 
   ```python
   def test_official_cloud_storage_requires_independent_targets() -> None:
@@ -168,19 +168,19 @@ class ArtifactStore(Protocol):
           )
   ```
 
-- [ ] Run focused tests and confirm missing settings/dependency failures.
+- [x] Run focused tests and confirm missing settings/dependency failures.
 
   ```bash
   uv run pytest -q tests/unit/config/test_artifact_settings.py
   ```
 
-- [ ] Add the S3 SDK from the lockfile-resolved package index.
+- [x] Add the S3 SDK from the lockfile-resolved package index.
 
   ```bash
   uv add boto3
   ```
 
-- [ ] Implement `ArtifactSettings` with `SecretStr` for access/secret/session tokens and an allowlisted `redacted_summary()`.
+- [x] Implement `ArtifactSettings` with `SecretStr` for access/secret/session tokens and an allowlisted `redacted_summary()`.
 
   ```python
   class RetentionSettings(BaseModel):
@@ -191,9 +191,9 @@ class ArtifactStore(Protocol):
       official_evidence_days: Literal[365] = 365
   ```
 
-- [ ] Add a frozen policy mapping: qualification uses `GOVERNANCE` for 30 days; daily reports, audit exports, and logical backups use `COMPLIANCE` for 90 days; manifests, qualification, restore, process-drill, preflight, soak-verdict, and final bundles use `COMPLIANCE` for 365 days.
+- [x] Add a frozen policy mapping: qualification uses `GOVERNANCE` for 30 days; daily reports, audit exports, and logical backups use `COMPLIANCE` for 90 days; manifests, qualification, restore, process-drill, preflight, soak-verdict, and final bundles use `COMPLIANCE` for 365 days.
 
-- [ ] Run focused tests, dependency audit, Ruff, and Pyright.
+- [x] Run focused tests, dependency audit, Ruff, and Pyright.
 
   ```bash
   uv run pytest -q tests/unit/config/test_artifact_settings.py
@@ -204,7 +204,7 @@ class ArtifactStore(Protocol):
 
   Expected: all commands exit `0`; no secret appears in assertion output or `repr`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add pyproject.toml uv.lock maais/config/artifacts.py maais/config/settings.py tests/unit/config/test_artifact_settings.py

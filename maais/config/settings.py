@@ -1,10 +1,11 @@
 import re
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from maais.config.artifacts import ArtifactSettings, ArtifactStoreMode
 from maais.config.cloud import (
     DATABASE_ROLE_BY_SERVICE,
     EU_WEST_RAILWAY_REGION,
@@ -101,10 +102,83 @@ class Settings(BaseSettings):
         default="",
         validation_alias="MAAIS_DATABASE_ROLE_NAME",
     )
+    artifact_store_mode: ArtifactStoreMode = Field(
+        default=ArtifactStoreMode.FILESYSTEM,
+        validation_alias="MAAIS_ARTIFACT_STORE_MODE",
+    )
+    artifact_local_root: Path = Field(
+        default=Path("artifacts"),
+        validation_alias="MAAIS_ARTIFACT_LOCAL_ROOT",
+    )
+    artifact_replica_endpoint_url: str = Field(
+        default="",
+        validation_alias="MAAIS_ARTIFACT_REPLICA_ENDPOINT_URL",
+    )
+    artifact_replica_region: str = Field(
+        default="",
+        validation_alias="MAAIS_ARTIFACT_REPLICA_REGION",
+    )
+    artifact_replica_bucket: str = Field(
+        default="",
+        validation_alias="MAAIS_ARTIFACT_REPLICA_BUCKET",
+    )
+    artifact_replica_access_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_ARTIFACT_REPLICA_ACCESS_KEY",
+        exclude=True,
+        repr=False,
+    )
+    artifact_replica_secret_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_ARTIFACT_REPLICA_SECRET_KEY",
+        exclude=True,
+        repr=False,
+    )
+    artifact_replica_session_token: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_ARTIFACT_REPLICA_SESSION_TOKEN",
+        exclude=True,
+        repr=False,
+    )
+    artifact_canonical_endpoint_url: str = Field(
+        default="",
+        validation_alias="MAAIS_ARTIFACT_CANONICAL_ENDPOINT_URL",
+    )
+    artifact_canonical_region: str = Field(
+        default="",
+        validation_alias="MAAIS_ARTIFACT_CANONICAL_REGION",
+    )
+    artifact_canonical_bucket: str = Field(
+        default="",
+        validation_alias="MAAIS_ARTIFACT_CANONICAL_BUCKET",
+    )
+    artifact_canonical_access_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_ARTIFACT_CANONICAL_ACCESS_KEY",
+        exclude=True,
+        repr=False,
+    )
+    artifact_canonical_secret_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_ARTIFACT_CANONICAL_SECRET_KEY",
+        exclude=True,
+        repr=False,
+    )
+    artifact_canonical_session_token: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_ARTIFACT_CANONICAL_SESSION_TOKEN",
+        exclude=True,
+        repr=False,
+    )
+    artifact_canonical_object_lock_required: Literal[True] = Field(
+        default=True,
+        validation_alias="MAAIS_ARTIFACT_CANONICAL_OBJECT_LOCK_REQUIRED",
+    )
 
     @model_validator(mode="after")
     def validate_railway_identity(self) -> Self:
         if self.deployment_target is DeploymentTarget.LOCAL:
+            _ = self.artifacts
             return self
         required = {
             "RAILWAY_PROJECT_ID": self.railway_project_id,
@@ -166,6 +240,8 @@ class Settings(BaseSettings):
                 "Railway service database role mismatch: "
                 f"service_role={self.service_role.value} expected={expected_role}"
             )
+        if self.artifacts.mode is not ArtifactStoreMode.DUAL_S3:
+            raise ValueError("Railway runtime requires MAAIS_ARTIFACT_STORE_MODE=dual_s3")
         return self
 
     @property
@@ -215,7 +291,27 @@ class Settings(BaseSettings):
             database_role_name=self.database_role_name,
         )
 
-    def redacted_summary(self) -> dict[str, str | bool | None]:
+    @property
+    def artifacts(self) -> ArtifactSettings:
+        return ArtifactSettings(
+            mode=self.artifact_store_mode,
+            local_root=self.artifact_local_root,
+            replica_endpoint_url=self.artifact_replica_endpoint_url,
+            replica_region=self.artifact_replica_region,
+            replica_bucket=self.artifact_replica_bucket,
+            replica_access_key=self.artifact_replica_access_key,
+            replica_secret_key=self.artifact_replica_secret_key,
+            replica_session_token=self.artifact_replica_session_token,
+            canonical_endpoint_url=self.artifact_canonical_endpoint_url,
+            canonical_region=self.artifact_canonical_region,
+            canonical_bucket=self.artifact_canonical_bucket,
+            canonical_access_key=self.artifact_canonical_access_key,
+            canonical_secret_key=self.artifact_canonical_secret_key,
+            canonical_session_token=self.artifact_canonical_session_token,
+            canonical_object_lock_required=self.artifact_canonical_object_lock_required,
+        )
+
+    def redacted_summary(self) -> dict[str, str | bool | int | None]:
         """Return the only settings fields approved for diagnostics and evidence."""
         return {
             "run_mode": self.run_mode.value,
@@ -237,6 +333,17 @@ class Settings(BaseSettings):
             "railway_git_commit_sha": self.railway_git_commit_sha,
             "expected_schema_revision": self.expected_schema_revision,
             "database_role_name": self.database_role_name,
+            "artifact_store_mode": self.artifact_store_mode.value,
+            "artifact_replica_configured": self.artifacts.replica_configured,
+            "artifact_canonical_configured": self.artifacts.canonical_configured,
+            "artifact_canonical_object_lock_required": (
+                self.artifacts.canonical_object_lock_required
+            ),
+            "artifact_qualification_retention_days": (self.artifacts.retention.qualification_days),
+            "artifact_operational_retention_days": self.artifacts.retention.operational_days,
+            "artifact_official_evidence_retention_days": (
+                self.artifacts.retention.official_evidence_days
+            ),
         }
 
 

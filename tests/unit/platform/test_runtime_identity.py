@@ -46,6 +46,17 @@ def _settings(tmp_path: Path, descriptor: CandidateDescriptor, **overrides: obje
         "candidate_descriptor_path": candidate_path,
         "expected_schema_revision": descriptor.schema_revision,
         "database_role_name": "maais_worker",
+        "artifact_store_mode": "dual_s3",
+        "artifact_replica_endpoint_url": "https://storage.railway.example",
+        "artifact_replica_region": "auto",
+        "artifact_replica_bucket": "maais-replica",
+        "artifact_replica_access_key": "replica-access",  # pragma: allowlist secret
+        "artifact_replica_secret_key": "replica-secret",  # pragma: allowlist secret
+        "artifact_canonical_endpoint_url": "https://s3.worm-provider.example",
+        "artifact_canonical_region": "eu-central-1",
+        "artifact_canonical_bucket": "maais-canonical",
+        "artifact_canonical_access_key": "canonical-access",  # pragma: allowlist secret
+        "artifact_canonical_secret_key": "canonical-secret",  # pragma: allowlist secret
         "_env_file": None,
     }
     values.update(overrides)
