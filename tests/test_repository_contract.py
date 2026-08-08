@@ -18,7 +18,10 @@ def test_ci_enforces_critical_coverage_and_a_real_browser_with_one_postgres_serv
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
 
     assert workflow.count("image: postgres:16-alpine") == 1
+    assert "POSTGRES_DB: maais_test" in workflow
+    assert "maais_browser_test" not in workflow
     assert "--cov-branch" in workflow
     assert "--cov-fail-under=80" in workflow
+    assert "--ignore=tests/e2e" in workflow
     assert "install-browser chrome-for-testing" in workflow
-    assert "scripts/browser-smoke.sh" in workflow
+    assert "tests/e2e/test_mission_control_auth.py" in workflow

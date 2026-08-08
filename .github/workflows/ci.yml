@@ -45,9 +45,6 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
-      - run: npm exec -- playwright install-deps chromium
-      - run: npm exec -- playwright-cli install-browser chrome-for-testing
-      - run: ../scripts/browser-smoke.sh
 
   security:
     runs-on: ubuntu-latest
@@ -86,6 +83,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
       - run: uv sync --locked --dev
       - run: uv run alembic upgrade head
       - run: uv run alembic check
@@ -98,9 +100,19 @@ jobs:
           --cov=maais.risk
           --cov=maais.orchestration
           --cov=maais.market_data.recovery
+          --ignore=tests/e2e
           --cov-branch
           --cov-report=term:skip-covered
           --cov-fail-under=80
+      - run: npm ci
+        working-directory: dashboard
+      - run: npm run build
+        working-directory: dashboard
+      - run: npm exec -- playwright install-deps chromium
+        working-directory: dashboard
+      - run: npm exec -- playwright-cli install-browser chrome-for-testing
+        working-directory: dashboard
+      - run: uv run pytest -q tests/e2e/test_mission_control_auth.py
       - run: >-
           PGPASSWORD=maais psql -h localhost -U maais -d maais_test -Atc
           'select version_num from alembic_version' | grep -Fx 0021

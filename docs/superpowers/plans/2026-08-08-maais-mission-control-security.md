@@ -461,11 +461,11 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
 **Produces:** Browser proof of unauthenticated denial, login, reload, command CSRF, logout, expired session, WebSocket protection, and export protection.
 
-- [ ] Write browser tests that begin with a clean context, prove a direct experiment/export URL redirects to login or returns `401`, log in, reload, observe WebSocket updates, queue a harmless test command, log out, and prove back-navigation cannot display cached evidence.
+- [x] Write browser tests that begin with a clean context, prove a direct experiment/export URL redirects to login or returns `401`, log in, reload, observe WebSocket updates, queue a harmless test command, log out, and prove back-navigation cannot display cached evidence.
 
-- [ ] Add a test that modifies the CSRF header and expects `403` while the session remains valid.
+- [x] Add a test that modifies the CSRF header and expects `403` while the session remains valid.
 
-- [ ] Run the browser suite locally against a disposable test database.
+- [x] Run the browser suite locally against a disposable test database.
 
   ```bash
   uv run pytest -q tests/e2e/test_mission_control_auth.py
@@ -473,9 +473,9 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
   Expected: all scenarios pass without exposing token/password values in screenshots, traces, or console output.
 
-- [ ] Update CI browser smoke to set only test-scoped generated secrets, never production values, and upload no auth-bearing trace on success.
+- [x] Update CI browser smoke to set only test-scoped generated secrets, never production values, and upload no auth-bearing trace on success.
 
-- [ ] Run the complete frontend and API security regression set.
+- [x] Run the complete frontend and API security regression set.
 
   ```bash
   uv run pytest -q tests/unit/api tests/integration/test_mission_control_auth_api.py tests/integration/test_mission_control_surface_security.py tests/e2e/test_mission_control_auth.py
@@ -486,7 +486,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add tests/e2e/test_mission_control_auth.py scripts/browser-smoke.sh .github/workflows/ci.yml

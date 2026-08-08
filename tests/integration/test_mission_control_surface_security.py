@@ -8,6 +8,7 @@ import pytest
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from pydantic import SecretStr
 from starlette.routing import Mount, WebSocketRoute
+from starlette.websockets import WebSocketDisconnect
 
 from maais.api.app import create_app
 from maais.api.headers import PUBLIC_PRODUCTION_PATHS
@@ -156,7 +157,13 @@ async def test_authenticated_get_and_export_surfaces_reach_domain_handlers(
         assert response.headers["cache-control"] == "no-store"
 
 
-async def _open_websocket(application, *, cookie: str | None = None):
+async def _open_websocket(
+    application,
+    *,
+    cookie: str | None = None,
+    disconnect_during_close: bool = False,
+    await_first_message: bool = True,
+):
     incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
     outgoing: asyncio.Queue[dict[str, object]] = asyncio.Queue()
     await incoming.put({"type": "websocket.connect"})
@@ -184,9 +191,14 @@ async def _open_websocket(application, *, cookie: str | None = None):
         return await incoming.get()
 
     async def send(message: dict[str, object]) -> None:
+        if disconnect_during_close and message["type"] == "websocket.close":
+            raise WebSocketDisconnect(code=1006)
         await outgoing.put(message)
 
     task = asyncio.create_task(application(scope, receive, send))
+    if not await_first_message:
+        await task
+        return None, outgoing, task
     first_message = await asyncio.wait_for(outgoing.get(), timeout=2)
     return first_message, outgoing, task
 
@@ -220,3 +232,41 @@ async def test_websocket_rejects_before_accept_then_accepts_cookie_and_closes_on
     }
     assert accepted["type"] == "websocket.accept"
     assert expired == {"type": "websocket.close", "code": 1008, "reason": "session expired"}
+
+
+async def test_websocket_expiry_tolerates_peer_disconnect_during_close(
+    uow_factory: UnitOfWork,
+) -> None:
+    clock = MutableClock(NOW)
+    application = _app(uow_factory, clock)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url=ORIGIN,
+    ) as client:
+        login = await client.post("/api/v1/auth/login", json={"password": PASSPHRASE})
+        cookie = client.cookies.get(SESSION_COOKIE_NAME)
+
+    accepted, _, websocket_task = await _open_websocket(
+        application,
+        cookie=f"{SESSION_COOKIE_NAME}={cookie}",
+        disconnect_during_close=True,
+    )
+    clock.value = NOW + timedelta(minutes=30)
+
+    await asyncio.wait_for(websocket_task, timeout=2)
+
+    assert login.status_code == 200
+    assert accepted["type"] == "websocket.accept"
+
+
+async def test_websocket_rejection_tolerates_peer_disconnect_during_close(
+    uow_factory: UnitOfWork,
+) -> None:
+    first_message, _, websocket_task = await _open_websocket(
+        _app(uow_factory, MutableClock(NOW)),
+        disconnect_during_close=True,
+        await_first_message=False,
+    )
+
+    assert first_message is None
+    assert websocket_task.done()

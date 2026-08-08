@@ -87,6 +87,14 @@ from maais.security.sessions import (
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
+
+async def _close_websocket(websocket: WebSocket, *, code: int, reason: str) -> None:
+    try:
+        await websocket.close(code=code, reason=reason)
+    except WebSocketDisconnect:
+        pass
+
+
 _DECISION_CSV_COLUMNS = (
     "decision_id",
     "experiment_id",
@@ -795,10 +803,18 @@ def create_app(
         try:
             websocket_auth = await authenticate_websocket(websocket)
         except SessionAuthenticationError:
-            await websocket.close(code=1008, reason="session authentication required")
+            await _close_websocket(
+                websocket,
+                code=1008,
+                reason="session authentication required",
+            )
             return
         if after_cursor < 0:
-            await websocket.close(code=1008, reason="after_cursor cannot be negative")
+            await _close_websocket(
+                websocket,
+                code=1008,
+                reason="after_cursor cannot be negative",
+            )
             return
         await websocket.accept()
         cursor = after_cursor
@@ -837,7 +853,7 @@ def create_app(
                     last_heartbeat = loop.time()
                 await asyncio.sleep(0.5)
         except SessionAuthenticationError:
-            await websocket.close(code=1008, reason="session expired")
+            await _close_websocket(websocket, code=1008, reason="session expired")
             return
         except WebSocketDisconnect:
             return

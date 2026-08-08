@@ -1,3 +1,5 @@
+import os
+import subprocess
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -97,11 +99,20 @@ def test_stop_script_uses_the_audited_stop_command_before_process_signals() -> N
     )
 
 
-def test_browser_smoke_uses_a_real_local_browser_and_fails_on_console_errors() -> None:
-    browser_script = (REPOSITORY_ROOT / "scripts" / "browser-smoke.sh").read_text()
+def test_browser_security_smoke_refuses_non_test_invocation() -> None:
+    browser_script = REPOSITORY_ROOT / "scripts" / "browser-smoke.sh"
+    environment = os.environ.copy()
+    environment.pop("MAAIS_BROWSER_SMOKE_TEST_ONLY", None)
 
-    assert "playwright-cli" in browser_script
-    assert "vite preview --host 127.0.0.1" in browser_script
-    assert "No paper experiments yet" in browser_script
-    assert "console error --json" in browser_script
-    assert "Errors: 0, Warnings: 0" in browser_script
+    result = subprocess.run(
+        [str(browser_script)],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 64
+    assert result.stdout == ""
+    assert result.stderr == "browser security smoke is test-only\n"

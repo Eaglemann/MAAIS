@@ -432,7 +432,7 @@ describe("Audit Ledger history", () => {
     expect(within(filters).getByLabelText("Strategy version ID")).toBeInTheDocument();
     expect(within(filters).getByLabelText("Order status")).toBeInTheDocument();
     expect(within(filters).getByLabelText("Outcome")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Download filtered decisions CSV" }))
+    expect(await screen.findByRole("link", { name: "Download filtered decisions CSV" }))
       .toHaveAttribute("href", expect.stringContaining("/decisions/export.csv"));
 
     fireEvent.click(await screen.findByRole("button", { name: /Older decisions/ }));
