@@ -383,7 +383,7 @@ class ArtifactStore(Protocol):
 
 **Produces:** Durable exactly-once operation keys, publication attempts, and immutable successful artifact records linked by a tamper-evident catalog chain.
 
-- [ ] Write failing schema/repository tests for exact model parity, unique `(run_id, operation_type, berlin_date)` operation keys, stable `generated_at` across takeover, monotonic attempts, one successful record per environment/candidate/experiment/type/report/content hash, immutable provider version IDs, append-only failed attempts, previous-evidence/content-hash chain continuity, and collision rejection.
+- [x] Write failing schema/repository tests for exact model parity, unique `(run_id, operation_type, berlin_date)` operation keys, stable `generated_at` across takeover, monotonic attempts, one successful record per environment/candidate/experiment/type/report/content hash, immutable provider version IDs, append-only failed attempts, previous-evidence/content-hash chain continuity, and collision rejection.
 
   ```python
   async def test_successful_artifact_record_is_immutable(
@@ -398,22 +398,22 @@ class ArtifactStore(Protocol):
               await uow.artifacts.record_publication(changed)
   ```
 
-- [ ] Run tests and confirm migration/model/repository failures.
+- [x] Run tests and confirm migration/model/repository failures.
 
   ```bash
   uv run pytest -q tests/integration/test_artifact_repository.py
   ```
 
-- [ ] Create migration `0020` with `scheduled_operations`, `artifact_publication_attempts`, and `artifact_records`; JSONB inventories must be objects/arrays as appropriate, hashes must be 64 characters, status/operation type values are closed, and successful records require verified identities for both targets, a provider version plus retention metadata for the canonical target, `previous_evidence_hash`, and catalog-row `content_hash`.
+- [x] Create migration `0020` with `scheduled_operations`, `artifact_publication_attempts`, and `artifact_records`; JSONB inventories must be objects/arrays as appropriate, hashes must be 64 characters, status/operation type values are closed, and successful records require verified identities for both targets, a provider version plus retention metadata for the canonical target, `previous_evidence_hash`, and catalog-row `content_hash`.
 
   ```python
   revision: str = "0020"
   down_revision: str | None = "0019"
   ```
 
-- [ ] Implement scheduled operation acquisition under a row/advisory lock. A replacement may take over only when the previous owner boot is durably stopped or terminal; it keeps the same operation ID and `generated_at`, increments `attempt`, and resumes from already verified artifact records.
+- [x] Implement scheduled operation acquisition under a row/advisory lock. A replacement may take over only when the previous owner boot is durably stopped or terminal; it keeps the same operation ID and `generated_at`, increments `attempt`, and resumes from already verified artifact records.
 
-- [ ] Implement artifact repository writes with an insert-only successful path under a catalog-stream advisory lock, validate the previous evidence hash, and revalidate row content hashes before returning records.
+- [x] Implement artifact repository writes with an insert-only successful path under a catalog-stream advisory lock, validate the previous evidence hash, and revalidate row content hashes before returning records.
 
   ```python
   class ArtifactRepository:
@@ -433,9 +433,9 @@ class ArtifactStore(Protocol):
           raise NotImplementedError
   ```
 
-- [ ] Add `artifacts: ArtifactRepository` and `scheduled_operations: ScheduledOperationRepository` to `UnitOfWorkContext`, add tables to test cleanup, and update CI head assertion to `0020`.
+- [x] Add `artifacts: ArtifactRepository` and `scheduled_operations: ScheduledOperationRepository` to `UnitOfWorkContext`, add tables to test cleanup, and update CI head assertion to `0020`.
 
-- [ ] Run migration cycle and integration tests.
+- [x] Run migration cycle and integration tests.
 
   ```bash
   uv run alembic upgrade head

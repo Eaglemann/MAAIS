@@ -47,7 +47,7 @@ def _railway_values(**overrides: object) -> dict[str, object]:
         "railway_region": EU_WEST_RAILWAY_REGION,
         "expected_railway_region": EU_WEST_RAILWAY_REGION,
         "railway_git_commit_sha": "a" * 40,
-        "expected_schema_revision": "0019",
+        "expected_schema_revision": "0020",
         "database_role_name": "maais_worker",
         "_env_file": None,
     }

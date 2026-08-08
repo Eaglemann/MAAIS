@@ -139,7 +139,7 @@ async def test_official_run_cannot_be_created_from_an_unqualified_candidate(
     uow_factory: UnitOfWork,
 ) -> None:
     descriptor = _descriptor()
-    manifest = _manifest(experiment_id=EXPERIMENT_ONE, schema_revision="0019")
+    manifest = _manifest(experiment_id=EXPERIMENT_ONE, schema_revision="0020")
     run = PlatformRun.create(
         run_id=RUN_ONE,
         experiment_id=EXPERIMENT_ONE,
@@ -356,7 +356,7 @@ async def _prepare_run(
     run_id: UUID,
 ) -> PlatformRun:
     descriptor = _descriptor()
-    manifest = _manifest(experiment_id=experiment_id, schema_revision="0019")
+    manifest = _manifest(experiment_id=experiment_id, schema_revision="0020")
     run = PlatformRun.create(
         run_id=run_id,
         experiment_id=experiment_id,
@@ -433,7 +433,7 @@ def _descriptor() -> CandidateDescriptor:
         source_clean=True,
         uv_lock_sha256="b" * 64,
         dashboard_lock_sha256="c" * 64,
-        schema_revision="0019",
+        schema_revision="0020",
         agent_implementation_hashes={
             name: f"{index + 1:064x}" for index, name in enumerate(ALL_AGENTS)
         },

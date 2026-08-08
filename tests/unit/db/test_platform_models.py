@@ -14,4 +14,4 @@ def test_ci_checks_metadata_and_migration_reversibility() -> None:
 
     assert "uv run alembic check" in workflow
     assert "uv run alembic downgrade -1" in workflow
-    assert "grep -Fx 0019" in workflow
+    assert "grep -Fx 0020" in workflow

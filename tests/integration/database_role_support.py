@@ -55,7 +55,6 @@ async def cleanup_database_roles(db_engine: AsyncEngine) -> None:
         if "maais_migrator" in existing:
             await connection.execute(text("REASSIGN OWNED BY maais_migrator TO maais"))
         await connection.execute(text("DROP TABLE IF EXISTS public.health_evaluations"))
-        await connection.execute(text("DROP TABLE IF EXISTS public.artifact_records"))
         for role_name in (
             "maais_worker",
             "maais_web",

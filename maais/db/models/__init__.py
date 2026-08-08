@@ -8,6 +8,11 @@ from maais.db.models.accounts import (
     PositionModel,
 )
 from maais.db.models.agents import AgentWeightModel
+from maais.db.models.artifacts import (
+    ArtifactPublicationAttemptModel,
+    ArtifactRecordModel,
+    ScheduledOperationModel,
+)
 from maais.db.models.counterfactuals import CounterfactualModel
 from maais.db.models.decisions import (
     AgentEvaluationModel,
@@ -46,6 +51,8 @@ __all__ = [
     "AgentVersionModel",
     "AgentWeightModel",
     "AgentEvaluationModel",
+    "ArtifactPublicationAttemptModel",
+    "ArtifactRecordModel",
     "CounterfactualModel",
     "DecisionCycleModel",
     "DecisionSummaryModel",
@@ -70,6 +77,7 @@ __all__ = [
     "PositionModel",
     "PlatformCandidateModel",
     "RunInstanceModel",
+    "ScheduledOperationModel",
     "ServiceInstanceModel",
     "StrategyVersionModel",
     "TradeProposalModel",

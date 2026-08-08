@@ -74,7 +74,7 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
 ) -> None:
     await _assert_roles_absent(db_engine)
     descriptor = _descriptor()
-    manifest = _manifest(experiment_id=EXPERIMENT_ONE, schema_revision="0019")
+    manifest = _manifest(experiment_id=EXPERIMENT_ONE, schema_revision="0020")
     async with uow_factory.begin() as uow:
         await uow.experiments.create(manifest)
         await uow.platform.register_candidate(
@@ -89,9 +89,6 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
         )
         await connection.execute(
             text("CREATE TABLE maais_auth.operator_auth_state (id integer PRIMARY KEY)")
-        )
-        await connection.execute(
-            text("CREATE TABLE public.artifact_records (id integer PRIMARY KEY)")
         )
         await connection.execute(
             text("CREATE TABLE public.health_evaluations (id integer PRIMARY KEY)")
@@ -260,9 +257,13 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
                 f"INSERT INTO public.{table_name} DEFAULT VALUES",
             )
         async with operations.begin() as connection:
-            await connection.execute(text("INSERT INTO public.artifact_records VALUES (1)"))
+            assert await connection.scalar(
+                text(
+                    "SELECT has_table_privilege(current_user, 'public.artifact_records', 'INSERT')"
+                )
+            )
             await connection.execute(text("INSERT INTO public.health_evaluations VALUES (1)"))
-        await _expect_denied(worker, "INSERT INTO public.artifact_records VALUES (2)")
+        await _expect_denied(worker, "INSERT INTO public.artifact_records DEFAULT VALUES")
         await _expect_denied(worker, "ALTER TABLE public.experiments ADD COLUMN forbidden int")
         async with verifier.connect() as connection:
             assert await connection.scalar(text("SHOW default_transaction_read_only")) == "on"
@@ -302,10 +303,10 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
                     "maais_migrator",
                     _passwords().migrator,
                 ).render_as_string(hide_password=False),
-                expected_revision="0019",
+                expected_revision="0020",
                 repository_root=Path(__file__).resolve().parents[2],
             )
-            == "0019"
+            == "0020"
         )
     finally:
         for engine in engines:
