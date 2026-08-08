@@ -3,9 +3,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "./api";
+import * as auth from "./auth";
 import App, {
   DecisionTable,
   ModelBoundary,
@@ -25,6 +26,18 @@ import type {
   TradePage,
 } from "./types";
 
+const AUTHENTICATED: auth.AuthState = {
+  status: "authenticated",
+  actor: "sole_operator",
+  authMode: "operator_session",
+  expiresAt: "2026-08-09T18:00:00Z",
+  csrfToken: "memory-only-csrf",
+};
+
+beforeEach(() => {
+  vi.spyOn(auth, "restoreOperatorSession").mockResolvedValue(AUTHENTICATED);
+});
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -40,6 +53,18 @@ describe("Mission Control startup", () => {
 
     expect(await screen.findByRole("heading", { name: "No paper experiments yet" }))
       .toBeInTheDocument();
+  });
+
+  it("returns to login when the server expires the session", async () => {
+    vi.spyOn(api, "listExperiments").mockRejectedValue(new api.SessionExpiredError());
+    const logout = vi.spyOn(auth, "logoutOperator");
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Sign in to Mission Control" }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/session expired/i)).toBeInTheDocument();
+    expect(logout).not.toHaveBeenCalled();
   });
 });
 
@@ -495,17 +520,16 @@ const COMMANDS: OperatorCommandPage = {
 };
 
 describe("Operator Console", () => {
-  it("requires the local token, reason, and exact phrase before queuing a visible command", () => {
+  it("requires the reason and exact phrase before queuing a visible command", () => {
     const submit = vi.fn();
     render(
       <OperatorConsole
         commands={COMMANDS}
         runtime={RUNTIME}
         incidents={[]}
-        token="local-session-token"
+        controlsEnabled
         busy={false}
         error={null}
-        onTokenChange={() => undefined}
         onSubmit={submit}
       />,
     );
@@ -526,7 +550,6 @@ describe("Operator Console", () => {
         payload: {},
         confirmation: "CONFIRM PAUSE",
       },
-      "local-session-token",
     );
     expect(screen.getByText("operator observed abnormal behavior")).toBeInTheDocument();
     expect(screen.getByText(/paper_worker:test/)).toBeInTheDocument();
@@ -548,10 +571,9 @@ describe("Operator Console", () => {
         commands={COMMANDS}
         runtime={{ ...RUNTIME, kill_switch_active: true, kill_switch_reason: "system_halt:test" }}
         incidents={incidents}
-        token="local-session-token"
+        controlsEnabled
         busy={false}
         error={null}
-        onTokenChange={() => undefined}
         onSubmit={submit}
       />,
     );

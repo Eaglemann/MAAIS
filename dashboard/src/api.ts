@@ -18,53 +18,74 @@ import type {
 
 const API_ROOT = import.meta.env.VITE_API_ROOT ?? "/api/v1";
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+export class SessionExpiredError extends Error {
+  constructor() {
+    super("operator session expired");
+    this.name = "SessionExpiredError";
+  }
+}
+
+async function apiError(response: Response): Promise<Error> {
+  let detail = `${response.status} ${response.statusText}`;
+  try {
+    const payload = (await response.json()) as { detail?: string };
+    detail = payload.detail ?? detail;
+  } catch {
+    // The HTTP status remains the authoritative fallback.
+  }
+  return new Error(detail);
+}
+
+export async function requestJson<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
   const response = await fetch(`${API_ROOT}${path}`, {
-    headers: { Accept: "application/json" },
+    ...init,
+    credentials: "same-origin",
     cache: "no-store",
-    signal,
+    headers: { Accept: "application/json", ...init.headers },
   });
+  if (response.status === 401) throw new SessionExpiredError();
   if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail ?? detail;
-    } catch {
-      // The HTTP status remains the authoritative fallback.
-    }
-    throw new Error(detail);
+    throw await apiError(response);
   }
   return (await response.json()) as T;
 }
 
-async function postJson<T>(
+export async function requestVoid(
   path: string,
-  token: string,
+  init: RequestInit = {},
+): Promise<void> {
+  const response = await fetch(`${API_ROOT}${path}`, {
+    ...init,
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: { Accept: "application/json", ...init.headers },
+  });
+  if (response.status === 401) throw new SessionExpiredError();
+  if (!response.ok) throw await apiError(response);
+}
+
+function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return requestJson<T>(path, { signal });
+}
+
+function postJson<T>(
+  path: string,
+  csrfToken: string,
   body: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const response = await fetch(`${API_ROOT}${path}`, {
+  return requestJson<T>(path, {
     method: "POST",
     headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken,
     },
-    cache: "no-store",
     body: JSON.stringify(body),
     signal,
   });
-  if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail ?? detail;
-    } catch {
-      // The HTTP status remains the authoritative fallback.
-    }
-    throw new Error(detail);
-  }
-  return (await response.json()) as T;
 }
 
 export function listExperiments(signal?: AbortSignal): Promise<ExperimentListItem[]> {
@@ -214,14 +235,14 @@ export function listCommands(
 
 export function requestOperatorCommand(
   experimentId: string,
-  token: string,
+  csrfToken: string,
   idempotencyKey: string,
   draft: OperatorActionDraft,
   signal?: AbortSignal,
 ): Promise<OperatorCommand> {
   return postJson<OperatorCommand>(
     `/experiments/${experimentId}/commands`,
-    token,
+    csrfToken,
     {
       command_type: draft.commandType,
       idempotency_key: idempotencyKey,
@@ -257,12 +278,14 @@ export function startResumableEventFeed({
   onEvents,
   onCursor,
   onStatus,
+  onSessionExpired,
   reconnectDelayMs = 1_500,
 }: {
   initialCursor: number;
   onEvents: () => void;
   onCursor: (cursor: number) => void;
   onStatus: (status: EventFeedStatus) => void;
+  onSessionExpired?: () => void;
   reconnectDelayMs?: number;
 }): () => void {
   let cursor = Math.max(0, Math.trunc(initialCursor));
@@ -344,12 +367,24 @@ export function startResumableEventFeed({
         }
       };
       nextSocket.onerror = () => nextSocket.close();
-      nextSocket.onclose = () => {
+      nextSocket.onclose = (event) => {
         if (socket === nextSocket) socket = null;
+        if (event.code === 1008) {
+          stopped = true;
+          onStatus("stopped");
+          onSessionExpired?.();
+          return;
+        }
         scheduleReconnect();
       };
     } catch (reason: unknown) {
-      if (!controller.signal.aborted) scheduleReconnect();
+      if (reason instanceof SessionExpiredError) {
+        stopped = true;
+        onStatus("stopped");
+        onSessionExpired?.();
+      } else if (!controller.signal.aborted) {
+        scheduleReconnect();
+      }
     }
   }
 

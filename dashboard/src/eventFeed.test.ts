@@ -10,7 +10,7 @@ class FakeWebSocket {
   readonly url: string;
   onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent<string>) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
 
@@ -27,8 +27,8 @@ class FakeWebSocket {
     this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent<string>);
   }
 
-  disconnect() {
-    this.onclose?.();
+  disconnect(code = 1006) {
+    this.onclose?.({ code } as CloseEvent);
   }
 
   close() {
@@ -61,6 +61,27 @@ afterEach(() => {
 });
 
 describe("resumable Mission Control event feed", () => {
+  it("stops reconnecting and reports an expired cookie session", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 401 })));
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const onSessionExpired = vi.fn();
+    const onStatus = vi.fn();
+
+    const stop = startResumableEventFeed({
+      initialCursor: 11,
+      onEvents: () => undefined,
+      onCursor: () => undefined,
+      onStatus,
+      onSessionExpired,
+    });
+    await flushPromises();
+
+    expect(onSessionExpired).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenLastCalledWith("stopped");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    stop();
+  });
+
   it("fast-forwards a fresh dashboard to the current outbox head and requests one snapshot", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,

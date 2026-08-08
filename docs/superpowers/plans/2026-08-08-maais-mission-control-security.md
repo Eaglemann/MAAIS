@@ -391,7 +391,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
 **Produces:** Password login, in-memory CSRF state, cookie-authenticated requests/WebSocket, and explicit expired-session handling.
 
-- [ ] Write failing tests proving no auth token is read from or written to `localStorage`/`sessionStorage`, all fetches use same-origin credentials, commands include CSRF but no `Authorization`, and a `401` returns to login without losing server-side evidence.
+- [x] Write failing tests proving no auth token is read from or written to `localStorage`/`sessionStorage`, all fetches use same-origin credentials, commands include CSRF but no `Authorization`, and a `401` returns to login without losing server-side evidence.
 
   ```typescript
   expect(window.sessionStorage.getItem("maais-control-token")).toBeNull();
@@ -401,15 +401,15 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
   );
   ```
 
-- [ ] Run frontend tests and confirm they fail against token-based API/App code.
+- [x] Run frontend tests and confirm they fail against token-based API/App code.
 
   ```bash
   npm --prefix dashboard test -- auth.test.ts api.test.ts App.test.tsx OperatorConsole.test.tsx
   ```
 
-- [ ] Implement `AuthState = checking | anonymous | authenticated`, keep the CSRF token only in React memory, re-fetch `/auth/session` on page reload, then call authenticated `/auth/csrf` to obtain a fresh in-memory token.
+- [x] Implement `AuthState = checking | anonymous | authenticated`, keep the CSRF token only in React memory, re-fetch `/auth/session` on page reload, then call authenticated `/auth/csrf` to obtain a fresh in-memory token.
 
-- [ ] Change API helpers to:
+- [x] Change API helpers to:
 
   ```typescript
   async function requestJson<T>(
@@ -427,11 +427,11 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
   }
   ```
 
-- [ ] Remove the token input and storage from `App`/`OperatorConsole`; command calls accept `csrfToken` and send `X-CSRF-Token`.
+- [x] Remove the token input and storage from `App`/`OperatorConsole`; command calls accept `csrfToken` and send `X-CSRF-Token`.
 
-- [ ] Keep export anchors same-origin so the secure cookie authenticates downloads. Do not place the CSRF token in URLs.
+- [x] Keep export anchors same-origin so the secure cookie authenticates downloads. Do not place the CSRF token in URLs.
 
-- [ ] Re-run frontend tests, typecheck, and build.
+- [x] Re-run frontend tests, typecheck, and build.
 
   ```bash
   npm --prefix dashboard test
@@ -441,7 +441,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
   Expected: all commands exit `0`; no storage-backed control token string remains.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add dashboard/src/Login.tsx dashboard/src/auth.ts dashboard/src/api.ts dashboard/src/App.tsx dashboard/src/OperatorConsole.tsx dashboard/src/types.ts dashboard/src/styles.css dashboard/src/auth.test.ts dashboard/src/api.test.ts dashboard/src/App.test.tsx dashboard/src/OperatorConsole.test.tsx

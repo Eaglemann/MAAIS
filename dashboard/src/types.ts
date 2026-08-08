@@ -1,5 +1,26 @@
 export type JsonRecord = Record<string, unknown>;
 
+export type AuthMode = "local_token" | "operator_session";
+
+export interface AuthSessionView {
+  authenticated: boolean;
+  actor: string | null;
+  auth_mode: AuthMode;
+  expires_at: string | null;
+}
+
+export interface LoginResponse {
+  authenticated: true;
+  actor: string;
+  auth_mode: "operator_session";
+  csrf_token: string;
+  expires_at: string;
+}
+
+export interface CsrfTokenResponse {
+  csrf_token: string;
+}
+
 export interface PaperModelAssumptions {
   model_status: string;
   leverage: number | null;

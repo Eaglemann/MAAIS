@@ -11,6 +11,7 @@ import {
   listExperiments,
   listTrades,
   requestOperatorCommand,
+  SessionExpiredError,
   startResumableEventFeed,
   tradeCsvUrl,
 } from "./api";
@@ -41,6 +42,13 @@ import type {
   TradePage,
   TradeFilters,
 } from "./types";
+import {
+  loginOperator,
+  logoutOperator,
+  restoreOperatorSession,
+  type AuthState,
+} from "./auth";
+import { Login } from "./Login";
 import { OperatorConsole } from "./OperatorConsole";
 import { ResearchLab } from "./ResearchLab";
 
@@ -524,6 +532,9 @@ export function TradeTable({
 }
 
 export default function App() {
+  const [authState, setAuthState] = useState<AuthState>({ status: "checking" });
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [experiments, setExperiments] = useState<ExperimentListItem[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [overview, setOverview] = useState<ExperimentOverview | null>(null);
@@ -542,29 +553,58 @@ export default function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [controlToken, setControlToken] = useState(() => {
-    try {
-      return window.sessionStorage.getItem("maais.control_token.v1") ?? "";
-    } catch {
-      return "";
-    }
-  });
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<EventFeedStatus>("catching_up");
   const decisionCursor = decisionCursors.at(-1) ?? null;
   const tradeCursor = tradeCursors.at(-1) ?? null;
 
-  useEffect(() => {
-    try {
-      if (controlToken) window.sessionStorage.setItem("maais.control_token.v1", controlToken);
-      else window.sessionStorage.removeItem("maais.control_token.v1");
-    } catch {
-      // A blocked browser storage policy only removes tab-level convenience.
+  const resetWorkspace = useCallback(() => {
+    setExperiments([]);
+    setSelectedId("");
+    setOverview(null);
+    setDecisionPage(null);
+    setTradePage(null);
+    setCommands(null);
+    setResearch(null);
+    setSelectedDecision(null);
+    setDrawerOpen(false);
+    setLastUpdated(null);
+    setError(null);
+    setCommandError(null);
+  }, []);
+
+  const expireSession = useCallback(() => {
+    resetWorkspace();
+    setAuthError(null);
+    setAuthState({ status: "anonymous", reason: "expired" });
+  }, [resetWorkspace]);
+
+  const handleRequestError = useCallback((reason: unknown, report: (message: string) => void) => {
+    if (reason instanceof SessionExpiredError) {
+      expireSession();
+      return;
     }
-  }, [controlToken]);
+    report(reason instanceof Error ? reason.message : String(reason));
+  }, [expireSession]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    restoreOperatorSession(controller.signal)
+      .then((state) => {
+        if (!controller.signal.aborted) setAuthState(state);
+      })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) {
+          setAuthError(reason instanceof Error ? reason.message : String(reason));
+          setAuthState({ status: "anonymous", reason: "required" });
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (authState.status !== "authenticated") return;
     const controller = new AbortController();
     listExperiments(controller.signal)
       .then((items) => {
@@ -574,12 +614,12 @@ export default function App() {
       })
       .catch((reason: unknown) => {
         if (!controller.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : String(reason));
+          handleRequestError(reason, setError);
           setLoading(false);
         }
       });
     return () => controller.abort();
-  }, []);
+  }, [authState.status, handleRequestError]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!selectedId) return;
@@ -605,23 +645,23 @@ export default function App() {
       setLastUpdated(new Date().toISOString());
       setError(null);
     } catch (reason: unknown) {
-      if (!signal?.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!signal?.aborted) handleRequestError(reason, setError);
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [decisionCursor, filters, selectedId, tradeCursor, tradeFilters]);
+  }, [decisionCursor, filters, handleRequestError, selectedId, tradeCursor, tradeFilters]);
 
   const refreshResearch = useCallback(async (signal?: AbortSignal) => {
     if (!selectedId) return;
     try {
       setResearch(await getResearch(selectedId, signal));
     } catch (reason: unknown) {
-      if (!signal?.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!signal?.aborted) handleRequestError(reason, setError);
     }
-  }, [selectedId]);
+  }, [handleRequestError, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (authState.status !== "authenticated" || !selectedId) return;
     const controller = new AbortController();
     setLoading(true);
     void refresh(controller.signal);
@@ -630,10 +670,10 @@ export default function App() {
       window.clearInterval(interval);
       controller.abort();
     };
-  }, [refresh, selectedId]);
+  }, [authState.status, refresh, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (authState.status !== "authenticated" || !selectedId) return;
     const controller = new AbortController();
     void refreshResearch(controller.signal);
     const interval = window.setInterval(() => void refreshResearch(controller.signal), 300_000);
@@ -641,10 +681,10 @@ export default function App() {
       window.clearInterval(interval);
       controller.abort();
     };
-  }, [refreshResearch, selectedId]);
+  }, [authState.status, refreshResearch, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (authState.status !== "authenticated" || !selectedId) return;
     let initialCursor = Number.MAX_SAFE_INTEGER;
     try {
       const storedValue = window.sessionStorage.getItem("maais.event_cursor.v2");
@@ -666,8 +706,9 @@ export default function App() {
         }
       },
       onStatus: setLiveStatus,
+      onSessionExpired: expireSession,
     });
-  }, [refresh, selectedId]);
+  }, [authState.status, expireSession, refresh, selectedId]);
 
   const activeExperiment = useMemo(
     () => experiments.find((item) => item.experiment.id === selectedId) ?? null,
@@ -686,7 +727,7 @@ export default function App() {
     try {
       setSelectedDecision(await getDecision(decisionId));
     } catch (reason: unknown) {
-      setDetailError(reason instanceof Error ? reason.message : String(reason));
+      handleRequestError(reason, setDetailError);
     } finally {
       setDetailLoading(false);
     }
@@ -732,8 +773,12 @@ export default function App() {
     });
   }
 
-  async function submitOperatorCommand(draft: OperatorActionDraft, token: string) {
-    if (!selectedId) return;
+  async function submitOperatorCommand(draft: OperatorActionDraft) {
+    if (
+      !selectedId ||
+      authState.status !== "authenticated" ||
+      authState.csrfToken === null
+    ) return;
     setCommandBusy(true);
     setCommandError(null);
     try {
@@ -743,16 +788,69 @@ export default function App() {
           : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       await requestOperatorCommand(
         selectedId,
-        token,
+        authState.csrfToken,
         `mission-control-${randomIdentity}`,
         draft,
       );
       await refresh();
     } catch (reason: unknown) {
-      setCommandError(reason instanceof Error ? reason.message : String(reason));
+      handleRequestError(reason, setCommandError);
     } finally {
       setCommandBusy(false);
     }
+  }
+
+  async function signIn(password: string) {
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      setAuthState(await loginOperator(password));
+      setLoading(true);
+    } catch (reason: unknown) {
+      setAuthError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function signOut() {
+    if (authState.status !== "authenticated" || authState.csrfToken === null) return;
+    setAuthBusy(true);
+    try {
+      await logoutOperator(authState.csrfToken);
+      resetWorkspace();
+      setAuthError(null);
+      setAuthState({ status: "anonymous", reason: "signed_out" });
+    } catch (reason: unknown) {
+      if (reason instanceof SessionExpiredError) {
+        expireSession();
+      } else {
+        setError(`Sign out failed: ${reason instanceof Error ? reason.message : String(reason)}`);
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  if (authState.status === "checking") {
+    return (
+      <main className="boot-state">
+        <span className="brand-mark">M</span>
+        <h1>Securing Mission Control</h1>
+        <p>Checking the private operator session…</p>
+      </main>
+    );
+  }
+
+  if (authState.status === "anonymous") {
+    return (
+      <Login
+        busy={authBusy}
+        error={authError}
+        reason={authState.reason}
+        onSubmit={signIn}
+      />
+    );
   }
 
   if (!loading && experiments.length === 0) {
@@ -800,6 +898,10 @@ export default function App() {
             <h1>Mission Control</h1>
           </div>
           <div className="topbar__actions">
+            <div className="operator-identity">
+              <span>Operator</span>
+              <strong>{authState.actor}</strong>
+            </div>
             <label className="experiment-picker">
               <span>Experiment</span>
               <select
@@ -824,6 +926,16 @@ export default function App() {
               <span className={loading ? "refresh-icon refresh-icon--spinning" : "refresh-icon"}>↻</span>
               Refresh
             </button>
+            {authState.authMode === "operator_session" && (
+              <button
+                className="logout-button"
+                type="button"
+                disabled={authBusy}
+                onClick={() => void signOut()}
+              >
+                Sign out
+              </button>
+            )}
           </div>
         </header>
 
@@ -920,11 +1032,10 @@ export default function App() {
           commands={commands}
           runtime={runtime}
           incidents={overview?.incidents ?? []}
-          token={controlToken}
+          controlsEnabled={authState.csrfToken !== null}
           busy={commandBusy}
           error={commandError}
-          onTokenChange={setControlToken}
-          onSubmit={(draft, token) => void submitOperatorCommand(draft, token)}
+          onSubmit={(draft) => void submitOperatorCommand(draft)}
         />
 
         <section className="dashboard-section" id="trades">
@@ -1037,7 +1148,7 @@ export default function App() {
         </section>
 
         <footer>
-          <span>MAAIS Mission Control · local operator surface</span>
+          <span>MAAIS Mission Control · private operator surface</span>
           <span>All displayed values read from immutable manifests or PostgreSQL projections.</span>
         </footer>
       </main>

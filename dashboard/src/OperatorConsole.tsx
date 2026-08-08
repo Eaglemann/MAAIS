@@ -31,20 +31,18 @@ export function OperatorConsole({
   commands,
   runtime,
   incidents,
-  token,
+  controlsEnabled,
   busy,
   error,
-  onTokenChange,
   onSubmit,
 }: {
   commands: OperatorCommandPage | null;
   runtime: RuntimeOverview | null | undefined;
   incidents: JsonRecord[];
-  token: string;
+  controlsEnabled: boolean;
   busy: boolean;
   error: string | null;
-  onTokenChange: (token: string) => void;
-  onSubmit: (draft: OperatorActionDraft, token: string) => void;
+  onSubmit: (draft: OperatorActionDraft) => void;
 }) {
   const [selected, setSelected] = useState<OperatorCommandType | null>(null);
   const [incidentId, setIncidentId] = useState<string | null>(null);
@@ -78,7 +76,7 @@ export function OperatorConsole({
         (selected !== "reset_kill_switch" || Boolean(runtime.kill_switch_reason));
   const canSubmit = Boolean(
     selected &&
-      token.trim() &&
+      controlsEnabled &&
       reason.trim() &&
       confirmation === requiredPhrase &&
       payloadReady &&
@@ -95,15 +93,12 @@ export function OperatorConsole({
 
   function submit() {
     if (!selected || !canSubmit) return;
-    onSubmit(
-      {
-        commandType: selected,
-        reason: reason.trim(),
-        payload,
-        confirmation,
-      },
-      token,
-    );
+    onSubmit({
+      commandType: selected,
+      reason: reason.trim(),
+      payload,
+      confirmation,
+    });
   }
 
   return (
@@ -113,23 +108,19 @@ export function OperatorConsole({
           <h2>Operator Console</h2>
           <p>Audited, queued controls executed by the paper worker—not by the browser.</p>
         </div>
-        <span className="paper-chip">Local paper only</span>
+        <span className="paper-chip">Paper only</span>
       </div>
 
       <div className="operator-layout">
         <div className="panel operator-controls">
-          <label className="operator-token">
-            <span>Local control token</span>
-            <input
-              aria-label="Local control token"
-              type="password"
-              autoComplete="off"
-              value={token}
-              onChange={(event) => onTokenChange(event.target.value)}
-              placeholder="Loaded from the private runtime token file"
-            />
-            <small>Kept in this tab only. It is never written to logs or the database.</small>
-          </label>
+          <div className={`operator-session ${controlsEnabled ? "operator-session--ready" : ""}`}>
+            <span>{controlsEnabled ? "Secure operator session" : "Read-only compatibility mode"}</span>
+            <small>
+              {controlsEnabled
+                ? "Commands use an in-memory CSRF proof and the HttpOnly session cookie."
+                : "Configure operator-session authentication to enable audited commands."}
+            </small>
+          </div>
           <div className="operator-action-grid">
             {ACTIONS.map((action) => (
               <button
@@ -137,6 +128,7 @@ export function OperatorConsole({
                 type="button"
                 className={`operator-action ${action.danger ? "operator-action--danger" : ""}`}
                 onClick={() => choose(action.command)}
+                disabled={!controlsEnabled}
               >
                 {action.text}
               </button>
@@ -154,10 +146,18 @@ export function OperatorConsole({
                       <span>{label(recordString(incident, "reason_code"))}</span>
                       <small>{label(recordString(incident, "status"))} · {id}</small>
                     </div>
-                    <button type="button" onClick={() => choose("acknowledge_incident", id)}>
+                    <button
+                      type="button"
+                      disabled={!controlsEnabled}
+                      onClick={() => choose("acknowledge_incident", id)}
+                    >
                       Acknowledge incident
                     </button>
-                    <button type="button" onClick={() => choose("resolve_incident", id)}>
+                    <button
+                      type="button"
+                      disabled={!controlsEnabled}
+                      onClick={() => choose("resolve_incident", id)}
+                    >
                       Resolve incident
                     </button>
                   </article>

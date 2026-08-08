@@ -5,8 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decisionCsvUrl,
   decisionJsonUrl,
+  listExperiments,
   listDecisions,
   listTrades,
+  requestOperatorCommand,
+  SessionExpiredError,
   tradeCsvUrl,
 } from "./api";
 import type { DecisionFilters, PageCursor, TradeFilters } from "./types";
@@ -75,6 +78,46 @@ function requestedUrl(fetchMock: ReturnType<typeof vi.fn>): URL {
 }
 
 describe("Mission Control audit query contract", () => {
+  it("uses same-origin cookies for reads and maps 401 to session expiry", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listExperiments()).rejects.toBeInstanceOf(SessionExpiredError);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/experiments",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("sends command CSRF without an Authorization header", async () => {
+    const fetchMock = vi.fn(async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) => responseCommand());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestOperatorCommand(
+      "experiment-1",
+      "memory-only-csrf",
+      "command-1",
+      {
+        commandType: "pause",
+        reason: "operator review",
+        payload: {},
+        confirmation: "CONFIRM PAUSE",
+      },
+    );
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.credentials).toBe("same-origin");
+    expect(init.headers).toEqual(expect.objectContaining({
+      "X-CSRF-Token": "memory-only-csrf",
+    }));
+    expect(init.headers).not.toEqual(expect.objectContaining({
+      Authorization: expect.anything(),
+    }));
+  });
+
   it("serializes every decision filter and both cursor values", async () => {
     const fetchMock = stubPage();
 
@@ -154,3 +197,10 @@ describe("Mission Control audit query contract", () => {
     );
   });
 });
+
+function responseCommand(): Response {
+  return new Response(JSON.stringify({ command_id: "command-1" }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
