@@ -488,7 +488,7 @@ class ServiceInstance:
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/platform/registry.py maais/db/repositories/platform.py maais/db/unit_of_work.py tests/unit/platform/test_registry_domain.py tests/integration/test_platform_repository.py
@@ -503,6 +503,8 @@ class ServiceInstance:
 - Create: `maais/db/roles.py`
 - Create: `maais/operations/migrations.py`
 - Modify: `maais/cli.py`
+- Modify: `alembic/env.py`
+- Modify: `alembic.ini`
 - Test: `tests/unit/db/test_roles.py`
 - Test: `tests/integration/test_database_roles.py`
 
@@ -510,9 +512,9 @@ class ServiceInstance:
 
 **Produces:** `maais_migrator`, `maais_worker`, `maais_web`, `maais_ops`, and `maais_verifier` roles with tested grants; guarded `cloud-bootstrap-roles` and `cloud-migrate` commands.
 
-- [ ] Write failing SQL-generation tests proving all identifiers are fixed constants, password values are bound parameters, role statements are idempotent, and no generated SQL grants superuser, role creation, replication, bypass RLS, database creation, or schema ownership.
+- [x] Write failing SQL-generation tests proving all identifiers are fixed constants, password values are bound parameters, role statements are idempotent, and no generated SQL grants superuser, role creation, replication, bypass RLS, database creation, or schema ownership.
 
-- [ ] Write integration probes proving web/verifier cannot write trading projections, web can write only `maais_auth` and execute the command-enqueue/service-registration functions, operations cannot insert decisions/orders/fills, worker cannot alter schema or artifact catalog, and migrator uses one advisory lock.
+- [x] Write integration probes proving web/verifier cannot write trading projections, web can write only `maais_auth` and execute the command-enqueue/service-registration functions, operations cannot insert decisions/orders/fills, worker cannot alter schema or artifact catalog, and migrator uses one advisory lock.
 
   ```python
   ROLE_WRITE_PROBES = {
@@ -523,17 +525,17 @@ class ServiceInstance:
   }
   ```
 
-- [ ] Run tests and confirm the roles/commands do not exist.
+- [x] Run tests and confirm the roles/commands do not exist.
 
   ```bash
   uv run pytest -q tests/unit/db/test_roles.py tests/integration/test_database_roles.py
   ```
 
-- [ ] Implement bootstrap in a transaction, use fixed role identifiers and parameterized passwords, and grant `CONNECT` plus table/sequence/function privileges from an explicit allowlist. Set `default_transaction_read_only=on` only for verifier. Web receives projection `SELECT`, DML only in `maais_auth`, and `EXECUTE` on audited command-enqueue/service-registration functions; it receives no direct trading-table DML.
+- [x] Implement bootstrap in a transaction, use fixed role identifiers and parameterized passwords, and grant `CONNECT` plus table/sequence/function privileges from an explicit allowlist. Set `default_transaction_read_only=on` only for verifier. Web receives projection `SELECT`, DML only in `maais_auth`, and `EXECUTE` on audited command-enqueue/service-registration functions; it receives no direct trading-table DML.
 
-- [ ] Implement narrow `SECURITY DEFINER` functions with fixed `search_path`, explicit `current_user` checks, argument validation, and revoked `PUBLIC` execution for command enqueue and per-role service registration/heartbeat. Test that arbitrary SQL and cross-role boot registration remain denied.
+- [x] Implement narrow `SECURITY DEFINER` functions with fixed `search_path`, explicit `current_user` checks, argument validation, and revoked `PUBLIC` execution for command enqueue and per-role service registration/heartbeat. Test that arbitrary SQL and cross-role boot registration remain denied.
 
-- [ ] Implement migration locking with a fixed 64-bit advisory-lock key and exact expected-revision verification.
+- [x] Implement migration locking with a fixed 64-bit advisory-lock key and exact expected-revision verification.
 
   ```python
   MIGRATION_LOCK_KEY = 5_321_109_104_001_922_019
@@ -545,9 +547,9 @@ class ServiceInstance:
           raise SchemaIdentityError(f"database schema mismatch: expected={expected} actual={actual}")
   ```
 
-- [ ] Ensure role bootstrap and migration commands refuse to run when any `run_instances.status = 'active'` row exists.
+- [x] Ensure role bootstrap and migration commands refuse to run when any `run_instances.status = 'active'` row exists.
 
-- [ ] Re-run focused tests, full security tests, and a fresh migration cycle.
+- [x] Re-run focused tests, full security tests, and a fresh migration cycle.
 
   ```bash
   uv run pytest -q tests/unit/db/test_roles.py tests/integration/test_database_roles.py tests/test_execution_safety.py
@@ -559,10 +561,10 @@ class ServiceInstance:
 
   Expected: all commands exit `0`; head is `0019`; no paper execution safety regression.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
-  git add maais/db/roles.py maais/operations/migrations.py maais/cli.py tests/unit/db/test_roles.py tests/integration/test_database_roles.py
+  git add alembic.ini alembic/env.py maais/db/roles.py maais/operations/migrations.py maais/cli.py tests/unit/db/test_roles.py tests/integration/test_database_roles.py
   git commit -m "feat: add least privilege database roles"
   git push origin feat/paper-platform-baseline
   ```

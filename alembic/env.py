@@ -20,6 +20,9 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
+    override = config.attributes.get("database_url")
+    if isinstance(override, str) and override:
+        return override
     return get_settings().database_url_value
 
 

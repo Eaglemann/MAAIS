@@ -13,6 +13,7 @@ from uuid import UUID
 
 from maais.config.settings import get_settings
 from maais.core.logging import configure_logging
+from maais.db.roles import load_database_role_passwords
 from maais.live import (
     load_manifest_file,
     prepare_live_manifest_file,
@@ -31,6 +32,7 @@ from maais.operations.incident_management import (
     IncidentAction,
     apply_configured_incident_action,
 )
+from maais.operations.migrations import bootstrap_roles_with_url, migrate_with_url
 from maais.operations.preflight import run_candidate_preflight
 from maais.operations.process_drills import freeze_process_drill_evidence
 from maais.operations.qualification import run_candidate_qualification
@@ -80,6 +82,12 @@ def _clean_source_assertion(value: str) -> bool:
     return True
 
 
+def _schema_revision(value: str) -> str:
+    if len(value) != 4 or not value.isascii() or not value.isdecimal():
+        raise argparse.ArgumentTypeError("schema revision must be four ASCII decimal digits")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="maais")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -92,6 +100,16 @@ def build_parser() -> argparse.ArgumentParser:
     candidate.add_argument("--git-sha", required=True)
     candidate.add_argument("--source-clean", type=_clean_source_assertion, required=True)
     candidate.add_argument("--output", type=Path, required=True)
+    commands.add_parser(
+        "cloud-bootstrap-roles",
+        help="create and reconcile fixed least-privilege PostgreSQL service roles",
+    )
+    cloud_migrate = commands.add_parser(
+        "cloud-migrate",
+        help="run guarded Alembic migration under the purpose-bound migrator role",
+    )
+    cloud_migrate.add_argument("--expected-revision", type=_schema_revision, required=True)
+    cloud_migrate.add_argument("--repository", type=Path, default=Path.cwd())
     prepare = commands.add_parser(
         "prepare-paper-live",
         help="preflight public venues and write an immutable paper manifest",
@@ -270,6 +288,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     settings = get_settings()
     configure_logging(settings.log_level, settings.is_production)
+    if arguments.command == "cloud-bootstrap-roles":
+        roles = asyncio.run(
+            bootstrap_roles_with_url(
+                settings.database_url_value,
+                load_database_role_passwords(os.environ),
+            )
+        )
+        print(json.dumps({"roles": roles, "live_money": False}, sort_keys=True))
+        return 0
+    if arguments.command == "cloud-migrate":
+        revision = asyncio.run(
+            migrate_with_url(
+                settings.database_url_value,
+                expected_revision=arguments.expected_revision,
+                repository_root=arguments.repository,
+            )
+        )
+        print(
+            json.dumps(
+                {"schema_revision": revision, "live_money": False},
+                sort_keys=True,
+            )
+        )
+        return 0
     if arguments.command == "prepare-paper-live":
         manifest = asyncio.run(
             prepare_live_manifest_file(
