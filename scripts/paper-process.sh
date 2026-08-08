@@ -459,6 +459,7 @@ paper_assert_timed_run_host_power() {
   local platform
   local power_status
   local battery_percent
+  local battery_state
   local minimum_battery_percent=50
 
   if [[ "${run_purpose}" != "process_drill" \
@@ -472,13 +473,13 @@ paper_assert_timed_run_host_power() {
   if [[ "${run_purpose}" == "process_drill" ]]; then
     jq -cn \
       --arg platform "${platform}" \
-      '{platform:$platform,required:false,power_source:"not_checked",battery_percent:null,minimum_battery_percent:null}'
+      '{platform:$platform,required:false,power_source:"not_checked",battery_percent:null,battery_state:null,minimum_battery_percent:null}'
     return
   fi
   if [[ "${platform}" != "Darwin" ]]; then
     jq -cn \
       --arg platform "${platform}" \
-      '{platform:$platform,required:true,power_source:"not_applicable",battery_percent:null,minimum_battery_percent:null}'
+      '{platform:$platform,required:true,power_source:"not_applicable",battery_percent:null,battery_state:null,minimum_battery_percent:null}'
     return
   fi
   if ! command -v pmset >/dev/null 2>&1; then
@@ -497,8 +498,19 @@ paper_assert_timed_run_host_power() {
   battery_percent="$(
     sed -nE 's/.*[^0-9]([0-9]{1,3})%;.*/\1/p' <<<"${power_status}" | head -n 1
   )"
+  battery_state="$(
+    sed -nE 's/.*[0-9]{1,3}%;[[:space:]]*([^;]+);.*/\1/p' <<<"${power_status}" | head -n 1
+  )"
   if [[ "${power_status}" == *"InternalBattery"* && ! "${battery_percent}" =~ ^[0-9]{1,3}$ ]]; then
     echo "could not read the macOS battery reserve" >&2
+    return 1
+  fi
+  if [[ "${power_status}" == *"InternalBattery"* && -z "${battery_state}" ]]; then
+    echo "could not read the macOS battery state" >&2
+    return 1
+  fi
+  if [[ "${battery_state}" == "discharging" ]]; then
+    echo "macOS battery is discharging while AC power is selected; verify the charger before a timed run" >&2
     return 1
   fi
   if [[ -n "${battery_percent}" ]] \
@@ -509,13 +521,14 @@ paper_assert_timed_run_host_power() {
   if [[ -z "${battery_percent}" ]]; then
     jq -cn \
       --argjson minimum "${minimum_battery_percent}" \
-      '{platform:"macos",required:true,power_source:"ac",battery_percent:null,minimum_battery_percent:$minimum}'
+      '{platform:"macos",required:true,power_source:"ac",battery_percent:null,battery_state:null,minimum_battery_percent:$minimum}'
     return
   fi
   jq -cn \
     --argjson battery "${battery_percent}" \
+    --arg battery_state "${battery_state}" \
     --argjson minimum "${minimum_battery_percent}" \
-    '{platform:"macos",required:true,power_source:"ac",battery_percent:$battery,minimum_battery_percent:$minimum}'
+    '{platform:"macos",required:true,power_source:"ac",battery_percent:$battery,battery_state:$battery_state,minimum_battery_percent:$minimum}'
 }
 
 paper_sleep_inhibitor_kind() {

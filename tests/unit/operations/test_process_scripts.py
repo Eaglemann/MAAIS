@@ -375,6 +375,23 @@ paper_assert_timed_run_host_power seven_day
     assert "battery reserve 19% is below required 50%" in result.stderr
 
 
+def test_timed_run_power_gate_rejects_a_mac_discharging_while_on_ac() -> None:
+    result = _run_bash(
+        """
+uname() { printf 'Darwin\n'; }
+pmset() {
+  printf "Now drawing from 'AC Power'\n"
+  printf ' -InternalBattery-0\t80%%; discharging; 6:54 remaining present: true\n'
+}
+paper_assert_timed_run_host_power soak
+"""
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "battery is discharging while AC power is selected" in result.stderr
+
+
 def test_timed_run_power_gate_emits_frozen_mac_power_evidence() -> None:
     result = _run_bash(
         """
@@ -390,7 +407,8 @@ paper_assert_timed_run_host_power soak
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == (
         '{"platform":"macos","required":true,"power_source":"ac",'
-        '"battery_percent":87,"minimum_battery_percent":50}'
+        '"battery_percent":87,"battery_state":"charged",'
+        '"minimum_battery_percent":50}'
     )
 
 
