@@ -24,4 +24,5 @@ def railway_security_values() -> dict[str, object]:
         "csrf_pepper": TEST_CSRF_PEPPER,
         "monitor_token": TEST_MONITOR_TOKEN,
         "operator_secure_cookies": True,
+        "operator_public_origin": "https://mission-control.test",
     }

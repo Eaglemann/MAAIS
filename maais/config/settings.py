@@ -213,6 +213,10 @@ class Settings(BaseSettings):
         default=True,
         validation_alias="MAAIS_OPERATOR_SECURE_COOKIES",
     )
+    operator_public_origin: str = Field(
+        default="",
+        validation_alias="MAAIS_OPERATOR_PUBLIC_ORIGIN",
+    )
 
     @model_validator(mode="after")
     def validate_railway_identity(self) -> Self:
@@ -367,6 +371,7 @@ class Settings(BaseSettings):
             csrf_pepper=self.csrf_pepper,
             monitor_token=self.monitor_token,
             secure_cookies=self.operator_secure_cookies,
+            public_origin=self.operator_public_origin,
         )
 
     def redacted_summary(self) -> dict[str, str | bool | int | None]:
@@ -413,6 +418,8 @@ class Settings(BaseSettings):
             "session_pepper_configured": bool(self.security.session_pepper_value),
             "csrf_pepper_configured": bool(self.security.csrf_pepper_value),
             "monitor_token_configured": bool(self.security.monitor_token_value),
+            "operator_public_origin": self.security.public_origin,
+            "operator_public_host": self.security.public_host,
         }
 
 

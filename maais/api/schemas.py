@@ -7,11 +7,37 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from maais.config.security import AuthMode
 from maais.operations.operator_commands import CommandStatus, CommandType
 
 
 class ReadModel(BaseModel):
     model_config = ConfigDict(frozen=True)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    password: str = Field(min_length=1, max_length=256, exclude=True, repr=False)
+
+
+class LoginResponse(ReadModel):
+    authenticated: bool = True
+    actor: str
+    auth_mode: AuthMode
+    csrf_token: str
+    expires_at: datetime
+
+
+class AuthSessionView(ReadModel):
+    authenticated: bool
+    actor: str | None
+    auth_mode: AuthMode
+    expires_at: datetime | None
+
+
+class CsrfTokenResponse(ReadModel):
+    csrf_token: str
 
 
 class ApiHealth(ReadModel):

@@ -22,6 +22,7 @@ def _railway_values(**overrides: object) -> dict[str, object]:
         "csrf_pepper": SecretStr("c" * 43),
         "monitor_token": SecretStr("m" * 43),
         "secure_cookies": True,
+        "public_origin": "https://mission-control.test",
     }
     values.update(overrides)
     return values
@@ -53,6 +54,22 @@ def test_railway_rejects_malformed_hash_and_insecure_cookie() -> None:
         SecuritySettings(**_railway_values(operator_password_hash=SecretStr("malformed")))
     with pytest.raises(ValidationError, match="secure cookies"):
         SecuritySettings(**_railway_values(secure_cookies=False))
+
+
+@pytest.mark.parametrize(
+    "origin",
+    (
+        "",
+        "http://mission-control.test",
+        "https://mission-control.test/",
+        "https://user:password@mission-control.test",  # pragma: allowlist secret
+        "https://mission-control.test/path",
+        "https://mission-control.test?query=value",
+    ),
+)
+def test_operator_origin_is_one_canonical_https_origin(origin: str) -> None:
+    with pytest.raises(ValidationError, match="canonical HTTPS origin"):
+        SecuritySettings(**_railway_values(public_origin=origin))
 
 
 @pytest.mark.parametrize(

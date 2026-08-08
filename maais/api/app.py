@@ -3,21 +3,19 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from secrets import compare_digest
-from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import (
     Depends,
     FastAPI,
-    Header,
     HTTPException,
     Query,
     Request,
+    Response,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -31,11 +29,15 @@ from maais.api.auth import load_control_token
 from maais.api.queries import MissionControlQueryService
 from maais.api.schemas import (
     ApiHealth,
+    AuthSessionView,
+    CsrfTokenResponse,
     DecisionDetail,
     DecisionListItem,
     DecisionPage,
     ExperimentListItem,
     ExperimentOverview,
+    LoginRequest,
+    LoginResponse,
     OperatorCommandPage,
     OperatorCommandRequest,
     OperatorCommandView,
@@ -45,6 +47,21 @@ from maais.api.schemas import (
     TradeListItem,
     TradePage,
 )
+from maais.api.security import (
+    MissionControlSecurity,
+    OperatorPrincipal,
+    clear_session_cookie,
+    optional_operator_session,
+    require_csrf,
+    require_operator,
+    require_same_origin,
+    security_context,
+    set_session_cookie,
+)
+from maais.api.security import (
+    session_factory as security_session_factory,
+)
+from maais.config.security import AuthMode, SecuritySettings
 from maais.config.settings import get_settings
 from maais.db.connection import get_engine, get_session_factory
 from maais.db.models.experiments import ExperimentModel
@@ -54,9 +71,12 @@ from maais.db.repositories.operator_commands import (
     OperatorCommandConflict,
     OperatorCommandRepository,
 )
+from maais.db.repositories.sessions import LoginAuthenticationError
 from maais.db.unit_of_work import UnitOfWork
 from maais.operations.operator_commands import CommandStatus, OperatorCommand
 from maais.operations.verification import establish_read_only_snapshot
+from maais.security.passwords import INVALID_CREDENTIALS, verify_operator_password
+from maais.security.sessions import issue_session_tokens, rotate_csrf_token
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -150,6 +170,8 @@ def create_app(
     dashboard_dir: Path | None = None,
     control_token: str | None = None,
     control_token_file: Path | None = None,
+    security_settings: SecuritySettings | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> FastAPI:
     if control_token is not None and control_token_file is not None:
         raise ValueError("provide either a control token or token file, not both")
@@ -158,11 +180,24 @@ def create_app(
             raise ValueError("direct Mission Control token must be at least 32 characters")
         if control_token != control_token.strip():
             raise ValueError("direct Mission Control token must be trimmed")
-    resolved_control_token = control_token
-    if resolved_control_token is None:
-        resolved_control_token = load_control_token(
-            control_token_file or get_settings().mission_control_token_file
-        )
+    global_settings = None
+    resolved_security = security_settings
+    if resolved_security is None:
+        global_settings = get_settings()
+        resolved_security = global_settings.security
+    if resolved_security.auth_mode is AuthMode.OPERATOR_SESSION and (
+        control_token is not None or control_token_file is not None
+    ):
+        raise ValueError("operator session mode forbids local control token configuration")
+    resolved_control_token = None
+    if resolved_security.auth_mode is AuthMode.LOCAL_TOKEN:
+        resolved_control_token = control_token
+        if resolved_control_token is None:
+            token_path = control_token_file
+            if token_path is None and global_settings is not None:
+                token_path = global_settings.mission_control_token_file
+            resolved_control_token = load_control_token(token_path)
+    resolved_clock = clock or (lambda: datetime.now(timezone.utc))
     owns_global_engine = session_factory is None
 
     @asynccontextmanager
@@ -180,6 +215,11 @@ def create_app(
         lifespan=lifespan,
     )
     application.state.session_factory = session_factory
+    application.state.security = MissionControlSecurity(
+        settings=resolved_security,
+        control_token=resolved_control_token,
+        clock=resolved_clock,
+    )
     application.add_middleware(
         CORSMiddleware,
         allow_origins=("http://127.0.0.1:5173", "http://localhost:5173"),
@@ -197,26 +237,6 @@ def create_app(
             async with session.begin():
                 await establish_read_only_snapshot(session)
                 yield session
-
-    async def require_control_token(
-        authorization: Annotated[str | None, Header()] = None,
-    ) -> None:
-        prefix = "Bearer "
-        supplied = (
-            authorization[len(prefix) :]
-            if authorization is not None and authorization.startswith(prefix)
-            else ""
-        )
-        if (
-            resolved_control_token is None
-            or not supplied
-            or not compare_digest(supplied, resolved_control_token)
-        ):
-            raise HTTPException(
-                status_code=401,
-                detail="valid local control bearer token required",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
 
     @application.middleware("http")
     async def disable_browser_caching(request: Request, call_next):
@@ -240,6 +260,112 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(error)})
 
+    @application.post("/api/v1/auth/login", response_model=LoginResponse)
+    async def login(http_request: Request, response: Response) -> LoginResponse:
+        context = security_context(http_request)
+        if context.settings.auth_mode is not AuthMode.OPERATOR_SESSION:
+            raise HTTPException(status_code=404, detail="operator session login is not enabled")
+        try:
+            payload = await http_request.json()
+            login_request = LoginRequest.model_validate(payload)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail="invalid_login_payload") from error
+        observed_at = context.clock()
+        issued = None
+        async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
+            blocked = False
+            try:
+                await uow.sessions.require_login_allowed(observed_at=observed_at)
+            except LoginAuthenticationError:
+                blocked = True
+            if not blocked:
+                verification = await asyncio.to_thread(
+                    verify_operator_password,
+                    login_request.password,
+                    context.settings.operator_password_hash_value,
+                )
+                if not verification.valid:
+                    await uow.sessions.record_login_failure(observed_at=observed_at)
+                else:
+                    await uow.sessions.record_login_success(observed_at=observed_at)
+                    await uow.sessions.revoke_all_active(revoked_at=observed_at)
+                    issued = issue_session_tokens(
+                        actor="sole_operator",
+                        observed_at=observed_at,
+                        session_pepper=context.settings.session_pepper,
+                        csrf_pepper=context.settings.csrf_pepper,
+                    )
+                    await uow.sessions.issue(issued.to_request())
+        if issued is None:
+            raise HTTPException(status_code=401, detail=INVALID_CREDENTIALS)
+        set_session_cookie(
+            response,
+            token=issued.token,
+            expires_at=issued.session.expires_at,
+        )
+        return LoginResponse(
+            actor=issued.session.actor,
+            auth_mode=AuthMode.OPERATOR_SESSION,
+            csrf_token=issued.csrf_token,
+            expires_at=issued.session.expires_at,
+        )
+
+    @application.get("/api/v1/auth/session", response_model=AuthSessionView)
+    async def auth_session(http_request: Request, response: Response) -> AuthSessionView:
+        context = security_context(http_request)
+        authenticated = await optional_operator_session(http_request)
+        if authenticated is None:
+            if http_request.cookies:
+                clear_session_cookie(response)
+            return AuthSessionView(
+                authenticated=False,
+                actor=None,
+                auth_mode=context.settings.auth_mode,
+                expires_at=None,
+            )
+        return AuthSessionView(
+            authenticated=True,
+            actor=authenticated.actor,
+            auth_mode=AuthMode.OPERATOR_SESSION,
+            expires_at=authenticated.expires_at,
+        )
+
+    @application.post("/api/v1/auth/csrf", response_model=CsrfTokenResponse)
+    async def csrf_bootstrap(
+        http_request: Request,
+        principal: OperatorPrincipal = Depends(require_operator),
+    ) -> CsrfTokenResponse:
+        if principal.auth_mode is not AuthMode.OPERATOR_SESSION:
+            raise HTTPException(status_code=404, detail="operator session CSRF is not enabled")
+        require_same_origin(http_request)
+        context = security_context(http_request)
+        current = http_request.state.operator_session
+        issued = rotate_csrf_token(
+            current,
+            observed_at=context.clock(),
+            csrf_pepper=context.settings.csrf_pepper,
+        )
+        async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
+            await uow.sessions.rotate_csrf(issued.session)
+        return CsrfTokenResponse(csrf_token=issued.csrf_token)
+
+    @application.post("/api/v1/auth/logout", status_code=204)
+    async def logout(
+        http_request: Request,
+        principal: OperatorPrincipal = Depends(require_csrf),
+    ) -> Response:
+        response = Response(status_code=204)
+        if principal.auth_mode is AuthMode.OPERATOR_SESSION:
+            assert principal.session_id is not None
+            context = security_context(http_request)
+            async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
+                await uow.sessions.revoke(
+                    principal.session_id,
+                    revoked_at=context.clock(),
+                )
+            clear_session_cookie(response)
+        return response
+
     @application.get("/api/v1/health", response_model=ApiHealth)
     async def health(session: AsyncSession = Depends(read_session)) -> ApiHealth:
         transaction_mode = str(await session.scalar(text("SHOW transaction_read_only")))
@@ -249,7 +375,7 @@ def create_app(
             status="ok",
             database_transaction=("read only" if transaction_mode == "on" else transaction_mode),
             schema_revision=schema_revision,
-            checked_at=datetime.now(timezone.utc),
+            checked_at=resolved_clock(),
         )
 
     @application.get("/api/v1/experiments", response_model=tuple[ExperimentListItem, ...])
@@ -561,9 +687,8 @@ def create_app(
     async def request_command(
         experiment_id: UUID,
         request: OperatorCommandRequest,
-        _authorized: None = Depends(require_control_token),
+        principal: OperatorPrincipal = Depends(require_csrf),
     ) -> OperatorCommandView:
-        del _authorized
         factory: SessionFactory | None = application.state.session_factory
         if factory is None:
             factory = get_session_factory()
@@ -573,11 +698,11 @@ def create_app(
             experiment_id=experiment_id,
             command_type=request.command_type,
             idempotency_key=request.idempotency_key,
-            actor="local_operator",
+            actor=principal.actor,
             reason=request.reason,
             payload=request.payload,
             confirmation=request.confirmation,
-            requested_at=datetime.now(timezone.utc),
+            requested_at=resolved_clock(),
         )
         async with UnitOfWork(factory).begin() as uow:
             await uow.experiments.get_status(experiment_id)
@@ -668,7 +793,7 @@ def create_app(
                         {
                             "type": "heartbeat",
                             "next_cursor": cursor,
-                            "checked_at": datetime.now(timezone.utc).isoformat(),
+                            "checked_at": resolved_clock().isoformat(),
                         }
                     )
                     last_heartbeat = loop.time()

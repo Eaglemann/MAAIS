@@ -243,7 +243,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
 **Produces:** Login/session/CSRF-bootstrap/logout endpoints, secure cookie handling, principal/CSRF dependencies, and explicit local/session modes.
 
-- [ ] Extend `create_app` tests first. The app factory must accept injected settings and clock without reading global secrets in tests.
+- [x] Extend `create_app` tests first. The app factory must accept injected settings and clock without reading global secrets in tests.
 
   ```python
   def create_app(
@@ -258,7 +258,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
       raise NotImplementedError
   ```
 
-- [ ] Write failing API tests for successful login, uniform invalid-login response, lockout, secure cookie attributes, session view, authenticated CSRF bootstrap/rotation, logout, expired cookie, CSRF missing/mismatch, bearer rejection in cloud mode, and local token compatibility.
+- [x] Write failing API tests for successful login, uniform invalid-login response, lockout, secure cookie attributes, session view, authenticated CSRF bootstrap/rotation, logout, expired cookie, CSRF missing/mismatch, bearer rejection in cloud mode, and local token compatibility.
 
   ```python
   def test_cloud_login_sets_host_only_secure_cookie(client: TestClient) -> None:
@@ -272,15 +272,15 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
       assert "Domain=" not in cookie
   ```
 
-- [ ] Run API tests and confirm the endpoints/dependencies are absent.
+- [x] Run API tests and confirm the endpoints/dependencies are absent.
 
   ```bash
   uv run pytest -q tests/unit/api/test_session_auth.py tests/integration/test_mission_control_auth_api.py tests/unit/api/test_control_auth.py
   ```
 
-- [ ] Implement `POST /api/v1/auth/login`, `GET /api/v1/auth/session`, `POST /api/v1/auth/csrf`, and `POST /api/v1/auth/logout`. Login accepts only `{password: str}` with a bounded maximum length and never echoes it. The CSRF bootstrap requires a valid session plus frozen Origin/Host and rotates only the CSRF hash; it grants no domain action.
+- [x] Implement `POST /api/v1/auth/login`, `GET /api/v1/auth/session`, `POST /api/v1/auth/csrf`, and `POST /api/v1/auth/logout`. Login accepts only `{password: str}` with a bounded maximum length and never echoes it. The CSRF bootstrap requires a valid session plus frozen Origin/Host and rotates only the CSRF hash; it grants no domain action.
 
-- [ ] Implement `OperatorPrincipal`, `require_operator`, and `require_csrf`; session lookup reads the cookie and CSRF reads only `X-CSRF-Token`.
+- [x] Implement `OperatorPrincipal`, `require_operator`, and `require_csrf`; session lookup reads the cookie and CSRF reads only `X-CSRF-Token`.
 
   ```python
   @dataclass(frozen=True, slots=True)
@@ -290,9 +290,9 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
       auth_mode: AuthMode
   ```
 
-- [ ] Issue a fresh session and CSRF pair at every successful login and revoke any prior active operator sessions in the same transaction. On browser reload, rotate only CSRF through `/api/v1/auth/csrf`; never attempt to recover a raw CSRF token from its stored hash.
+- [x] Issue a fresh session and CSRF pair at every successful login and revoke any prior active operator sessions in the same transaction. On browser reload, rotate only CSRF through `/api/v1/auth/csrf`; never attempt to recover a raw CSRF token from its stored hash.
 
-- [ ] Re-run API tests plus existing Mission Control tests.
+- [x] Re-run API tests plus existing Mission Control tests.
 
   ```bash
   uv run pytest -q tests/unit/api tests/integration/test_mission_control_auth_api.py tests/integration/test_mission_control_api.py tests/integration/test_mission_control_commands_api.py
@@ -302,7 +302,7 @@ def opaque_token_hash(token: str, pepper: SecretStr) -> str:
 
   Expected: all commands exit `0`; local tests continue using the token file without Railway secrets.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/api/security.py maais/api/schemas.py maais/api/app.py tests/unit/api/test_session_auth.py tests/integration/test_mission_control_auth_api.py tests/unit/api/test_control_auth.py

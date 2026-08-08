@@ -198,6 +198,8 @@ def test_redacted_summary_is_an_explicit_non_secret_allowlist() -> None:
         "session_pepper_configured": False,
         "csrf_pepper_configured": False,
         "monitor_token_configured": False,
+        "operator_public_origin": "",
+        "operator_public_host": "",
     }
     serialized = json.dumps(summary, sort_keys=True)
     assert "db-canary" not in serialized
@@ -272,6 +274,7 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
         "MAAIS_CSRF_PEPPER": TEST_CSRF_PEPPER,
         "MAAIS_MONITOR_TOKEN": TEST_MONITOR_TOKEN,
         "MAAIS_OPERATOR_SECURE_COOKIES": "true",
+        "MAAIS_OPERATOR_PUBLIC_ORIGIN": "https://mission-control.test",
         "MAAIS_ARTIFACT_STORE_MODE": "dual_s3",
         "MAAIS_ARTIFACT_REPLICA_ENDPOINT_URL": "https://storage.railway.example",
         "MAAIS_ARTIFACT_REPLICA_REGION": "auto",

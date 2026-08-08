@@ -134,6 +134,53 @@ class OperatorSessionRepository:
         row.version = updated.version
         return updated
 
+    async def rotate_csrf(self, candidate: OperatorSession) -> OperatorSession:
+        row = await self._locked_session(candidate.id)
+        current = _session_from_row(row)
+        require_authenticatable_session(current, observed_at=candidate.last_seen_at)
+        if (
+            candidate.actor != current.actor
+            or candidate.created_at != current.created_at
+            or candidate.expires_at != current.expires_at
+            or candidate.revoked_at is not None
+            or candidate.version != current.version + 1
+            or candidate.last_seen_at < current.last_seen_at
+            or candidate.token_hash != current.token_hash
+            or candidate.csrf_hash == current.csrf_hash
+        ):
+            raise SessionConflict("CSRF rotation evidence is stale or invalid")
+        hash_owner = await self._session.scalar(
+            select(OperatorSessionModel.id)
+            .where(
+                OperatorSessionModel.id != candidate.id,
+                OperatorSessionModel.csrf_hash == candidate.csrf_hash,
+            )
+            .with_for_update()
+        )
+        if hash_owner is not None:
+            raise SessionConflict("CSRF rotation token hash conflicts")
+        row.csrf_hash = candidate.csrf_hash
+        row.last_seen_at = candidate.last_seen_at
+        row.version = candidate.version
+        return candidate
+
+    async def revoke_all_active(self, *, revoked_at: datetime) -> tuple[OperatorSession, ...]:
+        rows = tuple(
+            await self._session.scalars(
+                select(OperatorSessionModel)
+                .where(OperatorSessionModel.revoked_at.is_(None))
+                .order_by(OperatorSessionModel.id)
+                .with_for_update()
+            )
+        )
+        revoked: list[OperatorSession] = []
+        for row in rows:
+            updated = _session_from_row(row).revoke(revoked_at)
+            row.revoked_at = updated.revoked_at
+            row.version = updated.version
+            revoked.append(updated)
+        return tuple(revoked)
+
     async def login_state(self, *, observed_at: datetime) -> OperatorAuthState:
         return _auth_state_from_row(await self._locked_auth_state(observed_at))
 

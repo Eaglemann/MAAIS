@@ -128,6 +128,12 @@ class IssuedSession:
 
 
 @dataclass(frozen=True, slots=True)
+class IssuedCsrfToken:
+    session: OperatorSession
+    csrf_token: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorAuthState:
     failed_attempts: int
     window_started_at: datetime | None
@@ -240,6 +246,23 @@ def rotate_session_tokens(
         version=session.version + 1,
     )
     return IssuedSession(session=rotated, token=token, csrf_token=csrf_token)
+
+
+def rotate_csrf_token(
+    session: OperatorSession,
+    *,
+    observed_at: datetime,
+    csrf_pepper: SecretStr,
+) -> IssuedCsrfToken:
+    require_authenticatable_session(session, observed_at=observed_at)
+    csrf_token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
+    rotated = replace(
+        session,
+        csrf_hash=opaque_token_hash(csrf_token, csrf_pepper),
+        last_seen_at=observed_at,
+        version=session.version + 1,
+    )
+    return IssuedCsrfToken(session=rotated, csrf_token=csrf_token)
 
 
 def require_authenticatable_session(

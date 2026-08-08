@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
@@ -44,6 +45,7 @@ class SecuritySettings(BaseModel):
         repr=False,
     )
     secure_cookies: bool = True
+    public_origin: str = ""
     session_absolute_ttl_seconds: Literal[43_200] = 43_200
     session_idle_ttl_seconds: Literal[1_800] = 1_800
     login_window_seconds: Literal[900] = 900
@@ -62,7 +64,7 @@ class SecuritySettings(BaseModel):
         ):
             raise ValueError("Railway security requires auth_mode=operator_session")
         if self.auth_mode is AuthMode.LOCAL_TOKEN:
-            if any((password_hash, *secrets)):
+            if any((password_hash, *secrets, self.public_origin)):
                 raise ValueError("local_token auth forbids inactive operator session secrets")
             return self
         if not password_hash:
@@ -77,6 +79,25 @@ class SecuritySettings(BaseModel):
             raise ValueError("operator session and monitor secrets must be independent")
         if self.deployment_target is DeploymentTarget.RAILWAY and not self.secure_cookies:
             raise ValueError("Railway operator sessions require secure cookies")
+        parsed_origin = urlsplit(self.public_origin)
+        try:
+            port = parsed_origin.port
+        except ValueError as error:
+            raise ValueError("operator public origin must be one canonical HTTPS origin") from error
+        if (
+            not self.public_origin.isascii()
+            or self.public_origin != self.public_origin.strip()
+            or parsed_origin.scheme != "https"
+            or not parsed_origin.hostname
+            or parsed_origin.username is not None
+            or parsed_origin.password is not None
+            or parsed_origin.path
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or self.public_origin != f"https://{parsed_origin.netloc}"
+            or (port is not None and not 1 <= port <= 65_535)
+        ):
+            raise ValueError("operator public origin must be one canonical HTTPS origin")
         return self
 
     @property
@@ -99,6 +120,10 @@ class SecuritySettings(BaseModel):
     def monitor_token_value(self) -> str:
         return self.monitor_token.get_secret_value()
 
+    @property
+    def public_host(self) -> str:
+        return urlsplit(self.public_origin).netloc
+
     def redacted_summary(self) -> dict[str, str | bool | int]:
         return {
             "auth_mode": self.auth_mode.value,
@@ -112,6 +137,8 @@ class SecuritySettings(BaseModel):
             "session_pepper_configured": bool(self.session_pepper_value),
             "csrf_pepper_configured": bool(self.csrf_pepper_value),
             "monitor_token_configured": bool(self.monitor_token_value),
+            "public_origin": self.public_origin,
+            "public_host": self.public_host,
         }
 
 
