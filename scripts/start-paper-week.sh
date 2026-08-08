@@ -60,7 +60,7 @@ fi
 
 cd "${repository_root}"
 docker_context="$(paper_resolve_docker_context)"
-paper_docker_compose "${docker_context}" up -d --wait postgres
+paper_start_postgres "${docker_context}"
 postgres_system_identifier="$(paper_assert_postgres_route "${docker_context}")"
 uv run alembic upgrade head
 

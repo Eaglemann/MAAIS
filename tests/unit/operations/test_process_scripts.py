@@ -496,6 +496,18 @@ paper_resolve_docker_context
     assert result.stderr == ""
 
 
+def test_postgres_start_uses_only_the_existing_local_image() -> None:
+    result = _run_bash(
+        """
+paper_docker_compose() { printf '%s\n' "$*"; }
+paper_start_postgres desktop-linux
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "desktop-linux up -d --wait --pull never postgres"
+
+
 def test_recorded_postgres_route_rejects_cluster_replacement() -> None:
     result = _run_bash(
         """

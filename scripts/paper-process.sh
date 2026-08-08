@@ -165,6 +165,12 @@ paper_docker_compose() {
   docker --context "${context}" compose "$@"
 }
 
+paper_start_postgres() {
+  local context="$1"
+
+  paper_docker_compose "${context}" up -d --wait --pull never postgres
+}
+
 paper_compose_postgres_identity() {
   local context="$1"
   paper_docker_compose "${context}" exec -T postgres \

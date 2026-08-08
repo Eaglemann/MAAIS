@@ -20,7 +20,7 @@ npm --prefix dashboard ci
 npm --prefix dashboard run build
 npm --prefix dashboard exec -- playwright-cli install-browser chrome-for-testing
 export MAAIS_DOCKER_CONTEXT=desktop-linux  # use `docker context show` to choose yours
-docker --context "${MAAIS_DOCKER_CONTEXT}" compose up -d --wait postgres
+docker --context "${MAAIS_DOCKER_CONTEXT}" compose up -d --wait --pull never postgres
 uv run alembic upgrade head
 uv run maais database-identity
 uv run maais verify-ledger
