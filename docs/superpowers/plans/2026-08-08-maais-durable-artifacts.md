@@ -447,7 +447,7 @@ class ArtifactStore(Protocol):
 
   Expected: head is `0020`; all tests pass.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add alembic/versions/0020_artifact_catalog.py maais/db/models/artifacts.py maais/db/repositories/artifacts.py maais/db/repositories/scheduled_operations.py maais/db/models/__init__.py maais/db/unit_of_work.py tests/integration/conftest.py tests/integration/test_artifact_repository.py .github/workflows/ci.yml
@@ -468,9 +468,9 @@ class ArtifactStore(Protocol):
 
 **Produces:** Verified dual-store publication result and persistent attempt history.
 
-- [ ] Write failing tests for semantic validation before upload, Railway failure, WORM failure, read-back mismatch, missing retention, catalog failure, identical retry, conflicting retry, and temporary-directory cleanup.
+- [x] Write failing tests for semantic validation before upload, Railway failure, WORM failure, read-back mismatch, missing retention, catalog failure, identical retry, conflicting retry, and temporary-directory cleanup.
 
-- [ ] Assert no success record exists when either target or catalog step fails, while the failed attempt remains visible and retryable.
+- [x] Assert no success record exists when either target or catalog step fails, while the failed attempt remains visible and retryable.
 
   ```python
   async def test_publication_cannot_succeed_with_only_replica(
@@ -483,15 +483,15 @@ class ArtifactStore(Protocol):
       assert await failed_attempts_count("canonical_put_failed") == 1
   ```
 
-- [ ] Run tests and confirm publisher behavior is missing.
+- [x] Run tests and confirm publisher behavior is missing.
 
   ```bash
   uv run pytest -q tests/unit/artifacts/test_bundles.py tests/integration/test_artifact_publisher.py
   ```
 
-- [ ] Implement bundle validation from the existing bundle's own hash manifest plus an independently derived sorted file inventory. Reject symlinks, unexpected files, mismatched IDs, and non-canonical JSON.
+- [x] Implement bundle validation from the existing bundle's own hash manifest plus an independently derived sorted file inventory. Reject symlinks, unexpected files, mismatched IDs, and non-canonical JSON.
 
-- [ ] Implement the eight-step publication state machine without holding a PostgreSQL transaction across network uploads.
+- [x] Implement the eight-step publication state machine without holding a PostgreSQL transaction across network uploads.
 
   ```python
   class ArtifactPublisher:
@@ -507,9 +507,9 @@ class ArtifactStore(Protocol):
               raise
   ```
 
-- [ ] If recording the failed attempt itself fails, log both exceptions at the top-level boundary and keep the original non-zero outcome.
+- [x] If recording the failed attempt itself fails, log both exceptions at the top-level boundary and keep the original non-zero outcome.
 
-- [ ] Run focused tests plus ledger and report bundle regressions.
+- [x] Run focused tests plus ledger and report bundle regressions.
 
   ```bash
   uv run pytest -q tests/unit/artifacts tests/integration/test_artifact_publisher.py tests/unit/operations/test_reporting.py tests/unit/operations/test_qualification.py
@@ -519,7 +519,7 @@ class ArtifactStore(Protocol):
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/artifacts/bundles.py maais/artifacts/publisher.py tests/unit/artifacts/test_bundles.py tests/integration/test_artifact_publisher.py

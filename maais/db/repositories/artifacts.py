@@ -45,6 +45,35 @@ class ArtifactRepository:
         if attempt.status is not PublicationAttemptStatus.STARTED:
             raise ValueError("new artifact publication attempt must be started")
         await self._operation_lock(attempt.operation_id)
+        return await self._insert_attempt(attempt)
+
+    async def begin_attempt(
+        self,
+        *,
+        attempt_id: UUID,
+        operation_id: UUID,
+        bundle_content_hash: str,
+        started_at: datetime,
+    ) -> ArtifactPublicationAttempt:
+        await self._operation_lock(operation_id)
+        previous = await self._session.scalar(
+            select(func.max(ArtifactPublicationAttemptModel.attempt)).where(
+                ArtifactPublicationAttemptModel.operation_id == operation_id
+            )
+        )
+        attempt = ArtifactPublicationAttempt.start(
+            attempt_id=attempt_id,
+            operation_id=operation_id,
+            attempt=(previous or 0) + 1,
+            bundle_content_hash=bundle_content_hash,
+            started_at=started_at,
+        )
+        return await self._insert_attempt(attempt)
+
+    async def _insert_attempt(
+        self,
+        attempt: ArtifactPublicationAttempt,
+    ) -> ArtifactPublicationAttempt:
         existing = await self._session.get(ArtifactPublicationAttemptModel, attempt.id)
         if existing is not None:
             restored = _attempt_from_row(existing)
@@ -218,6 +247,43 @@ class ArtifactRepository:
             records.append(record)
             previous = record.catalog_content_hash
         return tuple(records)
+
+    async def find_report(
+        self,
+        *,
+        environment: str,
+        candidate_hash: str,
+        experiment_id: UUID,
+        artifact_type: ArtifactType,
+        report_id: str,
+    ) -> ArtifactRecord | None:
+        records = await self.list_stream(
+            environment=environment,
+            candidate_hash=candidate_hash,
+            experiment_id=experiment_id,
+        )
+        for record in records:
+            if record.artifact_type is artifact_type and record.report_id == report_id:
+                return record
+        return None
+
+    async def next_stream_position(
+        self,
+        *,
+        environment: str,
+        candidate_hash: str,
+        experiment_id: UUID,
+    ) -> tuple[int, str]:
+        await self._stream_lock(environment, candidate_hash, experiment_id)
+        records = await self.list_stream(
+            environment=environment,
+            candidate_hash=candidate_hash,
+            experiment_id=experiment_id,
+        )
+        if not records:
+            return 1, GENESIS_EVIDENCE_HASH
+        latest = records[-1]
+        return latest.sequence + 1, latest.catalog_content_hash
 
     async def _locked_attempt(self, attempt_id: UUID) -> ArtifactPublicationAttemptModel:
         row = await self._session.scalar(

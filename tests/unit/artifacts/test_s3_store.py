@@ -221,6 +221,30 @@ async def test_canonical_put_rejects_absent_version_id(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_canonical_put_rejects_missing_provider_retention_metadata(
+    tmp_path: Path,
+) -> None:
+    request = _request(tmp_path)
+    store, stubber = _stubbed_store(canonical=True)
+    _queue_canonical_capabilities(stubber)
+    stubber.add_response(
+        "put_object",
+        {"ETag": '"etag"', "VersionId": "version-001"},
+        _put_parameters(request, canonical=True),
+    )
+    response = _head_response(request, canonical=True, etag='"etag"')
+    response.pop("ObjectLockRetainUntilDate")
+    stubber.add_response(
+        "head_object",
+        response,
+        {"Bucket": "archive", "Key": request.key, "VersionId": "version-001"},
+    )
+
+    with stubber, pytest.raises(ArtifactVerificationError, match="retention metadata"):
+        await store.put_verified(request)
+
+
+@pytest.mark.asyncio
 async def test_put_always_recomputes_read_back_sha256(tmp_path: Path) -> None:
     request = _request(tmp_path)
     store, stubber = _stubbed_store(canonical=True)
