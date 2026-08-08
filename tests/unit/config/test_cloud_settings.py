@@ -3,7 +3,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from maais.config.cloud import DeploymentTarget, ServiceRole
+from maais.config.cloud import EU_WEST_RAILWAY_REGION, DeploymentTarget, ServiceRole
 from maais.config.modes import RunMode
 from maais.config.settings import Settings
 
@@ -19,7 +19,9 @@ def _railway_settings(**overrides: object) -> Settings:
         "railway_service_id": "service",
         "railway_deployment_id": "deployment",
         "railway_replica_id": "replica",
-        "railway_region": "europe-west4",
+        "railway_region": EU_WEST_RAILWAY_REGION,
+        "expected_railway_region": EU_WEST_RAILWAY_REGION,
+        "railway_git_commit_sha": "a" * 40,
         "expected_schema_revision": "0019",
         "database_role_name": "maais_worker",
         "_env_file": None,
@@ -112,6 +114,18 @@ def test_railway_schema_revision_must_be_an_alembic_revision() -> None:
         _railway_settings(expected_schema_revision="head")
 
 
+def test_railway_runtime_requires_the_frozen_eu_west_region() -> None:
+    with pytest.raises(ValidationError, match="expected Railway region"):
+        _railway_settings(expected_railway_region="us-west2")
+    with pytest.raises(ValidationError, match="unexpected Railway replica region"):
+        _railway_settings(railway_region="us-west2")
+
+
+def test_railway_git_commit_sha_must_be_lowercase_sha1() -> None:
+    with pytest.raises(ValidationError, match="Git commit SHA"):
+        _railway_settings(railway_git_commit_sha="A" * 40)
+
+
 def test_railway_candidate_descriptor_path_must_be_absolute() -> None:
     with pytest.raises(ValidationError, match="descriptor path"):
         _railway_settings(candidate_descriptor_path="candidate.json")
@@ -143,6 +157,8 @@ def test_redacted_summary_is_an_explicit_non_secret_allowlist() -> None:
         "railway_snapshot_id": None,
         "railway_replica_id": "",
         "railway_region": "",
+        "expected_railway_region": "",
+        "railway_git_commit_sha": "",
         "expected_schema_revision": "",
         "database_role_name": "",
     }
@@ -207,7 +223,9 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
         "RAILWAY_SERVICE_ID": "service",
         "RAILWAY_DEPLOYMENT_ID": "deployment",
         "RAILWAY_REPLICA_ID": "replica",
-        "RAILWAY_REGION": "europe-west4",
+        "RAILWAY_REPLICA_REGION": EU_WEST_RAILWAY_REGION,
+        "MAAIS_EXPECTED_RAILWAY_REGION": EU_WEST_RAILWAY_REGION,
+        "RAILWAY_GIT_COMMIT_SHA": "a" * 40,
         "MAAIS_EXPECTED_SCHEMA_REVISION": "0019",
         "MAAIS_DATABASE_ROLE_NAME": "maais_worker",
         "MAAIS_CANDIDATE_DESCRIPTOR_PATH": "/app/candidate.json",
@@ -220,6 +238,9 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
     assert settings.deployment_target is DeploymentTarget.RAILWAY
     assert settings.service_role is ServiceRole.WORKER
     assert settings.cloud.railway_deployment_id == "deployment"
+    assert settings.cloud.railway_region == EU_WEST_RAILWAY_REGION
+    assert settings.cloud.expected_railway_region == EU_WEST_RAILWAY_REGION
+    assert settings.cloud.railway_git_commit_sha == "a" * 40
     assert settings.cloud.expected_schema_revision == "0019"
 
 

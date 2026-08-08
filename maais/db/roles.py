@@ -94,6 +94,7 @@ def load_database_role_passwords(environment: Mapping[str, str]) -> DatabaseRole
 
 PUBLIC_TABLES: Final[tuple[str, ...]] = (
     "account_snapshots",
+    "alembic_version",
     "agent_evaluations",
     "agent_versions",
     "agent_weights",
@@ -676,6 +677,7 @@ DECLARE
     existing public.service_instances%ROWTYPE;
 BEGIN
     expected_role := CASE session_user
+        WHEN 'maais_migrator' THEN 'migrator'
         WHEN 'maais_web' THEN 'web'
         WHEN 'maais_worker' THEN 'worker'
         WHEN 'maais_ops' THEN 'operations'
@@ -777,6 +779,7 @@ DECLARE
     existing public.service_instances%ROWTYPE;
 BEGIN
     expected_role := CASE session_user
+        WHEN 'maais_migrator' THEN 'migrator'
         WHEN 'maais_web' THEN 'web'
         WHEN 'maais_worker' THEN 'worker'
         WHEN 'maais_ops' THEN 'operations'
@@ -843,8 +846,8 @@ GRANT EXECUTE ON FUNCTION public.maais_enqueue_operator_command(
 GRANT EXECUTE ON FUNCTION public.maais_register_service_instance(
     uuid, uuid, text, text, text, text, text, text, text, text, text, jsonb,
     timestamp with time zone, timestamp with time zone
-) TO maais_worker, maais_web, maais_ops, maais_verifier;
+) TO maais_migrator, maais_worker, maais_web, maais_ops, maais_verifier;
 GRANT EXECUTE ON FUNCTION public.maais_heartbeat_service_instance(
     uuid, integer, timestamp with time zone
-) TO maais_worker, maais_web, maais_ops, maais_verifier;
+) TO maais_migrator, maais_worker, maais_web, maais_ops, maais_verifier;
 """.strip()

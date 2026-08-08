@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from maais.config.cloud import (
     DATABASE_ROLE_BY_SERVICE,
+    EU_WEST_RAILWAY_REGION,
     CloudSettings,
     DeploymentTarget,
     ServiceRole,
@@ -76,7 +77,18 @@ class Settings(BaseSettings):
     railway_deployment_id: str = ""
     railway_snapshot_id: str | None = None
     railway_replica_id: str = ""
-    railway_region: str = ""
+    railway_region: str = Field(
+        default="",
+        validation_alias="RAILWAY_REPLICA_REGION",
+    )
+    expected_railway_region: str = Field(
+        default="",
+        validation_alias="MAAIS_EXPECTED_RAILWAY_REGION",
+    )
+    railway_git_commit_sha: str = Field(
+        default="",
+        validation_alias="RAILWAY_GIT_COMMIT_SHA",
+    )
     candidate_descriptor_path: Path = Field(
         default=Path("/app/candidate.json"),
         validation_alias="MAAIS_CANDIDATE_DESCRIPTOR_PATH",
@@ -100,13 +112,15 @@ class Settings(BaseSettings):
             "RAILWAY_SERVICE_ID": self.railway_service_id,
             "RAILWAY_DEPLOYMENT_ID": self.railway_deployment_id,
             "RAILWAY_REPLICA_ID": self.railway_replica_id,
-            "RAILWAY_REGION": self.railway_region,
-            "EXPECTED_SCHEMA_REVISION": self.expected_schema_revision,
-            "DATABASE_ROLE_NAME": self.database_role_name,
+            "RAILWAY_REPLICA_REGION": self.railway_region,
+            "MAAIS_EXPECTED_RAILWAY_REGION": self.expected_railway_region,
+            "RAILWAY_GIT_COMMIT_SHA": self.railway_git_commit_sha,
+            "MAAIS_EXPECTED_SCHEMA_REVISION": self.expected_schema_revision,
+            "MAAIS_DATABASE_ROLE_NAME": self.database_role_name,
         }
         missing = [name for name, value in required.items() if not value.strip()]
         if self.service_role is None:
-            missing.insert(0, "SERVICE_ROLE")
+            missing.insert(0, "MAAIS_SERVICE_ROLE")
         if missing:
             raise ValueError(
                 "Railway runtime requires non-empty identity fields: " + ", ".join(missing)
@@ -120,6 +134,18 @@ class Settings(BaseSettings):
             raise ValueError("Railway identity fields must be trimmed: " + ", ".join(untrimmed))
         if re.fullmatch(r"\d{4}", self.expected_schema_revision) is None:
             raise ValueError("Railway expected schema revision must be four decimal digits")
+        if re.fullmatch(r"[0-9a-f]{40}", self.railway_git_commit_sha) is None:
+            raise ValueError("Railway Git commit SHA must be 40 lowercase hexadecimal characters")
+        if self.expected_railway_region != EU_WEST_RAILWAY_REGION:
+            raise ValueError(
+                "expected Railway region must be the frozen EU West region: "
+                f"{EU_WEST_RAILWAY_REGION}"
+            )
+        if self.railway_region != self.expected_railway_region:
+            raise ValueError(
+                "unexpected Railway replica region: "
+                f"expected={self.expected_railway_region} actual={self.railway_region}"
+            )
         if (
             not self.candidate_descriptor_path.is_absolute()
             or ".." in self.candidate_descriptor_path.parts
@@ -182,6 +208,8 @@ class Settings(BaseSettings):
             railway_snapshot_id=self.railway_snapshot_id,
             railway_replica_id=self.railway_replica_id,
             railway_region=self.railway_region,
+            expected_railway_region=self.expected_railway_region,
+            railway_git_commit_sha=self.railway_git_commit_sha,
             candidate_descriptor_path=self.candidate_descriptor_path,
             expected_schema_revision=self.expected_schema_revision,
             database_role_name=self.database_role_name,
@@ -205,6 +233,8 @@ class Settings(BaseSettings):
             "railway_snapshot_id": self.railway_snapshot_id,
             "railway_replica_id": self.railway_replica_id,
             "railway_region": self.railway_region,
+            "expected_railway_region": self.expected_railway_region,
+            "railway_git_commit_sha": self.railway_git_commit_sha,
             "expected_schema_revision": self.expected_schema_revision,
             "database_role_name": self.database_role_name,
         }

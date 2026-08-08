@@ -192,7 +192,9 @@ class ServiceInstance:
               railway_deployment_id="deployment",
               railway_snapshot_id="snapshot",
               railway_replica_id="replica",
-              railway_region="europe-west4",
+              railway_region="europe-west4-drams3a",
+              expected_railway_region="europe-west4-drams3a",
+              railway_git_commit_sha="a" * 40,
               candidate_descriptor_path="/app/candidate.json",
               expected_schema_revision="0019",
               binance_demo_api_key="forbidden",  # pragma: allowlist secret
@@ -575,6 +577,13 @@ class ServiceInstance:
 
 - Create: `maais/platform/runtime.py`
 - Modify: `maais/cli.py`
+- Modify: `maais/config/cloud.py`
+- Modify: `maais/config/settings.py`
+- Modify: `maais/db/roles.py`
+- Create: `tests/integration/database_role_support.py`
+- Modify: `tests/integration/test_database_roles.py`
+- Modify: `tests/unit/config/test_cloud_settings.py`
+- Modify: `tests/unit/db/test_roles.py`
 - Test: `tests/unit/platform/test_runtime_identity.py`
 - Test: `tests/integration/test_runtime_registration.py`
 
@@ -582,9 +591,9 @@ class ServiceInstance:
 
 **Produces:** `maais cloud-identity` and reusable `verify_and_register_runtime()` called by every cloud role before readiness.
 
-- [ ] Write failing tests for missing Railway metadata, wrong role, wrong descriptor hash, wrong schema, unexpected region, wrong PostgreSQL role, and duplicate boot ID with different identity.
+- [x] Write failing tests for missing Railway metadata, wrong role, wrong descriptor hash, wrong schema, unexpected region, wrong PostgreSQL role, and duplicate boot ID with different identity.
 
-- [ ] Implement identity construction from the explicit allowlist only; generate `boot_id` once per process and never accept it from an HTTP request.
+- [x] Implement identity construction from the explicit allowlist only; generate `boot_id` once per process and never accept it from an HTTP request.
 
   ```python
   async def verify_and_register_runtime(
@@ -599,11 +608,11 @@ class ServiceInstance:
       raise NotImplementedError
   ```
 
-- [ ] Query `current_user`, `version_num`, and `pg_control_system()`/`pg_control_system().system_identifier` through a read-only transaction where supported; fail if the connected role does not match `service_role`.
+- [x] Query `current_user`, `version_num`, and `pg_control_system()`/`pg_control_system().system_identifier` through a read-only transaction where supported; fail if the connected role does not match `service_role`.
 
-- [ ] Make `cloud-identity --json` print only candidate hash, role, deployment/replica/region, schema, database system identifier hash, and boot ID; never print URLs or credentials.
+- [x] Make `cloud-identity --json` print only candidate hash, role, deployment/replica/region, schema, database system identifier hash, and boot ID; never print URLs or credentials.
 
-- [ ] Run all cloud identity tests and local compatibility regressions.
+- [x] Run all cloud identity tests and local compatibility regressions.
 
   ```bash
   uv run pytest -q tests/unit/platform tests/integration/test_platform_repository.py tests/integration/test_runtime_registration.py tests/test_settings.py
@@ -613,10 +622,10 @@ class ServiceInstance:
 
   Expected: all commands exit `0`; local mode does not require Railway variables.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
-  git add maais/platform/runtime.py maais/cli.py tests/unit/platform/test_runtime_identity.py tests/integration/test_runtime_registration.py
+  git add maais/platform/runtime.py maais/cli.py maais/config/cloud.py maais/config/settings.py maais/db/roles.py tests/unit/config/test_cloud_settings.py tests/unit/db/test_roles.py tests/unit/platform/test_runtime_identity.py tests/integration/database_role_support.py tests/integration/test_database_roles.py tests/integration/test_runtime_registration.py
   git commit -m "feat: verify cloud runtime identity"
   git push origin feat/paper-platform-baseline
   ```

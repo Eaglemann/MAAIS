@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from maais.config.cloud import ServiceRole
 from maais.db.replay import verify_ledger_consistency
-from maais.db.roles import DatabaseRolePasswords
 from maais.db.unit_of_work import UnitOfWork
 from maais.operations.migrations import (
     MIGRATION_LOCK_KEY,
@@ -23,6 +22,12 @@ from maais.operations.migrations import (
 )
 from maais.operations.operator_commands import CommandType, OperatorCommand
 from maais.platform.identity import RailwayRuntimeIdentity
+from tests.integration.database_role_support import (
+    cleanup_database_roles as _cleanup_roles,
+)
+from tests.integration.database_role_support import (
+    integration_role_passwords as _passwords,
+)
 from tests.integration.test_platform_repository import (
     COMMAND_ONE,
     EXPERIMENT_ONE,
@@ -37,16 +42,6 @@ pytestmark = pytest.mark.integration
 
 NOW = datetime(2026, 8, 8, 12, tzinfo=timezone.utc)
 WEB_BOOT = UUID("99999999-9999-4999-8999-999999999999")
-
-
-def _passwords() -> DatabaseRolePasswords:
-    return DatabaseRolePasswords(
-        migrator="migrator-integration-password",  # pragma: allowlist secret
-        worker="worker-integration-password",  # pragma: allowlist secret
-        web="web-integration-password",  # pragma: allowlist secret
-        operations="operations-integration-password",  # pragma: allowlist secret
-        verifier="verifier-integration-password",  # pragma: allowlist secret
-    )
 
 
 async def test_role_bootstrap_refuses_an_active_run(
@@ -353,63 +348,3 @@ async def _assert_roles_absent(db_engine: AsyncEngine) -> None:
         )
         await connection.rollback()
     assert roles == ()
-
-
-async def _cleanup_roles(db_engine: AsyncEngine) -> None:
-    async with db_engine.begin() as connection:
-        await connection.execute(
-            text(
-                "DROP FUNCTION IF EXISTS public.maais_heartbeat_service_instance("
-                "uuid, integer, timestamp with time zone)"
-            )
-        )
-        await connection.execute(
-            text(
-                "DROP FUNCTION IF EXISTS public.maais_register_service_instance("
-                "uuid, uuid, text, text, text, text, text, text, text, text, text, jsonb, "
-                "timestamp with time zone, timestamp with time zone)"
-            )
-        )
-        await connection.execute(
-            text(
-                "DROP FUNCTION IF EXISTS public.maais_enqueue_operator_command("
-                "uuid, uuid, text, text, text, text, jsonb, boolean, timestamp with time zone)"
-            )
-        )
-        await connection.execute(
-            text("DROP FUNCTION IF EXISTS public._maais_canonical_jsonb(jsonb)")
-        )
-        await connection.execute(
-            text("DROP FUNCTION IF EXISTS public._maais_utc_iso(timestamp with time zone)")
-        )
-        await connection.execute(text("DROP SCHEMA IF EXISTS maais_auth CASCADE"))
-        existing = set(
-            await connection.scalars(
-                text(
-                    "SELECT rolname FROM pg_roles WHERE rolname IN "
-                    "('maais_migrator','maais_worker','maais_web','maais_ops','maais_verifier')"
-                )
-            )
-        )
-        if "maais_migrator" in existing:
-            await connection.execute(text("REASSIGN OWNED BY maais_migrator TO maais"))
-        await connection.execute(text("DROP TABLE IF EXISTS public.health_evaluations"))
-        await connection.execute(text("DROP TABLE IF EXISTS public.artifact_records"))
-        for role_name in (
-            "maais_worker",
-            "maais_web",
-            "maais_ops",
-            "maais_verifier",
-            "maais_migrator",
-        ):
-            if role_name in existing:
-                await connection.execute(text(f"DROP OWNED BY {role_name}"))
-                await connection.execute(text(f"DROP ROLE {role_name}"))
-        await connection.execute(text("GRANT USAGE ON SCHEMA public TO PUBLIC"))
-        await connection.execute(
-            text(
-                "DO $restore_connect$ BEGIN EXECUTE format("
-                "'GRANT CONNECT ON DATABASE %I TO PUBLIC', current_database()); "
-                "END $restore_connect$"
-            )
-        )

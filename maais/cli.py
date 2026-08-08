@@ -47,6 +47,7 @@ from maais.operations.soak_readiness import (
 )
 from maais.operations.verification import verify_configured_ledger
 from maais.platform.candidate import build_candidate_descriptor, write_candidate_descriptor
+from maais.platform.runtime import verify_configured_runtime_identity
 
 
 def _localhost_port(value: str) -> int:
@@ -110,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cloud_migrate.add_argument("--expected-revision", type=_schema_revision, required=True)
     cloud_migrate.add_argument("--repository", type=Path, default=Path.cwd())
+    cloud_identity = commands.add_parser(
+        "cloud-identity",
+        help="verify and register the current secret-free Railway runtime identity",
+    )
+    cloud_identity.add_argument("--json", action="store_true", required=True)
     prepare = commands.add_parser(
         "prepare-paper-live",
         help="preflight public venues and write an immutable paper manifest",
@@ -311,6 +317,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sort_keys=True,
             )
         )
+        return 0
+    if arguments.command == "cloud-identity":
+        evidence = asyncio.run(verify_configured_runtime_identity(settings=settings))
+        print(json.dumps(evidence.to_json_data(), sort_keys=True))
         return 0
     if arguments.command == "prepare-paper-live":
         manifest = asyncio.run(

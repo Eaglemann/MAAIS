@@ -7,6 +7,8 @@ from typing import Final, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
+EU_WEST_RAILWAY_REGION: Final = "europe-west4-drams3a"
+
 
 class DeploymentTarget(StrEnum):
     LOCAL = "local"
@@ -46,6 +48,8 @@ class CloudSettings(BaseModel):
     railway_snapshot_id: str | None = None
     railway_replica_id: str = ""
     railway_region: str = ""
+    expected_railway_region: str = ""
+    railway_git_commit_sha: str = ""
     candidate_descriptor_path: Path = Path("/app/candidate.json")
     expected_schema_revision: str = ""
     database_role_name: str = ""
