@@ -49,6 +49,12 @@ class Settings(BaseSettings):
         exclude=True,
         repr=False,
     )
+    restore_target_database_url: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias="MAAIS_RESTORE_TARGET_DATABASE_URL",
+        exclude=True,
+        repr=False,
+    )
     duckdb_path: str = "./data/maais.duckdb"
     kafka_bootstrap_servers: str = "localhost:9092"
     log_level: str = "INFO"
@@ -263,6 +269,10 @@ class Settings(BaseSettings):
     @property
     def maais_test_database_url_value(self) -> str:
         return self.maais_test_database_url.get_secret_value()
+
+    @property
+    def restore_target_database_url_value(self) -> str:
+        return self.restore_target_database_url.get_secret_value()
 
     @property
     def telegram_bot_token_value(self) -> str:

@@ -214,3 +214,16 @@ def test_artifact_environment_names_populate_settings(
     assert settings.artifacts.mode is ArtifactStoreMode.DUAL_S3
     assert settings.artifacts.replica_bucket == "maais-replica"
     assert settings.artifacts.canonical_bucket == "maais-canonical"
+
+
+def test_restore_target_url_is_secret_and_absent_from_diagnostics() -> None:
+    canary = (
+        "postgresql+psycopg://restore:"
+        "restore-secret-canary@db.internal:5432/maais_restore_test"  # pragma: allowlist secret
+    )
+    settings = Settings(_env_file=None, restore_target_database_url=canary)
+
+    assert settings.restore_target_database_url_value == canary
+    assert canary not in repr(settings)
+    assert canary not in json.dumps(settings.model_dump(mode="json"), sort_keys=True)
+    assert canary not in json.dumps(settings.redacted_summary(), sort_keys=True)

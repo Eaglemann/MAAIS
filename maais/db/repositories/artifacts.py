@@ -281,6 +281,21 @@ class ArtifactRepository:
                 return record
         raise ArtifactCatalogIntegrityError("artifact catalog record is absent from its stream")
 
+    async def list_for_operation(self, operation_id: UUID) -> tuple[ArtifactRecord, ...]:
+        if await self._session.get(ScheduledOperationModel, operation_id) is None:
+            raise LookupError("scheduled operation does not exist")
+        record_ids = tuple(
+            await self._session.scalars(
+                select(ArtifactRecordModel.id)
+                .where(ArtifactRecordModel.operation_id == operation_id)
+                .order_by(ArtifactRecordModel.sequence, ArtifactRecordModel.id)
+            )
+        )
+        records: list[ArtifactRecord] = []
+        for record_id in record_ids:
+            records.append(await self.get_record(record_id))
+        return tuple(records)
+
     async def next_stream_position(
         self,
         *,

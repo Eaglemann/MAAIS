@@ -189,7 +189,11 @@ async def verify_and_register_runtime(
     return evidence.identity
 
 
-async def verify_configured_runtime_identity(*, settings: Settings) -> RuntimeIdentityEvidence:
+async def verify_configured_runtime_identity(
+    *,
+    settings: Settings,
+    run_id: UUID | None = None,
+) -> RuntimeIdentityEvidence:
     descriptor = _load_embedded_descriptor(settings)
     process = process_boot_identity()
     engine = create_async_engine(
@@ -204,7 +208,7 @@ async def verify_configured_runtime_identity(*, settings: Settings) -> RuntimeId
             descriptor=descriptor,
             boot_id=process.boot_id,
             started_at=process.started_at,
-            run_id=None,
+            run_id=run_id,
         )
     finally:
         await engine.dispose()

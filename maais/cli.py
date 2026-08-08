@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
+from maais.config.artifacts import ArtifactType
 from maais.config.settings import get_settings
 from maais.core.logging import configure_logging
 from maais.db.roles import load_database_role_passwords
@@ -20,6 +21,12 @@ from maais.live import (
     run_live_paper_manifest,
 )
 from maais.operations.backups import backup_configured_database
+from maais.operations.cloud_artifacts import (
+    backup_configured_cloud_database,
+    close_configured_cloud_day,
+    publish_configured_cloud_bundle,
+    restore_configured_cloud_backup,
+)
 from maais.operations.daily_supervisor import supervise_daily_closes
 from maais.operations.database_identity import collect_configured_database_identity
 from maais.operations.final_reporting import (
@@ -89,6 +96,12 @@ def _schema_revision(value: str) -> str:
     return value
 
 
+def _sha256(value: str) -> str:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise argparse.ArgumentTypeError("value must be a lowercase SHA-256 digest")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="maais")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -116,6 +129,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="verify and register the current secret-free Railway runtime identity",
     )
     cloud_identity.add_argument("--json", action="store_true", required=True)
+    cloud_publish = commands.add_parser(
+        "cloud-publish",
+        help="publish one locally verified bundle to both immutable cloud targets",
+    )
+    cloud_publish.add_argument("--run", type=UUID, required=True)
+    cloud_publish.add_argument("--experiment", type=UUID, required=True)
+    cloud_publish.add_argument("--date", dest="report_date", type=_date, required=True)
+    cloud_publish.add_argument(
+        "--type",
+        dest="artifact_type",
+        choices=tuple(value.value for value in ArtifactType),
+        required=True,
+    )
+    cloud_publish.add_argument("--report-id", type=_sha256, required=True)
+    cloud_publish.add_argument("--bundle", type=Path, required=True)
+    cloud_backup = commands.add_parser(
+        "cloud-backup",
+        help="create and durably publish one cataloged cloud logical backup",
+    )
+    cloud_backup.add_argument("--run", type=UUID, required=True)
+    cloud_backup.add_argument("--experiment", type=UUID, required=True)
+    cloud_backup.add_argument("--date", dest="report_date", type=_date, required=True)
+    cloud_backup.add_argument("--output", type=Path, required=True)
+    cloud_restore = commands.add_parser(
+        "cloud-restore-verify",
+        help="restore one cataloged exact canonical backup version to the secret test target",
+    )
+    cloud_restore.add_argument("--artifact-record", type=UUID, required=True)
+    cloud_restore.add_argument("--output", type=Path, required=True)
+    cloud_daily_close = commands.add_parser(
+        "cloud-daily-close",
+        help="publish the exactly-once report and backup for one completed Berlin day",
+    )
+    cloud_daily_close.add_argument("--run", type=UUID, required=True)
+    cloud_daily_close.add_argument("--experiment", type=UUID, required=True)
+    cloud_daily_close.add_argument("--date", dest="report_date", type=_date, required=True)
+    cloud_daily_close.add_argument("--temporary-parent", type=Path, required=True)
     prepare = commands.add_parser(
         "prepare-paper-live",
         help="preflight public venues and write an immutable paper manifest",
@@ -321,6 +371,65 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "cloud-identity":
         evidence = asyncio.run(verify_configured_runtime_identity(settings=settings))
         print(json.dumps(evidence.to_json_data(), sort_keys=True))
+        return 0
+    if arguments.command == "cloud-publish":
+        result = asyncio.run(
+            publish_configured_cloud_bundle(
+                settings=settings,
+                run_id=arguments.run,
+                experiment_id=arguments.experiment,
+                report_date=arguments.report_date,
+                artifact_type=ArtifactType(arguments.artifact_type),
+                report_id=arguments.report_id,
+                bundle_directory=arguments.bundle,
+            )
+        )
+        print(json.dumps(result.to_json_data(), sort_keys=True))
+        return 0
+    if arguments.command == "cloud-backup":
+        result = asyncio.run(
+            backup_configured_cloud_database(
+                settings=settings,
+                run_id=arguments.run,
+                experiment_id=arguments.experiment,
+                report_date=arguments.report_date,
+                temporary_parent=arguments.output,
+            )
+        )
+        print(json.dumps(result.to_json_data(), sort_keys=True))
+        return 0
+    if arguments.command == "cloud-restore-verify":
+        result = asyncio.run(
+            restore_configured_cloud_backup(
+                settings=settings,
+                artifact_record_id=arguments.artifact_record,
+                output_directory=arguments.output,
+            )
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["passed"] is True else 1
+    if arguments.command == "cloud-daily-close":
+        result = asyncio.run(
+            close_configured_cloud_day(
+                settings=settings,
+                run_id=arguments.run,
+                experiment_id=arguments.experiment,
+                report_date=arguments.report_date,
+                temporary_parent=arguments.temporary_parent,
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "backup_artifact_record_id": str(result.backup_record.id),
+                    "operation_id": str(result.operation.id),
+                    "report_artifact_record_id": str(result.report_record.id),
+                    "resumed": result.resumed,
+                    "status": result.operation.status.value,
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     if arguments.command == "prepare-paper-live":
         manifest = asyncio.run(

@@ -250,6 +250,7 @@ class StoreCapabilities:
 
 
 class ScheduledOperationType(StrEnum):
+    DAILY_CLOSE = "daily_close"
     DAILY_REPORT = "daily_report"
     LOGICAL_BACKUP = "logical_backup"
     AUDIT_EXPORT = "audit_export"

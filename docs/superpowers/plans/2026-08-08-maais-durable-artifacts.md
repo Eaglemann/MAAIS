@@ -545,9 +545,9 @@ class ArtifactStore(Protocol):
 
 **Produces:** Cloud publication wrappers, backup producer identity, object-backed restore input, and idempotent daily close.
 
-- [ ] Write failing tests that preserve existing local return types while cloud wrappers require candidate/deployment/run/operation identities and publish only after local semantic/hash verification.
+- [x] Write failing tests that preserve existing local return types while cloud wrappers require candidate/deployment/run/operation identities and publish only after local semantic/hash verification.
 
-- [ ] Write a restore test that downloads the exact canonical version to a private temporary directory, verifies retention and dump hash before invoking `pg_restore`, requires a target name ending `_restore_test`, and never issues `DROP DATABASE`.
+- [x] Write a restore test that downloads the exact canonical version to a private temporary directory, verifies retention and dump hash before invoking `pg_restore`, requires a target name ending `_restore_test`, and never issues `DROP DATABASE`.
 
   ```python
   def test_restore_target_must_be_fresh_and_suffix_constrained() -> None:
@@ -555,19 +555,19 @@ class ArtifactStore(Protocol):
           validate_restore_target("maais")
   ```
 
-- [ ] Run focused tests and confirm cloud wrappers are absent.
+- [x] Run focused tests and confirm cloud wrappers are absent.
 
   ```bash
   uv run pytest -q tests/unit/operations/test_cloud_backups.py tests/unit/operations/test_cloud_reports.py tests/integration/test_cloud_restore.py
   ```
 
-- [ ] Extend backup manifests with candidate hash, Railway deployment/replica/region, run ID, database system identifier, operation ID, and artifact schema version; preserve all existing dump, table-count, schema, and ledger checks.
+- [x] Extend backup manifests with candidate hash, Railway deployment/replica/region, run ID, database system identifier, operation ID, and artifact schema version; preserve all existing dump, table-count, schema, and ledger checks.
 
-- [ ] Make daily close acquire `scheduled_operations` by `(run_id, "daily_close", berlin_date)`. Persist its `generated_at` before report generation, use it for deterministic retries, resolve already-successful report/backup records instead of creating second objects, and mark complete only when both catalog records are verified.
+- [x] Make daily close acquire `scheduled_operations` by `(run_id, "daily_close", berlin_date)`. Persist its `generated_at` before report generation, use it for deterministic retries, resolve already-successful report/backup records instead of creating second objects, and mark complete only when both catalog records are verified.
 
-- [ ] Add `cloud-publish`, `cloud-backup`, and `cloud-restore-verify` commands. `cloud-restore-verify` accepts an artifact record ID and fresh target URL through a secret setting; it does not accept an arbitrary object key.
+- [x] Add `cloud-publish`, `cloud-backup`, and `cloud-restore-verify` commands. `cloud-restore-verify` accepts an artifact record ID and fresh target URL through a secret setting; it does not accept an arbitrary object key.
 
-- [ ] Run local and cloud backup/report/restore tests.
+- [x] Run local and cloud backup/report/restore tests.
 
   ```bash
   uv run pytest -q tests/unit/operations/test_backups.py tests/unit/operations/test_restores.py tests/unit/operations/test_reporting.py tests/unit/operations/test_daily_supervisor.py
@@ -578,7 +578,7 @@ class ArtifactStore(Protocol):
 
   Expected: all commands exit `0`; local filesystem behavior remains unchanged.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/operations/backups.py maais/operations/restores.py maais/operations/reporting.py maais/operations/daily_supervisor.py maais/operations/artifact_publication.py maais/cli.py tests/unit/operations/test_cloud_backups.py tests/unit/operations/test_cloud_reports.py tests/integration/test_cloud_restore.py

@@ -55,6 +55,45 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/restore-drills",
         ]
     )
+    cloud_publish = parser.parse_args(
+        [
+            "cloud-publish",
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--date",
+            "2026-08-08",
+            "--type",
+            "daily_report",
+            "--report-id",
+            "a" * 64,
+            "--bundle",
+            "artifacts/report",
+        ]
+    )
+    cloud_backup = parser.parse_args(
+        [
+            "cloud-backup",
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--date",
+            "2026-08-08",
+            "--output",
+            "artifacts/cloud-backups",
+        ]
+    )
+    cloud_restore = parser.parse_args(
+        [
+            "cloud-restore-verify",
+            "--artifact-record",
+            "88888888-8888-4888-8888-888888888888",
+            "--output",
+            "artifacts/cloud-restores",
+        ]
+    )
     preflight = parser.parse_args(
         [
             "preflight",
@@ -156,6 +195,12 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert backup.output == Path("backups")
     assert restore.backup == Path("backups/candidate")
     assert restore.target_database == "maais_week_restore"
+    assert cloud_publish.artifact_type == "daily_report"
+    assert cloud_publish.bundle == Path("artifacts/report")
+    assert cloud_backup.output == Path("artifacts/cloud-backups")
+    assert cloud_restore.artifact_record == UUID("88888888-8888-4888-8888-888888888888")
+    assert not hasattr(cloud_restore, "target_database_url")
+    assert not hasattr(cloud_restore, "object_key")
     assert preflight.repository == Path.cwd()
     assert preflight.minimum_free_gb == 20
     assert preflight.qualification == Path("artifacts/qualification/latest")
@@ -174,6 +219,18 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
 
     with pytest.raises(SystemExit):
         parser.parse_args(["mission-control", "--port", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "cloud-restore-verify",
+                "--artifact-record",
+                "88888888-8888-4888-8888-888888888888",
+                "--output",
+                "artifacts/cloud-restores",
+                "--object-key",
+                "untrusted/latest.dump",
+            ]
+        )
     with pytest.raises(SystemExit):
         parser.parse_args(
             [

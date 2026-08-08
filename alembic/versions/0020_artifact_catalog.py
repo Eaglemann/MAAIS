@@ -17,7 +17,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _OPERATION_TYPES = (
-    "'daily_report','logical_backup','audit_export','artifact_publication',"
+    "'daily_close','daily_report','logical_backup','audit_export','artifact_publication',"
     "'qualification','restore_drill','process_drill','preflight','soak_verdict','final_report'"
 )
 _ARTIFACT_TYPES = (

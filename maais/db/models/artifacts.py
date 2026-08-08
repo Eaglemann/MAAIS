@@ -23,7 +23,7 @@ from maais.db.connection import Base
 from maais.domain.json import MutableJsonValue
 
 _OPERATION_TYPES = (
-    "'daily_report','logical_backup','audit_export','artifact_publication',"
+    "'daily_close','daily_report','logical_backup','audit_export','artifact_publication',"
     "'qualification','restore_drill','process_drill','preflight','soak_verdict','final_report'"
 )
 _ARTIFACT_TYPES = (
