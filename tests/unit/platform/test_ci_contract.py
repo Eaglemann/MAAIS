@@ -21,10 +21,12 @@ REQUIRED_JOBS = (
     "container-contract",
     "release-candidate",
 )
-CURRENT_ACTION_MAJORS = {
+CURRENT_ACTION_REFERENCES = {
     "actions/checkout": "v6",
     "actions/setup-node": "v7",
-    "astral-sh/setup-uv": "v9",
+    "astral-sh/setup-uv": (
+        "c771a70e6277c0a99b617c7a806ffedaca235ff9"  # pragma: allowlist secret
+    ),
     "actions/upload-artifact": "v7",
 }
 PINNED_UV_VERSION = "0.11.16"
@@ -93,15 +95,17 @@ def test_workflow_has_every_release_candidate_gate() -> None:
         assert dependency in release
 
 
-def test_workflow_uses_current_node24_action_majors() -> None:
+def test_workflow_uses_current_node24_action_references() -> None:
     raw = _workflow()
     actions: dict[str, set[str]] = {}
     for action, version in re.findall(r"uses:\s*([^@\s]+)@([^\s#]+)", raw):
         actions.setdefault(action, set()).add(version)
 
-    for action, expected_major in CURRENT_ACTION_MAJORS.items():
-        assert actions.get(action) == {expected_major}
-    assert raw.count("uses: astral-sh/setup-uv@v9") == raw.count(f'version: "{PINNED_UV_VERSION}"')
+    for action, expected_reference in CURRENT_ACTION_REFERENCES.items():
+        assert actions.get(action) == {expected_reference}
+    assert raw.count(
+        "uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
+    ) == raw.count(f'version: "{PINNED_UV_VERSION}"')
 
 
 def test_pull_request_jobs_are_read_only_and_receive_no_secrets() -> None:

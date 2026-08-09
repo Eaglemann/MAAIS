@@ -291,8 +291,11 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
   [`actions/setup-node`](https://github.com/actions/setup-node/releases),
   [`astral-sh/setup-uv`](https://github.com/astral-sh/setup-uv/releases), and
   [`actions/upload-artifact`](https://github.com/actions/upload-artifact/releases).
-  The workflow uses majors `v6`, `v7`, `v9`, and `v7`, respectively, and every
-  `setup-uv` step installs the Dockerfile's exact `uv==0.11.16` tool version.
+  The workflow uses references `v6`, `v7`, `v9.0.0`, and `v7`, respectively. Because
+  `setup-uv` v9 is immutable and publishes no floating `v9` alias, it is pinned to the
+  official full commit
+  `c771a70e6277c0a99b617c7a806ffedaca235ff9`; <!-- pragma: allowlist secret -->
+  every step also installs the Dockerfile's exact `uv==0.11.16` tool version.
 
 - [x] Run the test and confirm the current action versions/coverage fail the new contract.
 
