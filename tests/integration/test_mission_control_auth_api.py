@@ -20,8 +20,8 @@ from tests.unit.experiments.test_manifest import _manifest
 
 pytestmark = pytest.mark.integration
 
-PASSPHRASE = "paper-only operator passphrase"  # pragma: allowlist secret
-WRONG_PASSWORD = "wrong paper-only operator passphrase"  # pragma: allowlist secret
+PASSPHRASE = "p" * 32
+WRONG_PASSWORD = "w" * 32
 ORIGIN = "https://mission-control.test"
 HOST = "mission-control.test"
 NOW = datetime(2026, 8, 9, 12, tzinfo=timezone.utc)
@@ -41,15 +41,9 @@ def _security_settings() -> SecuritySettings:
         deployment_target=DeploymentTarget.RAILWAY,
         auth_mode=AuthMode.OPERATOR_SESSION,
         operator_password_hash=SecretStr(hash_operator_password(PASSPHRASE)),
-        session_pepper=SecretStr(
-            "session-pepper-auth-api-0123456789-ABCDEFGHIJ"  # pragma: allowlist secret
-        ),
-        csrf_pepper=SecretStr(
-            "csrf-pepper-auth-api-0123456789-ABCDEFGHIJKLM"  # pragma: allowlist secret
-        ),
-        monitor_token=SecretStr(
-            "monitor-token-auth-api-0123456789-ABCDEFGHIJ"  # pragma: allowlist secret
-        ),
+        session_pepper=SecretStr("s" * 48),
+        csrf_pepper=SecretStr("c" * 48),
+        monitor_token=SecretStr("t" * 48),
         secure_cookies=True,
         public_origin=ORIGIN,
     )
@@ -154,7 +148,7 @@ async def test_invalid_password_and_lockout_have_one_public_response_and_persist
 async def test_login_payload_errors_never_echo_password() -> None:
     settings = _security_settings()
     application = create_app(security_settings=settings, clock=MutableClock(NOW))
-    raw_password = "do-not-echo-" + "x" * 300  # pragma: allowlist secret
+    raw_password = "x" * 301
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
         base_url=ORIGIN,

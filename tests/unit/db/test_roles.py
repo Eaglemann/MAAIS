@@ -30,11 +30,11 @@ from maais.operations.migrations import (
 
 def _passwords() -> DatabaseRolePasswords:
     return DatabaseRolePasswords(
-        migrator="migrator-test-password",  # pragma: allowlist secret
-        worker="worker-test-password",  # pragma: allowlist secret
-        web="web-test-password",  # pragma: allowlist secret
-        operations="operations-test-password",  # pragma: allowlist secret
-        verifier="verifier-test-password",  # pragma: allowlist secret
+        migrator="m" * 32,
+        worker="w" * 32,
+        web="b" * 32,
+        operations="o" * 32,
+        verifier="v" * 32,
     )
 
 
