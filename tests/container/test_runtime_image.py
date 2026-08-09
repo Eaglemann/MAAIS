@@ -26,6 +26,7 @@ FORBIDDEN_PATH_PARTS = frozenset(
         ".ruff_cache",
         "__pycache__",
         "node_modules",
+        "test",
         "tests",
     }
 )
