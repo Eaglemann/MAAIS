@@ -25,6 +25,9 @@ dependencies = [
     "websockets>=13.0",
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.52.1",
+    "boto3>=1.43.67",
+    "argon2-cffi>=25.1.0",
+    "sentry-sdk[fastapi]>=2.66.1",
 ]
 
 [project.scripts]

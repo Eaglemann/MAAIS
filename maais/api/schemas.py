@@ -3,15 +3,42 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from maais.config.security import AuthMode
 from maais.operations.operator_commands import CommandStatus, CommandType
 
 
 class ReadModel(BaseModel):
     model_config = ConfigDict(frozen=True)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    password: str = Field(min_length=1, max_length=256, exclude=True, repr=False)
+
+
+class LoginResponse(ReadModel):
+    authenticated: bool = True
+    actor: str
+    auth_mode: AuthMode
+    csrf_token: str
+    expires_at: datetime
+
+
+class AuthSessionView(ReadModel):
+    authenticated: bool
+    actor: str | None
+    auth_mode: AuthMode
+    expires_at: datetime | None
+
+
+class CsrfTokenResponse(ReadModel):
+    csrf_token: str
 
 
 class ApiHealth(ReadModel):
@@ -20,6 +47,210 @@ class ApiHealth(ReadModel):
     database_transaction: str
     schema_revision: str
     checked_at: datetime
+
+
+class PublicLiveness(ReadModel):
+    status: Literal["live"] = "live"
+
+
+class PublicReadiness(ReadModel):
+    status: Literal["ready", "not_ready"]
+
+
+class MonitorHealth(ReadModel):
+    status: Literal["ok", "degraded"]
+    database: bool
+    worker: bool
+    ledger: bool
+    cursors: bool
+    operations: bool
+    evidence_replication: bool
+    daily_close: bool
+
+
+class CloudCandidateView(ReadModel):
+    descriptor_hash: str
+    git_sha: str
+    source_clean: bool
+    uv_lock_sha256: str
+    dashboard_lock_sha256: str
+    schema_revision: str
+    agent_implementation_hashes: Mapping[str, str]
+    dashboard_asset_manifest_sha256: str
+    build_definition_sha256: str
+    status: str
+    creator_deployment_id: str
+    registered_at: datetime
+    qualifying_at: datetime | None
+    qualified_at: datetime | None
+    qualification_evidence_hash: str | None
+
+
+class CloudIncidentView(ReadModel):
+    id: UUID
+    experiment_id: UUID
+    deduplication_key: str
+    severity: str
+    component: str
+    reason_code: str
+    evidence: Mapping[str, object]
+    requires_operator_review: bool
+    status: str
+    detected_at: datetime
+    acknowledged_at: datetime | None
+    resolved_at: datetime | None
+    acknowledged_by: str | None
+    resolved_by: str | None
+    resolution: str | None
+    changed_at: datetime
+    version: int
+    content_hash: str
+
+
+class CloudRunView(ReadModel):
+    id: UUID
+    experiment_id: UUID
+    candidate_hash: str
+    manifest_hash: str
+    database_system_identifier: str
+    railway_environment_id: str
+    purpose: str
+    status: str
+    requested_operator_command_id: UUID | None
+    activating_worker_boot_id: UUID | None
+    continuity_invalidated: bool
+    started_at: datetime | None
+    invalidated_at: datetime | None
+    invalidation_reason: str | None
+    created_at: datetime
+    incidents: tuple[CloudIncidentView, ...]
+
+
+class CloudServiceView(ReadModel):
+    boot_id: UUID
+    run_id: UUID
+    project_id: str
+    environment_id: str
+    service_id: str
+    deployment_id: str
+    snapshot_id: str | None
+    replica_id: str
+    region: str
+    service_role: str
+    candidate_hash: str
+    started_at: datetime
+    first_seen_at: datetime
+    last_heartbeat_at: datetime
+    heartbeat_sequence: int
+    stopped_at: datetime | None
+    terminal_reason: str | None
+
+
+class CloudServicePage(ReadModel):
+    items: tuple[CloudServiceView, ...]
+    limit: int
+    has_more: bool
+    next_before_at: datetime | None
+    next_before_id: UUID | None
+
+
+class CloudHealthEvaluationView(ReadModel):
+    evaluation_id: UUID
+    run_id: UUID
+    service_boot_id: UUID
+    overall_status: str
+    failed_check_names: tuple[str, ...]
+    severity: str
+    deduplication_key: str
+    incident_id: UUID | None
+    recovery_of_evaluation_id: UUID | None
+    recovered_at: datetime | None
+    components: Mapping[str, object]
+    checked_at: datetime
+    content_hash: str
+
+
+class CloudHealthEvaluationPage(ReadModel):
+    items: tuple[CloudHealthEvaluationView, ...]
+    limit: int
+    has_more: bool
+    next_before_at: datetime | None
+    next_before_id: UUID | None
+
+
+class CloudIncidentPage(ReadModel):
+    items: tuple[CloudIncidentView, ...]
+    limit: int
+    has_more: bool
+    next_before_at: datetime | None
+    next_before_id: UUID | None
+
+
+class CloudStoredArtifactView(ReadModel):
+    store_name: str
+    key: str
+    etag: str
+    version_id: str | None
+    sha256: str
+    size_bytes: int
+    content_type: str
+    retention_mode: str
+    retain_until: datetime
+    stored_at: datetime
+
+
+class CloudArtifactView(ReadModel):
+    id: UUID
+    operation_id: UUID
+    publication_attempt_id: UUID
+    environment: str
+    candidate_hash: str
+    experiment_id: UUID
+    run_id: UUID
+    artifact_type: str
+    report_id: str
+    bundle_content_hash: str
+    size_bytes: int
+    media_type: str
+    generated_at: datetime
+    recorded_at: datetime
+    producing_deployment_id: str
+    producing_service_id: str
+    sequence: int
+    replica_inventory: tuple[CloudStoredArtifactView, ...]
+    canonical_inventory: tuple[CloudStoredArtifactView, ...]
+    previous_evidence_hash: str
+    catalog_content_hash: str
+
+
+class CloudArtifactPage(ReadModel):
+    items: tuple[CloudArtifactView, ...]
+    limit: int
+    has_more: bool
+    next_before_sequence: int | None
+
+
+class CloudAuditEventView(ReadModel):
+    event_id: UUID
+    sequence: int
+    previous_hash: str | None
+    source_role: str
+    actor_reference: str
+    session_reference: str | None
+    event_code: str
+    reason_code: str | None
+    evidence: Mapping[str, object]
+    run_id: UUID
+    service_boot_id: UUID | None
+    occurred_at: datetime
+    content_hash: str
+
+
+class CloudAuditEventPage(ReadModel):
+    items: tuple[CloudAuditEventView, ...]
+    limit: int
+    has_more: bool
+    next_before_sequence: int | None
 
 
 class PaperModelAssumptions(ReadModel):

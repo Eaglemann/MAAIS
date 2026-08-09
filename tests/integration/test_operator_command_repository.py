@@ -215,6 +215,7 @@ async def test_worker_completion_is_persistent_event_backed_and_idempotent(
             )
         )
         consistency = await verify_ledger_consistency(uow.session)
+        audit = await uow.observability.list_audit_events()
 
     assert completed == restored
     assert repeated == completed
@@ -225,6 +226,17 @@ async def test_worker_completion_is_persistent_event_backed_and_idempotent(
         "operator_command.completed",
     )
     assert consistency.ok
+    assert [event.event_code for event in audit] == [
+        "operator.command.accepted",
+        "operator.command.completed",
+    ]
+    assert audit[-1].evidence == {
+        "command_id": str(requested.command_id),
+        "command_type": requested.command_type.value,
+        "experiment_id": str(requested.experiment_id),
+        "status": "completed",
+        "version": 3,
+    }
 
 
 async def test_worker_rejection_preserves_structured_reason_and_audit_event(
@@ -259,12 +271,19 @@ async def test_worker_rejection_preserves_structured_reason_and_audit_event(
                 .order_by(DomainEventModel.stream_version)
             )
         )
+        audit = await uow.observability.list_audit_events()
 
     assert rejected.result == {
         "reason_code": "unsafe_reset",
         "detail": "an open simulated position prevents kill-switch reset",
     }
     assert event_types[-1] == "operator_command.rejected"
+    assert [event.event_code for event in audit] == [
+        "operator.command.accepted",
+        "operator.command.rejected",
+    ]
+    assert audit[-1].reason_code == "unsafe_reset"
+    assert "detail" not in audit[-1].evidence
 
 
 async def test_ledger_verifier_detects_operator_command_projection_tampering(

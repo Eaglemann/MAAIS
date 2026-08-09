@@ -338,7 +338,78 @@ def test_sleep_inhibitor_executes_caffeinate_for_worker_pid(tmp_path: Path) -> N
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "-im -w 50560"
+    assert result.stdout.strip() == "-ims -w 50560"
+
+
+def test_timed_run_power_gate_rejects_a_mac_running_on_battery() -> None:
+    result = _run_bash(
+        """
+uname() { printf 'Darwin\n'; }
+pmset() {
+  printf "Now drawing from 'Battery Power'\n"
+  printf ' -InternalBattery-0\t87%%; discharging; 4:20 remaining present: true\n'
+}
+paper_assert_timed_run_host_power soak
+"""
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "requires AC power" in result.stderr
+
+
+def test_timed_run_power_gate_rejects_a_mac_with_insufficient_battery_reserve() -> None:
+    result = _run_bash(
+        """
+uname() { printf 'Darwin\n'; }
+pmset() {
+  printf "Now drawing from 'AC Power'\n"
+  printf ' -InternalBattery-0\t19%%; charging; 0:45 remaining present: true\n'
+}
+paper_assert_timed_run_host_power seven_day
+"""
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "battery reserve 19% is below required 50%" in result.stderr
+
+
+def test_timed_run_power_gate_rejects_a_mac_discharging_while_on_ac() -> None:
+    result = _run_bash(
+        """
+uname() { printf 'Darwin\n'; }
+pmset() {
+  printf "Now drawing from 'AC Power'\n"
+  printf ' -InternalBattery-0\t80%%; discharging; 6:54 remaining present: true\n'
+}
+paper_assert_timed_run_host_power soak
+"""
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "battery is discharging while AC power is selected" in result.stderr
+
+
+def test_timed_run_power_gate_emits_frozen_mac_power_evidence() -> None:
+    result = _run_bash(
+        """
+uname() { printf 'Darwin\n'; }
+pmset() {
+  printf "Now drawing from 'AC Power'\n"
+  printf ' -InternalBattery-0\t87%%; charged; 0:00 remaining present: true\n'
+}
+paper_assert_timed_run_host_power soak
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == (
+        '{"platform":"macos","required":true,"power_source":"ac",'
+        '"battery_percent":87,"battery_state":"charged",'
+        '"minimum_battery_percent":50}'
+    )
 
 
 def test_tmux_session_start_records_exact_pane_pid() -> None:
@@ -441,6 +512,18 @@ paper_resolve_docker_context
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "desktop-linux"
     assert result.stderr == ""
+
+
+def test_postgres_start_uses_only_the_existing_local_image() -> None:
+    result = _run_bash(
+        """
+paper_docker_compose() { printf '%s\n' "$*"; }
+paper_start_postgres desktop-linux
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "desktop-linux up -d --wait --pull never postgres"
 
 
 def test_recorded_postgres_route_rejects_cluster_replacement() -> None:

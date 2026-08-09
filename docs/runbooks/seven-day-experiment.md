@@ -56,6 +56,11 @@ identity, and rejects evidence more than 24 hours old.
 
 ## During the run
 
+- On a MacBook, keep AC connected, battery reserve above 50%, the battery out
+  of the `discharging` state, and the lid open. The tracked sleep inhibitor
+  cannot override macOS clamshell sleep. Any host sleep invalidates the
+  uninterrupted clock; an always-on desktop host is the preferred local
+  topology for the seven-day experiment.
 - Do not change code, dependencies, manifest, thresholds, symbols, agent weights, fees, latency, or risk settings.
 - Generate one immutable report and backup for each completed Berlin day. The supported
   daily-close command is concurrency-locked and crash-resumable; retry that command rather

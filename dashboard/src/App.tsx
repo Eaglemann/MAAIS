@@ -1,16 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   decisionCsvUrl,
   decisionJsonUrl,
+  getCloudOperationsEvidence,
   getDecision,
   getOverview,
   getResearch,
   listCommands,
+  listCloudArtifacts,
+  listCloudAudit,
+  listCloudHealth,
+  listCloudIncidents,
+  listCloudServices,
   listDecisions,
   listExperiments,
   listTrades,
   requestOperatorCommand,
+  SessionExpiredError,
   startResumableEventFeed,
   tradeCsvUrl,
 } from "./api";
@@ -29,6 +36,8 @@ import type {
   DecisionFilters,
   DecisionListItem,
   DecisionPage,
+  CloudEvidencePageKind,
+  CloudOperationsEvidence,
   ExperimentListItem,
   ExperimentOverview,
   EventFeedStatus,
@@ -41,10 +50,19 @@ import type {
   TradePage,
   TradeFilters,
 } from "./types";
+import {
+  loginOperator,
+  logoutOperator,
+  restoreOperatorSession,
+  type AuthState,
+} from "./auth";
+import { Login } from "./Login";
 import { OperatorConsole } from "./OperatorConsole";
 import { ResearchLab } from "./ResearchLab";
+import { BrowserErrorBoundary } from "./observability";
+import { CloudOperations } from "./CloudOperations";
 
-export { OperatorConsole, ResearchLab };
+export { CloudOperations, OperatorConsole, ResearchLab };
 
 const EMPTY_FILTERS: DecisionFilters = {
   symbol: "",
@@ -524,6 +542,9 @@ export function TradeTable({
 }
 
 export default function App() {
+  const [authState, setAuthState] = useState<AuthState>({ status: "checking" });
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [experiments, setExperiments] = useState<ExperimentListItem[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [overview, setOverview] = useState<ExperimentOverview | null>(null);
@@ -531,6 +552,10 @@ export default function App() {
   const [tradePage, setTradePage] = useState<TradePage | null>(null);
   const [commands, setCommands] = useState<OperatorCommandPage | null>(null);
   const [research, setResearch] = useState<ResearchLabView | null>(null);
+  const [cloudEvidence, setCloudEvidence] = useState<CloudOperationsEvidence | null>(null);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const cloudPaging = useRef(false);
   const [filters, setFilters] = useState<DecisionFilters>(EMPTY_FILTERS);
   const [tradeFilters, setTradeFilters] = useState<TradeFilters>(EMPTY_TRADE_FILTERS);
   const [decisionCursors, setDecisionCursors] = useState<PageCursor[]>([]);
@@ -542,29 +567,61 @@ export default function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [controlToken, setControlToken] = useState(() => {
-    try {
-      return window.sessionStorage.getItem("maais.control_token.v1") ?? "";
-    } catch {
-      return "";
-    }
-  });
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<EventFeedStatus>("catching_up");
   const decisionCursor = decisionCursors.at(-1) ?? null;
   const tradeCursor = tradeCursors.at(-1) ?? null;
 
-  useEffect(() => {
-    try {
-      if (controlToken) window.sessionStorage.setItem("maais.control_token.v1", controlToken);
-      else window.sessionStorage.removeItem("maais.control_token.v1");
-    } catch {
-      // A blocked browser storage policy only removes tab-level convenience.
+  const resetWorkspace = useCallback(() => {
+    setExperiments([]);
+    setSelectedId("");
+    setOverview(null);
+    setDecisionPage(null);
+    setTradePage(null);
+    setCommands(null);
+    setResearch(null);
+    setCloudEvidence(null);
+    setCloudLoading(false);
+    setCloudError(null);
+    setSelectedDecision(null);
+    setDrawerOpen(false);
+    setLastUpdated(null);
+    setError(null);
+    setCommandError(null);
+  }, []);
+
+  const expireSession = useCallback(() => {
+    resetWorkspace();
+    setAuthError(null);
+    setAuthState({ status: "anonymous", reason: "expired" });
+  }, [resetWorkspace]);
+
+  const handleRequestError = useCallback((reason: unknown, report: (message: string) => void) => {
+    if (reason instanceof SessionExpiredError) {
+      expireSession();
+      return;
     }
-  }, [controlToken]);
+    report(reason instanceof Error ? reason.message : String(reason));
+  }, [expireSession]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    restoreOperatorSession(controller.signal)
+      .then((state) => {
+        if (!controller.signal.aborted) setAuthState(state);
+      })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) {
+          setAuthError(reason instanceof Error ? reason.message : String(reason));
+          setAuthState({ status: "anonymous", reason: "required" });
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (authState.status !== "authenticated") return;
     const controller = new AbortController();
     listExperiments(controller.signal)
       .then((items) => {
@@ -574,12 +631,12 @@ export default function App() {
       })
       .catch((reason: unknown) => {
         if (!controller.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : String(reason));
+          handleRequestError(reason, setError);
           setLoading(false);
         }
       });
     return () => controller.abort();
-  }, []);
+  }, [authState.status, handleRequestError]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!selectedId) return;
@@ -605,23 +662,36 @@ export default function App() {
       setLastUpdated(new Date().toISOString());
       setError(null);
     } catch (reason: unknown) {
-      if (!signal?.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!signal?.aborted) handleRequestError(reason, setError);
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [decisionCursor, filters, selectedId, tradeCursor, tradeFilters]);
+  }, [decisionCursor, filters, handleRequestError, selectedId, tradeCursor, tradeFilters]);
 
   const refreshResearch = useCallback(async (signal?: AbortSignal) => {
     if (!selectedId) return;
     try {
       setResearch(await getResearch(selectedId, signal));
     } catch (reason: unknown) {
-      if (!signal?.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!signal?.aborted) handleRequestError(reason, setError);
     }
-  }, [selectedId]);
+  }, [handleRequestError, selectedId]);
+
+  const refreshCloudEvidence = useCallback(async (signal?: AbortSignal) => {
+    if (!selectedId) return;
+    setCloudLoading(true);
+    try {
+      setCloudEvidence(await getCloudOperationsEvidence(selectedId, signal));
+      setCloudError(null);
+    } catch (reason: unknown) {
+      if (!signal?.aborted) handleRequestError(reason, setCloudError);
+    } finally {
+      if (!signal?.aborted) setCloudLoading(false);
+    }
+  }, [handleRequestError, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (authState.status !== "authenticated" || !selectedId) return;
     const controller = new AbortController();
     setLoading(true);
     void refresh(controller.signal);
@@ -630,10 +700,10 @@ export default function App() {
       window.clearInterval(interval);
       controller.abort();
     };
-  }, [refresh, selectedId]);
+  }, [authState.status, refresh, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (authState.status !== "authenticated" || !selectedId) return;
     const controller = new AbortController();
     void refreshResearch(controller.signal);
     const interval = window.setInterval(() => void refreshResearch(controller.signal), 300_000);
@@ -641,10 +711,21 @@ export default function App() {
       window.clearInterval(interval);
       controller.abort();
     };
-  }, [refreshResearch, selectedId]);
+  }, [authState.status, refreshResearch, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (authState.status !== "authenticated" || !selectedId) return;
+    const controller = new AbortController();
+    void refreshCloudEvidence(controller.signal);
+    const interval = window.setInterval(() => void refreshCloudEvidence(controller.signal), 60_000);
+    return () => {
+      window.clearInterval(interval);
+      controller.abort();
+    };
+  }, [authState.status, refreshCloudEvidence, selectedId]);
+
+  useEffect(() => {
+    if (authState.status !== "authenticated" || !selectedId) return;
     let initialCursor = Number.MAX_SAFE_INTEGER;
     try {
       const storedValue = window.sessionStorage.getItem("maais.event_cursor.v2");
@@ -666,8 +747,9 @@ export default function App() {
         }
       },
       onStatus: setLiveStatus,
+      onSessionExpired: expireSession,
     });
-  }, [refresh, selectedId]);
+  }, [authState.status, expireSession, refresh, selectedId]);
 
   const activeExperiment = useMemo(
     () => experiments.find((item) => item.experiment.id === selectedId) ?? null,
@@ -686,7 +768,7 @@ export default function App() {
     try {
       setSelectedDecision(await getDecision(decisionId));
     } catch (reason: unknown) {
-      setDetailError(reason instanceof Error ? reason.message : String(reason));
+      handleRequestError(reason, setDetailError);
     } finally {
       setDetailLoading(false);
     }
@@ -732,8 +814,82 @@ export default function App() {
     });
   }
 
-  async function submitOperatorCommand(draft: OperatorActionDraft, token: string) {
-    if (!selectedId) return;
+  async function loadOlderCloudEvidence(kind: CloudEvidencePageKind) {
+    const current = cloudEvidence;
+    if (!current || cloudPaging.current) return;
+    cloudPaging.current = true;
+    const runId = current.run.id;
+    setCloudLoading(true);
+    try {
+      if (kind === "services") {
+        if (!current.services.has_more
+          || !current.services.next_before_at
+          || !current.services.next_before_id) return;
+        const next = await listCloudServices(runId, {
+          beforeAt: current.services.next_before_at,
+          beforeId: current.services.next_before_id,
+        });
+        setCloudEvidence((value) => value && ({
+          ...value,
+          services: { ...next, items: [...value.services.items, ...next.items] },
+        }));
+      } else if (kind === "health") {
+        if (!current.health.has_more
+          || !current.health.next_before_at
+          || !current.health.next_before_id) return;
+        const next = await listCloudHealth(runId, {
+          beforeAt: current.health.next_before_at,
+          beforeId: current.health.next_before_id,
+        });
+        setCloudEvidence((value) => value && ({
+          ...value,
+          health: { ...next, items: [...value.health.items, ...next.items] },
+        }));
+      } else if (kind === "incidents") {
+        if (!current.incidents.has_more
+          || !current.incidents.next_before_at
+          || !current.incidents.next_before_id) return;
+        const next = await listCloudIncidents(runId, {
+          beforeAt: current.incidents.next_before_at,
+          beforeId: current.incidents.next_before_id,
+        });
+        setCloudEvidence((value) => value && ({
+          ...value,
+          incidents: { ...next, items: [...value.incidents.items, ...next.items] },
+        }));
+      } else if (kind === "artifacts") {
+        if (!current.artifacts.has_more || current.artifacts.next_before_sequence === null) return;
+        const next = await listCloudArtifacts(
+          runId,
+          current.artifacts.next_before_sequence,
+        );
+        setCloudEvidence((value) => value && ({
+          ...value,
+          artifacts: { ...next, items: [...value.artifacts.items, ...next.items] },
+        }));
+      } else {
+        if (!current.audit.has_more || current.audit.next_before_sequence === null) return;
+        const next = await listCloudAudit(runId, current.audit.next_before_sequence);
+        setCloudEvidence((value) => value && ({
+          ...value,
+          audit: { ...next, items: [...value.audit.items, ...next.items] },
+        }));
+      }
+      setCloudError(null);
+    } catch (reason: unknown) {
+      handleRequestError(reason, setCloudError);
+    } finally {
+      cloudPaging.current = false;
+      setCloudLoading(false);
+    }
+  }
+
+  async function submitOperatorCommand(draft: OperatorActionDraft) {
+    if (
+      !selectedId ||
+      authState.status !== "authenticated" ||
+      authState.csrfToken === null
+    ) return;
     setCommandBusy(true);
     setCommandError(null);
     try {
@@ -743,16 +899,69 @@ export default function App() {
           : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       await requestOperatorCommand(
         selectedId,
-        token,
+        authState.csrfToken,
         `mission-control-${randomIdentity}`,
         draft,
       );
       await refresh();
     } catch (reason: unknown) {
-      setCommandError(reason instanceof Error ? reason.message : String(reason));
+      handleRequestError(reason, setCommandError);
     } finally {
       setCommandBusy(false);
     }
+  }
+
+  async function signIn(password: string) {
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      setAuthState(await loginOperator(password));
+      setLoading(true);
+    } catch (reason: unknown) {
+      setAuthError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function signOut() {
+    if (authState.status !== "authenticated" || authState.csrfToken === null) return;
+    setAuthBusy(true);
+    try {
+      await logoutOperator(authState.csrfToken);
+      resetWorkspace();
+      setAuthError(null);
+      setAuthState({ status: "anonymous", reason: "signed_out" });
+    } catch (reason: unknown) {
+      if (reason instanceof SessionExpiredError) {
+        expireSession();
+      } else {
+        setError(`Sign out failed: ${reason instanceof Error ? reason.message : String(reason)}`);
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  if (authState.status === "checking") {
+    return (
+      <main className="boot-state">
+        <span className="brand-mark">M</span>
+        <h1>Securing Mission Control</h1>
+        <p>Checking the private operator session…</p>
+      </main>
+    );
+  }
+
+  if (authState.status === "anonymous") {
+    return (
+      <Login
+        busy={authBusy}
+        error={authError}
+        reason={authState.reason}
+        onSubmit={signIn}
+      />
+    );
   }
 
   if (!loading && experiments.length === 0) {
@@ -782,7 +991,7 @@ export default function App() {
           <a className="nav-link nav-link--active" href="#mission"><span>01</span>Mission Control</a>
           <a className="nav-link" href="#trades"><span>02</span>Trade Ledger</a>
           <a className="nav-link" href="#ledger"><span>03</span>Audit Ledger</a>
-          <a className="nav-link" href="#operations"><span>04</span>Operations</a>
+          <a className="nav-link" href="#cloud-operations"><span>04</span>Operations</a>
           <a className="nav-link" href="#operator-console"><span>05</span>Operator Console</a>
           <a className="nav-link" href="#research"><span>06</span>Research Lab</a>
         </nav>
@@ -800,6 +1009,10 @@ export default function App() {
             <h1>Mission Control</h1>
           </div>
           <div className="topbar__actions">
+            <div className="operator-identity">
+              <span>Operator</span>
+              <strong>{authState.actor}</strong>
+            </div>
             <label className="experiment-picker">
               <span>Experiment</span>
               <select
@@ -810,6 +1023,8 @@ export default function App() {
                   setTradeCursors([]);
                   setDecisionPage(null);
                   setTradePage(null);
+                  setCloudEvidence(null);
+                  setCloudError(null);
                 }}
               >
                 {experiments.map((item) => (
@@ -820,10 +1035,21 @@ export default function App() {
             <button className="refresh-button" type="button" onClick={() => {
               void refresh();
               void refreshResearch();
+              void refreshCloudEvidence();
             }}>
               <span className={loading ? "refresh-icon refresh-icon--spinning" : "refresh-icon"}>↻</span>
               Refresh
             </button>
+            {authState.authMode === "operator_session" && (
+              <button
+                className="logout-button"
+                type="button"
+                disabled={authBusy}
+                onClick={() => void signOut()}
+              >
+                Sign out
+              </button>
+            )}
           </div>
         </header>
 
@@ -871,7 +1097,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="two-column" id="operations">
+        <section className="two-column" id="runtime-health">
           <div className="dashboard-section panel">
             <SectionHeader title="Runtime health" subtitle="Durable worker ownership, data coverage, and controls" />
             <div className="status-list">
@@ -900,6 +1126,17 @@ export default function App() {
           </div>
         </section>
 
+        <CloudOperations
+          evidence={cloudEvidence}
+          loading={cloudLoading}
+          error={cloudError}
+          fillCount={operations?.fills ?? 0}
+          rationaleComplete={(decisionPage?.items ?? []).every((decision) => (
+            decision.reason_code.trim().length > 0 && decision.quality_status.trim().length > 0
+          ))}
+          onLoadOlder={(kind) => void loadOlderCloudEvidence(kind)}
+        />
+
         {overview?.incidents.length ? (
           <section className="dashboard-section">
             <SectionHeader title="Open incidents" subtitle="Persisted operational exceptions requiring visibility" aside={<Badge value={`${overview.incidents.length} open`} tone="warn" />} />
@@ -920,11 +1157,10 @@ export default function App() {
           commands={commands}
           runtime={runtime}
           incidents={overview?.incidents ?? []}
-          token={controlToken}
+          controlsEnabled={authState.csrfToken !== null}
           busy={commandBusy}
           error={commandError}
-          onTokenChange={setControlToken}
-          onSubmit={(draft, token) => void submitOperatorCommand(draft, token)}
+          onSubmit={(draft) => void submitOperatorCommand(draft)}
         />
 
         <section className="dashboard-section" id="trades">
@@ -1037,7 +1273,7 @@ export default function App() {
         </section>
 
         <footer>
-          <span>MAAIS Mission Control · local operator surface</span>
+          <span>MAAIS Mission Control · private operator surface</span>
           <span>All displayed values read from immutable manifests or PostgreSQL projections.</span>
         </footer>
       </main>
@@ -1046,5 +1282,13 @@ export default function App() {
         <DecisionDrawer detail={selectedDecision} loading={detailLoading} error={detailError} onClose={() => setDrawerOpen(false)} />
       )}
     </div>
+  );
+}
+
+export function MissionControlApp() {
+  return (
+    <BrowserErrorBoundary>
+      <App />
+    </BrowserErrorBoundary>
   );
 }

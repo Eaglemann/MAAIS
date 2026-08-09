@@ -20,7 +20,7 @@ npm --prefix dashboard ci
 npm --prefix dashboard run build
 npm --prefix dashboard exec -- playwright-cli install-browser chrome-for-testing
 export MAAIS_DOCKER_CONTEXT=desktop-linux  # use `docker context show` to choose yours
-docker --context "${MAAIS_DOCKER_CONTEXT}" compose up -d --wait postgres
+docker --context "${MAAIS_DOCKER_CONTEXT}" compose up -d --wait --pull never postgres
 uv run alembic upgrade head
 uv run maais database-identity
 uv run maais verify-ledger
@@ -86,3 +86,33 @@ uv run maais prepare-paper-live \
 Manifest preparation contacts only public market-data endpoints and freezes
 exchange filters, symbol mappings, code, lockfile, schema, component, and agent
 identities.
+
+## Railway operator secrets
+
+This section is for the sole operator when a separately approved Railway
+qualification is being configured. It is not required for local paper runs.
+Run each command personally in a private interactive terminal. Do not pass a
+password or secret as a command-line argument, capture it in shell history, or
+paste it into chat, logs, source files, or evidence artifacts.
+
+Generate the password hash, entering the same strong passphrase twice at the
+hidden prompts, and paste only the resulting Argon2id hash directly into the
+provider field `MAAIS_OPERATOR_PASSWORD_HASH`:
+
+```bash
+uv run maais operator-password-hash
+```
+
+Generate three independent tokens by running the next command separately three
+times. Paste each output directly into exactly one provider secret field:
+`MAAIS_SESSION_PEPPER`, `MAAIS_CSRF_PEPPER`, and `MAAIS_MONITOR_TOKEN`. Never
+reuse one output for multiple fields.
+
+```bash
+uv run maais generate-secret-token
+```
+
+Railway also requires `MAAIS_AUTH_MODE=operator_session` and
+`MAAIS_OPERATOR_SECURE_COOKIES=true`. Secret presence and policy may be
+verified later, but secret values must never be read back into an agent or
+recorded in qualification evidence.

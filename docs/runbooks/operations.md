@@ -1,5 +1,10 @@
 # Paper-week operations
 
+Local operations are documented below. For Railway standby, qualification, preflight, and
+the separately authorized cloud soak, use [railway-qualification.md](railway-qualification.md),
+[railway-production-preflight.md](railway-production-preflight.md), and
+[railway-soak.md](railway-soak.md).
+
 ## Start
 
 ### Disposable recovery drills
@@ -30,6 +35,14 @@ JSON record and report in a SHA-256 bundle under
 to investigate and cannot be used by the soak.
 
 ### 24-hour soak
+
+On a MacBook, connect AC power, charge the battery to at least 50%, confirm that
+macOS is not reporting the battery as discharging, and keep the lid open for the
+entire timed run. The launcher verifies AC power, battery reserve, and charging
+state before startup and again immediately before activation. `caffeinate`
+prevents idle sleep but cannot override macOS clamshell sleep; closing the lid
+invalidates the run. For a seven-day experiment, an always-on desktop host is
+more reliable than a laptop.
 
 Start the clean soak with the process-drill bundle from the same commit:
 

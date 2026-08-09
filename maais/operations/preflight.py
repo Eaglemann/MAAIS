@@ -156,7 +156,7 @@ def evaluate_candidate_preflight(
         ),
         _check(
             "exchange_credentials_absent",
-            not settings.binance_demo_api_key and not settings.binance_demo_api_secret,
+            not settings.binance_demo_api_key_value and not settings.binance_demo_api_secret_value,
             "no authenticated exchange credentials are configured",
         ),
         _check(
@@ -289,7 +289,7 @@ async def run_candidate_preflight(
     settings = get_settings()
     repository, database_state = await asyncio.gather(
         asyncio.to_thread(capture_repository_identity, repository_root),
-        _database_preflight_state(settings.database_url, manifest.experiment_id),
+        _database_preflight_state(settings.database_url_value, manifest.experiment_id),
     )
     restore_value = json.loads(restore_verification_path.read_text(encoding="utf-8"))
     if not isinstance(restore_value, dict):

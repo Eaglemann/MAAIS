@@ -1,0 +1,314 @@
+"""Mission Control authentication dependencies without domain mutation authority."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from secrets import compare_digest
+from uuid import UUID, uuid4
+
+from fastapi import Depends, HTTPException, Request, Response, WebSocket
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.requests import HTTPConnection
+
+from maais.config.security import AuthMode, SecuritySettings
+from maais.db.connection import get_session_factory
+from maais.db.unit_of_work import UnitOfWork
+from maais.observability.audit import (
+    AuditSourceRole,
+    deterministic_audit_event_id,
+    pseudonymous_reference,
+)
+from maais.security.sessions import (
+    OperatorSession,
+    SessionAuthenticationError,
+    opaque_token_hash,
+    verify_csrf_token,
+)
+
+SessionFactory = async_sessionmaker[AsyncSession]
+SESSION_COOKIE_NAME = "__Host-maais_session"
+SESSION_AUTHENTICATION_REQUIRED = "session_authentication_required"
+CSRF_VERIFICATION_FAILED = "csrf_verification_failed"
+ORIGIN_VERIFICATION_FAILED = "origin_verification_failed"
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorPrincipal:
+    actor: str
+    session_id: UUID | None
+    auth_mode: AuthMode
+
+
+@dataclass(frozen=True, slots=True)
+class MissionControlSecurity:
+    settings: SecuritySettings
+    control_token: str | None
+    clock: Callable[[], datetime]
+
+
+@dataclass(frozen=True, slots=True)
+class WebSocketAuthentication:
+    principal: OperatorPrincipal
+    token_hash: str
+
+
+def security_context(connection: HTTPConnection) -> MissionControlSecurity:
+    context = connection.app.state.security
+    if not isinstance(context, MissionControlSecurity):  # pragma: no cover - app invariant
+        raise RuntimeError("Mission Control security context is not configured")
+    return context
+
+
+def session_factory(connection: HTTPConnection) -> SessionFactory:
+    factory: SessionFactory | None = connection.app.state.session_factory
+    if factory is None:
+        factory = get_session_factory()
+        connection.app.state.session_factory = factory
+    return factory
+
+
+async def require_operator(request: Request) -> OperatorPrincipal:
+    cached = getattr(request.state, "operator_principal", None)
+    if isinstance(cached, OperatorPrincipal):
+        return cached
+    context = security_context(request)
+    if context.settings.auth_mode is AuthMode.LOCAL_TOKEN:
+        supplied = _bearer_token(request.headers.get("Authorization"))
+        if (
+            context.control_token is None
+            or not supplied
+            or not compare_digest(supplied, context.control_token)
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="valid local control bearer token required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        principal = OperatorPrincipal(
+            actor="local_operator",
+            session_id=None,
+            auth_mode=AuthMode.LOCAL_TOKEN,
+        )
+        request.state.operator_principal = principal
+        return principal
+    if request.headers.get("Authorization") is not None:
+        raise _session_required()
+    token = request.cookies.get(SESSION_COOKIE_NAME, "")
+    try:
+        token_hash = opaque_token_hash(token, context.settings.session_pepper)
+    except ValueError:
+        token_hash = "0" * 64
+    try:
+        async with UnitOfWork(session_factory(request)).begin() as uow:
+            authenticated = await uow.sessions.authenticate(
+                token_hash,
+                observed_at=context.clock(),
+            )
+    except SessionAuthenticationError as error:
+        await _audit_terminal_session(request, error)
+        raise _session_required() from error
+    request.state.operator_session = authenticated
+    principal = OperatorPrincipal(
+        actor=authenticated.actor,
+        session_id=authenticated.id,
+        auth_mode=AuthMode.OPERATOR_SESSION,
+    )
+    request.state.operator_principal = principal
+    return principal
+
+
+async def authenticate_websocket(websocket: WebSocket) -> WebSocketAuthentication | None:
+    context = security_context(websocket)
+    if context.settings.auth_mode is AuthMode.LOCAL_TOKEN:
+        return None
+    if websocket.headers.get("Authorization") is not None:
+        raise SessionAuthenticationError
+    token = websocket.cookies.get(SESSION_COOKIE_NAME, "")
+    try:
+        token_hash = opaque_token_hash(token, context.settings.session_pepper)
+    except ValueError:
+        token_hash = "0" * 64
+    try:
+        async with UnitOfWork(session_factory(websocket)).begin() as uow:
+            session = await uow.sessions.authenticate(
+                token_hash,
+                observed_at=context.clock(),
+            )
+    except SessionAuthenticationError as error:
+        await _audit_terminal_session(websocket, error)
+        raise
+    return WebSocketAuthentication(
+        principal=OperatorPrincipal(
+            actor=session.actor,
+            session_id=session.id,
+            auth_mode=AuthMode.OPERATOR_SESSION,
+        ),
+        token_hash=token_hash,
+    )
+
+
+async def optional_operator_session(request: Request) -> OperatorSession | None:
+    context = security_context(request)
+    if context.settings.auth_mode is not AuthMode.OPERATOR_SESSION:
+        return None
+    if request.headers.get("Authorization") is not None:
+        return None
+    token = request.cookies.get(SESSION_COOKIE_NAME, "")
+    try:
+        token_hash = opaque_token_hash(token, context.settings.session_pepper)
+    except ValueError:
+        token_hash = "0" * 64
+    try:
+        async with UnitOfWork(session_factory(request)).begin() as uow:
+            return await uow.sessions.authenticate(
+                token_hash,
+                observed_at=context.clock(),
+            )
+    except SessionAuthenticationError as error:
+        await _audit_terminal_session(request, error)
+        return None
+
+
+async def require_csrf(
+    request: Request,
+    principal: OperatorPrincipal = Depends(require_operator),
+) -> OperatorPrincipal:
+    if principal.auth_mode is AuthMode.LOCAL_TOKEN:
+        return principal
+    try:
+        require_same_origin(request)
+    except HTTPException:
+        await _append_web_audit(
+            request,
+            event_id=uuid4(),
+            actor=principal.actor,
+            session_id=principal.session_id,
+            event_code="auth.csrf.rejected",
+            reason_code=ORIGIN_VERIFICATION_FAILED,
+            evidence={"request_path": request.url.path},
+            occurred_at=security_context(request).clock(),
+        )
+        raise
+    session = getattr(request.state, "operator_session", None)
+    context = security_context(request)
+    presented = request.headers.get("X-CSRF-Token", "")
+    if not isinstance(session, OperatorSession) or not verify_csrf_token(
+        presented,
+        session.csrf_hash,
+        context.settings.csrf_pepper,
+    ):
+        await _append_web_audit(
+            request,
+            event_id=uuid4(),
+            actor=principal.actor,
+            session_id=principal.session_id,
+            event_code="auth.csrf.rejected",
+            reason_code=CSRF_VERIFICATION_FAILED,
+            evidence={"request_path": request.url.path},
+            occurred_at=context.clock(),
+        )
+        raise HTTPException(status_code=403, detail=CSRF_VERIFICATION_FAILED)
+    return principal
+
+
+def require_same_origin(request: Request) -> None:
+    context = security_context(request)
+    if context.settings.auth_mode is AuthMode.LOCAL_TOKEN:
+        return
+    if (
+        request.headers.get("Origin") != context.settings.public_origin
+        or request.headers.get("Host") != context.settings.public_host
+    ):
+        raise HTTPException(status_code=403, detail=ORIGIN_VERIFICATION_FAILED)
+
+
+def set_session_cookie(
+    response: Response,
+    *,
+    token: str,
+    expires_at: datetime,
+) -> None:
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=43_200,
+        expires=expires_at,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def _bearer_token(authorization: str | None) -> str:
+    prefix = "Bearer "
+    if authorization is None or not authorization.startswith(prefix):
+        return ""
+    return authorization[len(prefix) :]
+
+
+def _session_required() -> HTTPException:
+    return HTTPException(status_code=401, detail=SESSION_AUTHENTICATION_REQUIRED)
+
+
+async def _audit_terminal_session(
+    connection: HTTPConnection,
+    error: SessionAuthenticationError,
+) -> None:
+    if (
+        error.reason_code not in {"session_expired", "session_revoked"}
+        or error.session_id is None
+        or error.terminal_at is None
+    ):
+        return
+    event_code = f"auth.{error.reason_code.replace('_', '.')}"
+    await _append_web_audit(
+        connection,
+        event_id=deterministic_audit_event_id(event_code, error.session_id),
+        actor="sole_operator",
+        session_id=error.session_id,
+        event_code=event_code,
+        reason_code=error.reason_code,
+        evidence={"terminal_state": error.reason_code.removeprefix("session_")},
+        occurred_at=error.terminal_at,
+    )
+
+
+async def _append_web_audit(
+    connection: HTTPConnection,
+    *,
+    event_id: UUID,
+    actor: str,
+    session_id: UUID | None,
+    event_code: str,
+    reason_code: str,
+    evidence: dict[str, object],
+    occurred_at: datetime,
+) -> None:
+    async with UnitOfWork(session_factory(connection)).begin() as uow:
+        await uow.observability.append_audit(
+            event_id=event_id,
+            source_role=AuditSourceRole.WEB,
+            actor_reference=pseudonymous_reference("actor", actor),
+            session_reference=(
+                pseudonymous_reference("session", session_id) if session_id is not None else None
+            ),
+            event_code=event_code,
+            reason_code=reason_code,
+            evidence=evidence,
+            run_id=None,
+            service_boot_id=None,
+            occurred_at=occurred_at,
+        )

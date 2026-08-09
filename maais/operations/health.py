@@ -152,7 +152,7 @@ async def collect_configured_experiment_health(
     send_alert: bool,
 ) -> dict[str, object]:
     settings = get_settings()
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    engine = create_async_engine(settings.database_url_value, pool_pre_ping=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
@@ -206,8 +206,8 @@ async def collect_configured_experiment_health(
                 if check["passed"] is not True
             ]
             await AlertDispatcher(
-                settings.telegram_bot_token or None,
-                settings.telegram_chat_id or None,
+                settings.telegram_bot_token_value or None,
+                settings.telegram_chat_id_value or None,
             ).send_critical(
                 "paper_health",
                 "Paper experiment health check failed",

@@ -1,5 +1,26 @@
 export type JsonRecord = Record<string, unknown>;
 
+export type AuthMode = "local_token" | "operator_session";
+
+export interface AuthSessionView {
+  authenticated: boolean;
+  actor: string | null;
+  auth_mode: AuthMode;
+  expires_at: string | null;
+}
+
+export interface LoginResponse {
+  authenticated: true;
+  actor: string;
+  auth_mode: "operator_session";
+  csrf_token: string;
+  expires_at: string;
+}
+
+export interface CsrfTokenResponse {
+  csrf_token: string;
+}
+
 export interface PaperModelAssumptions {
   model_status: string;
   leverage: number | null;
@@ -171,6 +192,207 @@ export interface TradePage {
   has_more: boolean;
   next_before_at: string | null;
   next_before_id: string | null;
+}
+
+export interface CloudCandidateView {
+  descriptor_hash: string;
+  git_sha: string;
+  source_clean: boolean;
+  uv_lock_sha256: string;
+  dashboard_lock_sha256: string;
+  schema_revision: string;
+  agent_implementation_hashes: Record<string, string>;
+  dashboard_asset_manifest_sha256: string;
+  build_definition_sha256: string;
+  status: string;
+  creator_deployment_id: string;
+  registered_at: string;
+  qualifying_at: string | null;
+  qualified_at: string | null;
+  qualification_evidence_hash: string | null;
+}
+
+export interface CloudIncidentView {
+  id: string;
+  experiment_id: string;
+  deduplication_key: string;
+  severity: string;
+  component: string;
+  reason_code: string;
+  evidence: JsonRecord;
+  requires_operator_review: boolean;
+  status: string;
+  detected_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+  acknowledged_by: string | null;
+  resolved_by: string | null;
+  resolution: string | null;
+  changed_at: string;
+  version: number;
+  content_hash: string;
+}
+
+export interface CloudRunView {
+  id: string;
+  experiment_id: string;
+  candidate_hash: string;
+  manifest_hash: string;
+  database_system_identifier: string;
+  railway_environment_id: string;
+  purpose: string;
+  status: string;
+  requested_operator_command_id: string | null;
+  activating_worker_boot_id: string | null;
+  continuity_invalidated: boolean;
+  started_at: string | null;
+  invalidated_at: string | null;
+  invalidation_reason: string | null;
+  created_at: string;
+  incidents: CloudIncidentView[];
+}
+
+export interface CloudServiceView {
+  boot_id: string;
+  run_id: string;
+  project_id: string;
+  environment_id: string;
+  service_id: string;
+  deployment_id: string;
+  snapshot_id: string | null;
+  replica_id: string;
+  region: string;
+  service_role: string;
+  candidate_hash: string;
+  started_at: string;
+  first_seen_at: string;
+  last_heartbeat_at: string;
+  heartbeat_sequence: number;
+  stopped_at: string | null;
+  terminal_reason: string | null;
+}
+
+export interface CloudServicePage {
+  items: CloudServiceView[];
+  limit: number;
+  has_more: boolean;
+  next_before_at: string | null;
+  next_before_id: string | null;
+}
+
+export interface CloudHealthEvaluationView {
+  evaluation_id: string;
+  run_id: string;
+  service_boot_id: string;
+  overall_status: string;
+  failed_check_names: string[];
+  severity: string;
+  deduplication_key: string;
+  incident_id: string | null;
+  recovery_of_evaluation_id: string | null;
+  recovered_at: string | null;
+  components: JsonRecord;
+  checked_at: string;
+  content_hash: string;
+}
+
+export interface CloudHealthEvaluationPage {
+  items: CloudHealthEvaluationView[];
+  limit: number;
+  has_more: boolean;
+  next_before_at: string | null;
+  next_before_id: string | null;
+}
+
+export interface CloudIncidentPage {
+  items: CloudIncidentView[];
+  limit: number;
+  has_more: boolean;
+  next_before_at: string | null;
+  next_before_id: string | null;
+}
+
+export interface CloudStoredArtifactView {
+  store_name: string;
+  key: string;
+  etag: string;
+  version_id: string | null;
+  sha256: string;
+  size_bytes: number;
+  content_type: string;
+  retention_mode: string;
+  retain_until: string;
+  stored_at: string;
+}
+
+export interface CloudArtifactView {
+  id: string;
+  operation_id: string;
+  publication_attempt_id: string;
+  environment: string;
+  candidate_hash: string;
+  experiment_id: string;
+  run_id: string;
+  artifact_type: string;
+  report_id: string;
+  bundle_content_hash: string;
+  size_bytes: number;
+  media_type: string;
+  generated_at: string;
+  recorded_at: string;
+  producing_deployment_id: string;
+  producing_service_id: string;
+  sequence: number;
+  replica_inventory: CloudStoredArtifactView[];
+  canonical_inventory: CloudStoredArtifactView[];
+  previous_evidence_hash: string;
+  catalog_content_hash: string;
+}
+
+export interface CloudArtifactPage {
+  items: CloudArtifactView[];
+  limit: number;
+  has_more: boolean;
+  next_before_sequence: number | null;
+}
+
+export interface CloudAuditEventView {
+  event_id: string;
+  sequence: number;
+  previous_hash: string | null;
+  source_role: string;
+  actor_reference: string;
+  session_reference: string | null;
+  event_code: string;
+  reason_code: string | null;
+  evidence: JsonRecord;
+  run_id: string;
+  service_boot_id: string | null;
+  occurred_at: string;
+  content_hash: string;
+}
+
+export interface CloudAuditEventPage {
+  items: CloudAuditEventView[];
+  limit: number;
+  has_more: boolean;
+  next_before_sequence: number | null;
+}
+
+export interface CloudOperationsEvidence {
+  candidate: CloudCandidateView;
+  run: CloudRunView;
+  services: CloudServicePage;
+  health: CloudHealthEvaluationPage;
+  incidents: CloudIncidentPage;
+  artifacts: CloudArtifactPage;
+  audit: CloudAuditEventPage;
+}
+
+export type CloudEvidencePageKind = "services" | "health" | "incidents" | "artifacts" | "audit";
+
+export interface SequenceCursor {
+  beforeSequence: number;
 }
 
 export type OperatorCommandType =

@@ -13,6 +13,11 @@ Telegram message format:
 
 from __future__ import annotations
 
+import time
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
+from typing import Protocol
+
 import httpx
 
 from maais.core.logging import get_logger
@@ -21,6 +26,103 @@ from maais.monitoring.schemas import AlertEvent, AlertLevel
 logger = get_logger(__name__)
 
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
+_CRON_OPERATION_NAMES = frozenset({"daily_close", "backup", "evidence"})
+
+
+class SentryCheckInRuntime(Protocol):
+    enabled: bool
+
+    def capture_check_in(
+        self,
+        *,
+        monitor_slug: str,
+        status: str,
+        check_in_id: str | None = None,
+        duration: float | None = None,
+    ) -> str | None: ...
+
+    def flush(self, *, timeout: float = 5.0) -> bool: ...
+
+
+class SentryCronReporter:
+    """Report Cron outcomes without becoming authority for the operation result."""
+
+    def __init__(
+        self,
+        *,
+        runtime: SentryCheckInRuntime,
+        monitor_slugs: Mapping[str, str],
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if not set(monitor_slugs) <= _CRON_OPERATION_NAMES:
+            raise ValueError("Sentry Cron operation name is invalid")
+        if any(not slug for slug in monitor_slugs.values()):
+            raise ValueError("Sentry Cron monitor slug cannot be empty")
+        self._runtime = runtime
+        self._monitor_slugs = dict(monitor_slugs)
+        self._monotonic = monotonic
+        self.last_delivery_confirmed = bool(runtime.enabled and monitor_slugs)
+
+    @asynccontextmanager
+    async def monitor(self, *operations: str) -> AsyncIterator[None]:
+        if not operations or len(set(operations)) != len(operations):
+            raise ValueError("Sentry Cron operations must be nonempty and unique")
+        missing = set(operations) - set(self._monitor_slugs)
+        if missing:
+            raise ValueError("Sentry Cron monitor slug is not configured")
+        started_at = self._monotonic()
+        deliveries: list[bool] = []
+        check_in_ids: dict[str, str | None] = {}
+        for operation in operations:
+            check_in_id, delivered = self._send(
+                monitor_slug=self._monitor_slugs[operation],
+                status="in_progress",
+            )
+            check_in_ids[operation] = check_in_id
+            deliveries.append(delivered)
+        try:
+            yield
+        except BaseException:
+            duration = max(0.0, self._monotonic() - started_at)
+            for operation in operations:
+                _, delivered = self._send(
+                    monitor_slug=self._monitor_slugs[operation],
+                    status="error",
+                    check_in_id=check_in_ids[operation],
+                    duration=duration,
+                )
+                deliveries.append(delivered)
+            self.last_delivery_confirmed = all(deliveries)
+            raise
+        duration = max(0.0, self._monotonic() - started_at)
+        for operation in operations:
+            _, delivered = self._send(
+                monitor_slug=self._monitor_slugs[operation],
+                status="ok",
+                check_in_id=check_in_ids[operation],
+                duration=duration,
+            )
+            deliveries.append(delivered)
+        self.last_delivery_confirmed = all(deliveries)
+
+    def _send(
+        self,
+        *,
+        monitor_slug: str,
+        status: str,
+        check_in_id: str | None = None,
+        duration: float | None = None,
+    ) -> tuple[str | None, bool]:
+        try:
+            captured_id = self._runtime.capture_check_in(
+                monitor_slug=monitor_slug,
+                status=status,
+                check_in_id=check_in_id,
+                duration=duration,
+            )
+            return captured_id, bool(captured_id and self._runtime.flush(timeout=5.0))
+        except Exception:
+            return None, False
 
 
 class AlertDispatcher:

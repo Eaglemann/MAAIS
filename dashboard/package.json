@@ -5,16 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/write-asset-manifest.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run"
   },
   "dependencies": {
+    "@sentry/react": "^10.69.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@playwright/cli": "0.1.17",
+    "@sentry/vite-plugin": "^5.4.0",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.18",

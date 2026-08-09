@@ -1,4 +1,12 @@
 import type {
+  CloudArtifactPage,
+  CloudAuditEventPage,
+  CloudCandidateView,
+  CloudHealthEvaluationPage,
+  CloudIncidentPage,
+  CloudOperationsEvidence,
+  CloudRunView,
+  CloudServicePage,
   DecisionDetail,
   DecisionFilters,
   DecisionPage,
@@ -18,53 +26,74 @@ import type {
 
 const API_ROOT = import.meta.env.VITE_API_ROOT ?? "/api/v1";
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+export class SessionExpiredError extends Error {
+  constructor() {
+    super("operator session expired");
+    this.name = "SessionExpiredError";
+  }
+}
+
+async function apiError(response: Response): Promise<Error> {
+  let detail = `${response.status} ${response.statusText}`;
+  try {
+    const payload = (await response.json()) as { detail?: string };
+    detail = payload.detail ?? detail;
+  } catch {
+    // The HTTP status remains the authoritative fallback.
+  }
+  return new Error(detail);
+}
+
+export async function requestJson<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
   const response = await fetch(`${API_ROOT}${path}`, {
-    headers: { Accept: "application/json" },
+    ...init,
+    credentials: "same-origin",
     cache: "no-store",
-    signal,
+    headers: { Accept: "application/json", ...init.headers },
   });
+  if (response.status === 401) throw new SessionExpiredError();
   if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail ?? detail;
-    } catch {
-      // The HTTP status remains the authoritative fallback.
-    }
-    throw new Error(detail);
+    throw await apiError(response);
   }
   return (await response.json()) as T;
 }
 
-async function postJson<T>(
+export async function requestVoid(
   path: string,
-  token: string,
+  init: RequestInit = {},
+): Promise<void> {
+  const response = await fetch(`${API_ROOT}${path}`, {
+    ...init,
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: { Accept: "application/json", ...init.headers },
+  });
+  if (response.status === 401) throw new SessionExpiredError();
+  if (!response.ok) throw await apiError(response);
+}
+
+function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return requestJson<T>(path, { signal });
+}
+
+function postJson<T>(
+  path: string,
+  csrfToken: string,
   body: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const response = await fetch(`${API_ROOT}${path}`, {
+  return requestJson<T>(path, {
     method: "POST",
     headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken,
     },
-    cache: "no-store",
     body: JSON.stringify(body),
     signal,
   });
-  if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail ?? detail;
-    } catch {
-      // The HTTP status remains the authoritative fallback.
-    }
-    throw new Error(detail);
-  }
-  return (await response.json()) as T;
 }
 
 export function listExperiments(signal?: AbortSignal): Promise<ExperimentListItem[]> {
@@ -76,6 +105,100 @@ export function getOverview(
   signal?: AbortSignal,
 ): Promise<ExperimentOverview> {
   return getJson<ExperimentOverview>(`/experiments/${experimentId}/overview`, signal);
+}
+
+export function getCloudRunForExperiment(
+  experimentId: string,
+  signal?: AbortSignal,
+): Promise<CloudRunView | null> {
+  return getJson<CloudRunView | null>(`/experiments/${experimentId}/cloud-run`, signal);
+}
+
+export function getCloudCandidate(
+  candidateHash: string,
+  signal?: AbortSignal,
+): Promise<CloudCandidateView> {
+  return getJson<CloudCandidateView>(`/platform/candidates/${candidateHash}`, signal);
+}
+
+function cloudTimestampParams(
+  cursor: PageCursor | null,
+  limit = 25,
+): URLSearchParams {
+  const params = new URLSearchParams({ limit: String(limit) });
+  addCursor(params, cursor);
+  return params;
+}
+
+function cloudSequenceParams(
+  beforeSequence: number | null,
+  limit = 25,
+): URLSearchParams {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (beforeSequence !== null) params.set("before_sequence", String(beforeSequence));
+  return params;
+}
+
+export function listCloudServices(
+  runId: string,
+  cursor: PageCursor | null = null,
+  signal?: AbortSignal,
+): Promise<CloudServicePage> {
+  const params = cloudTimestampParams(cursor);
+  return getJson<CloudServicePage>(`/runs/${runId}/services?${params.toString()}`, signal);
+}
+
+export function listCloudHealth(
+  runId: string,
+  cursor: PageCursor | null = null,
+  signal?: AbortSignal,
+): Promise<CloudHealthEvaluationPage> {
+  const params = cloudTimestampParams(cursor);
+  return getJson<CloudHealthEvaluationPage>(`/runs/${runId}/health?${params.toString()}`, signal);
+}
+
+export function listCloudIncidents(
+  runId: string,
+  cursor: PageCursor | null = null,
+  signal?: AbortSignal,
+): Promise<CloudIncidentPage> {
+  const params = cloudTimestampParams(cursor);
+  return getJson<CloudIncidentPage>(`/runs/${runId}/incidents?${params.toString()}`, signal);
+}
+
+export function listCloudArtifacts(
+  runId: string,
+  beforeSequence: number | null = null,
+  signal?: AbortSignal,
+): Promise<CloudArtifactPage> {
+  const params = cloudSequenceParams(beforeSequence);
+  return getJson<CloudArtifactPage>(`/runs/${runId}/artifacts?${params.toString()}`, signal);
+}
+
+export function listCloudAudit(
+  runId: string,
+  beforeSequence: number | null = null,
+  signal?: AbortSignal,
+): Promise<CloudAuditEventPage> {
+  const params = cloudSequenceParams(beforeSequence);
+  return getJson<CloudAuditEventPage>(`/runs/${runId}/audit?${params.toString()}`, signal);
+}
+
+export async function getCloudOperationsEvidence(
+  experimentId: string,
+  signal?: AbortSignal,
+): Promise<CloudOperationsEvidence | null> {
+  const run = await getCloudRunForExperiment(experimentId, signal);
+  if (run === null) return null;
+  const [candidate, services, health, incidents, artifacts, audit] = await Promise.all([
+    getCloudCandidate(run.candidate_hash, signal),
+    listCloudServices(run.id, null, signal),
+    listCloudHealth(run.id, null, signal),
+    listCloudIncidents(run.id, null, signal),
+    listCloudArtifacts(run.id, null, signal),
+    listCloudAudit(run.id, null, signal),
+  ]);
+  return { candidate, run, services, health, incidents, artifacts, audit };
 }
 
 export function listDecisions(
@@ -214,14 +337,14 @@ export function listCommands(
 
 export function requestOperatorCommand(
   experimentId: string,
-  token: string,
+  csrfToken: string,
   idempotencyKey: string,
   draft: OperatorActionDraft,
   signal?: AbortSignal,
 ): Promise<OperatorCommand> {
   return postJson<OperatorCommand>(
     `/experiments/${experimentId}/commands`,
-    token,
+    csrfToken,
     {
       command_type: draft.commandType,
       idempotency_key: idempotencyKey,
@@ -257,12 +380,14 @@ export function startResumableEventFeed({
   onEvents,
   onCursor,
   onStatus,
+  onSessionExpired,
   reconnectDelayMs = 1_500,
 }: {
   initialCursor: number;
   onEvents: () => void;
   onCursor: (cursor: number) => void;
   onStatus: (status: EventFeedStatus) => void;
+  onSessionExpired?: () => void;
   reconnectDelayMs?: number;
 }): () => void {
   let cursor = Math.max(0, Math.trunc(initialCursor));
@@ -344,12 +469,24 @@ export function startResumableEventFeed({
         }
       };
       nextSocket.onerror = () => nextSocket.close();
-      nextSocket.onclose = () => {
+      nextSocket.onclose = (event) => {
         if (socket === nextSocket) socket = null;
+        if (event.code === 1008) {
+          stopped = true;
+          onStatus("stopped");
+          onSessionExpired?.();
+          return;
+        }
         scheduleReconnect();
       };
     } catch (reason: unknown) {
-      if (!controller.signal.aborted) scheduleReconnect();
+      if (reason instanceof SessionExpiredError) {
+        stopped = true;
+        onStatus("stopped");
+        onSessionExpired?.();
+      } else if (!controller.signal.aborted) {
+        scheduleReconnect();
+      }
     }
   }
 

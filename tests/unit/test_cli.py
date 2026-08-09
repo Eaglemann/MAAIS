@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from pydantic import SecretStr
 
 from maais.cli import build_parser, main
 from maais.config.modes import RunMode
@@ -53,6 +54,106 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "maais_week_restore",
             "--output",
             "artifacts/restore-drills",
+        ]
+    )
+    cloud_publish = parser.parse_args(
+        [
+            "cloud-publish",
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--date",
+            "2026-08-08",
+            "--type",
+            "daily_report",
+            "--report-id",
+            "a" * 64,
+            "--bundle",
+            "artifacts/report",
+        ]
+    )
+    cloud_backup = parser.parse_args(
+        [
+            "cloud-backup",
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--date",
+            "2026-08-08",
+            "--output",
+            "artifacts/cloud-backups",
+        ]
+    )
+    cloud_restore = parser.parse_args(
+        [
+            "cloud-restore-verify",
+            "--artifact-record",
+            "88888888-8888-4888-8888-888888888888",
+            "--output",
+            "artifacts/cloud-restores",
+        ]
+    )
+    cloud_preflight = parser.parse_args(
+        [
+            "cloud-preflight",
+            "--candidate-hash",
+            "b" * 64,
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--manifest-hash",
+            "c" * 64,
+            "--environment",
+            "production",
+            "--local-preflight",
+            "artifacts/preflight/local.json",
+            "--snapshot",
+            "artifacts/preflight/cloud-snapshot.json",
+            "--output",
+            "artifacts/preflight",
+        ]
+    )
+    cloud_process_drills = parser.parse_args(
+        [
+            "cloud-process-drill-verdict",
+            "--candidate-hash",
+            "b" * 64,
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--manifest-hash",
+            "c" * 64,
+            "--environment",
+            "qualification",
+            "--snapshot",
+            "artifacts/drills/cloud-snapshot.json",
+            "--output",
+            "artifacts/process-drills",
+        ]
+    )
+    cloud_soak = parser.parse_args(
+        [
+            "cloud-soak-verdict",
+            "--candidate-hash",
+            "b" * 64,
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--manifest-hash",
+            "c" * 64,
+            "--environment",
+            "production",
+            "--local-soak",
+            "artifacts/readiness/local.json",
+            "--snapshot",
+            "artifacts/readiness/cloud-snapshot.json",
+            "--output",
+            "artifacts/readiness",
         ]
     )
     preflight = parser.parse_args(
@@ -156,6 +257,17 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert backup.output == Path("backups")
     assert restore.backup == Path("backups/candidate")
     assert restore.target_database == "maais_week_restore"
+    assert cloud_publish.artifact_type == "daily_report"
+    assert cloud_publish.bundle == Path("artifacts/report")
+    assert cloud_backup.output == Path("artifacts/cloud-backups")
+    assert cloud_restore.artifact_record == UUID("88888888-8888-4888-8888-888888888888")
+    assert not hasattr(cloud_restore, "target_database_url")
+    assert not hasattr(cloud_restore, "object_key")
+    assert cloud_preflight.environment == "production"
+    assert cloud_preflight.local_preflight == Path("artifacts/preflight/local.json")
+    assert cloud_process_drills.environment == "qualification"
+    assert cloud_process_drills.snapshot == Path("artifacts/drills/cloud-snapshot.json")
+    assert cloud_soak.local_soak == Path("artifacts/readiness/local.json")
     assert preflight.repository == Path.cwd()
     assert preflight.minimum_free_gb == 20
     assert preflight.qualification == Path("artifacts/qualification/latest")
@@ -174,6 +286,18 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
 
     with pytest.raises(SystemExit):
         parser.parse_args(["mission-control", "--port", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "cloud-restore-verify",
+                "--artifact-record",
+                "88888888-8888-4888-8888-888888888888",
+                "--output",
+                "artifacts/cloud-restores",
+                "--object-key",
+                "untrusted/latest.dump",
+            ]
+        )
     with pytest.raises(SystemExit):
         parser.parse_args(
             [
@@ -594,7 +718,7 @@ def test_manifest_file_loader_preserves_exact_identity(tmp_path: Path) -> None:
     assert restored.manifest_hash == manifest.manifest_hash
 
 
-def test_paper_live_cli_serializes_a_terminal_failure_without_a_plain_traceback(
+def test_paper_live_cli_logs_a_terminal_failure_without_a_plain_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -603,7 +727,10 @@ def test_paper_live_cli_serializes_a_terminal_failure_without_a_plain_traceback(
     async def fail_worker(*_: object, **__: object) -> None:
         raise RuntimeError("public source retries exhausted")
 
-    monkeypatch.setattr("maais.cli.get_settings", lambda: Settings(run_mode=RunMode.PAPER_LIVE))
+    monkeypatch.setattr(
+        "maais.cli.get_settings",
+        lambda: Settings(environment="production", run_mode=RunMode.PAPER_LIVE),
+    )
     monkeypatch.setattr("maais.cli.load_manifest_file", lambda _: manifest)
     monkeypatch.setattr("maais.cli.run_live_paper_manifest", fail_worker)
 
@@ -611,14 +738,12 @@ def test_paper_live_cli_serializes_a_terminal_failure_without_a_plain_traceback(
     output = capsys.readouterr()
     payload = json.loads(output.out)
     assert output.err == ""
-    assert payload == {
-        "error": "public source retries exhausted",
-        "error_type": "RuntimeError",
-        "event": "paper_live_failed",
-        "experiment_id": str(manifest.experiment_id),
-        "level": "error",
-        "live_money": False,
-    }
+    assert payload["event"] == "paper_live_failed"
+    assert payload["error_code"] == "worker_unhandled_exception"
+    assert payload["experiment_ref"] == str(manifest.experiment_id)
+    assert payload["outcome"] == "halt_persistence_unknown"
+    assert payload["exception"]["type"] == "RuntimeError"
+    assert payload["exception"]["message"] == "public source retries exhausted"
 
 
 async def test_paper_live_refuses_nonpaper_environment_before_database_access() -> None:
@@ -633,7 +758,7 @@ async def test_paper_live_refuses_even_demo_credentials() -> None:
     manifest = _live_manifest(schema_revision="0015")
     settings = Settings(
         run_mode=RunMode.PAPER_LIVE,
-        binance_demo_api_key="configured",  # pragma: allowlist secret
+        binance_demo_api_key=SecretStr("configured"),  # pragma: allowlist secret
     )
 
     with pytest.raises(ValueError, match="refuses configured exchange credentials"):

@@ -3,21 +3,19 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from secrets import compare_digest
-from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import (
     Depends,
     FastAPI,
-    Header,
     HTTPException,
     Query,
     Request,
+    Response,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -28,37 +26,101 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from maais.api.auth import load_control_token
+from maais.api.cloud_queries import CloudEvidenceIntegrityError, CloudOperationsQueryService
+from maais.api.headers import apply_browser_headers, requires_operator_session
+from maais.api.health import (
+    CloudEndpointReader,
+    InMemoryMonitorRateLimiter,
+    UnavailableCloudEndpointReader,
+    monitor_client_key,
+    monitor_token_matches,
+)
 from maais.api.queries import MissionControlQueryService
 from maais.api.schemas import (
     ApiHealth,
+    AuthSessionView,
+    CloudArtifactPage,
+    CloudAuditEventPage,
+    CloudCandidateView,
+    CloudHealthEvaluationPage,
+    CloudIncidentPage,
+    CloudRunView,
+    CloudServicePage,
+    CsrfTokenResponse,
     DecisionDetail,
     DecisionListItem,
     DecisionPage,
     ExperimentListItem,
     ExperimentOverview,
+    LoginRequest,
+    LoginResponse,
+    MonitorHealth,
     OperatorCommandPage,
     OperatorCommandRequest,
     OperatorCommandView,
     OutboxCursorEvent,
     OutboxCursorPage,
+    PublicLiveness,
+    PublicReadiness,
     ResearchLabView,
     TradeListItem,
     TradePage,
 )
+from maais.api.security import (
+    MissionControlSecurity,
+    OperatorPrincipal,
+    authenticate_websocket,
+    clear_session_cookie,
+    optional_operator_session,
+    require_csrf,
+    require_operator,
+    require_same_origin,
+    security_context,
+    set_session_cookie,
+)
+from maais.api.security import (
+    session_factory as security_session_factory,
+)
+from maais.config.cloud import DeploymentTarget
+from maais.config.security import AuthMode, SecuritySettings
 from maais.config.settings import get_settings
+from maais.core.logging import get_logger
 from maais.db.connection import get_engine, get_session_factory
 from maais.db.models.experiments import ExperimentModel
 from maais.db.models.ledger import OutboxEventModel
 from maais.db.repositories.events import EventRepository
+from maais.db.repositories.observability import ObservabilityRepository
 from maais.db.repositories.operator_commands import (
     OperatorCommandConflict,
     OperatorCommandRepository,
 )
+from maais.db.repositories.sessions import LoginAuthenticationError, OperatorSessionRepository
 from maais.db.unit_of_work import UnitOfWork
+from maais.observability.audit import (
+    AuditSourceRole,
+    deterministic_audit_event_id,
+    pseudonymous_reference,
+)
+from maais.observability.sentry import initialize_backend_sentry
 from maais.operations.operator_commands import CommandStatus, OperatorCommand
 from maais.operations.verification import establish_read_only_snapshot
+from maais.security.passwords import INVALID_CREDENTIALS, verify_operator_password
+from maais.security.sessions import (
+    SessionAuthenticationError,
+    issue_session_tokens,
+    rotate_csrf_token,
+)
 
 SessionFactory = async_sessionmaker[AsyncSession]
+logger = get_logger(__name__)
+
+
+async def _close_websocket(websocket: WebSocket, *, code: int, reason: str) -> None:
+    try:
+        await websocket.close(code=code, reason=reason)
+    except WebSocketDisconnect:
+        pass
+
 
 _DECISION_CSV_COLUMNS = (
     "decision_id",
@@ -150,6 +212,10 @@ def create_app(
     dashboard_dir: Path | None = None,
     control_token: str | None = None,
     control_token_file: Path | None = None,
+    security_settings: SecuritySettings | None = None,
+    clock: Callable[[], datetime] | None = None,
+    cloud_health_reader: CloudEndpointReader | None = None,
+    monitor_rate_limiter: InMemoryMonitorRateLimiter | None = None,
 ) -> FastAPI:
     if control_token is not None and control_token_file is not None:
         raise ValueError("provide either a control token or token file, not both")
@@ -158,35 +224,72 @@ def create_app(
             raise ValueError("direct Mission Control token must be at least 32 characters")
         if control_token != control_token.strip():
             raise ValueError("direct Mission Control token must be trimmed")
-    resolved_control_token = control_token
-    if resolved_control_token is None:
-        resolved_control_token = load_control_token(
-            control_token_file or get_settings().mission_control_token_file
-        )
+    global_settings = None
+    resolved_security = security_settings
+    if resolved_security is None:
+        global_settings = get_settings()
+        resolved_security = global_settings.security
+    sentry_runtime = (
+        initialize_backend_sentry(global_settings.observability)
+        if global_settings is not None
+        else None
+    )
+    if resolved_security.auth_mode is AuthMode.OPERATOR_SESSION and (
+        control_token is not None or control_token_file is not None
+    ):
+        raise ValueError("operator session mode forbids local control token configuration")
+    resolved_control_token = None
+    if resolved_security.auth_mode is AuthMode.LOCAL_TOKEN:
+        resolved_control_token = control_token
+        if resolved_control_token is None:
+            token_path = control_token_file
+            if token_path is None and global_settings is not None:
+                token_path = global_settings.mission_control_token_file
+            resolved_control_token = load_control_token(token_path)
+    resolved_clock = clock or (lambda: datetime.now(timezone.utc))
+    production_security = resolved_security.deployment_target is DeploymentTarget.RAILWAY
     owns_global_engine = session_factory is None
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         if application.state.session_factory is None:
             application.state.session_factory = get_session_factory()
-        yield
-        if owns_global_engine:
-            await get_engine().dispose()
+        try:
+            yield
+        finally:
+            if owns_global_engine:
+                await get_engine().dispose()
 
     application = FastAPI(
         title="MAAIS Mission Control",
         version="0.1.0",
         description="Local paper-trading operations, audit, and queued control API.",
         lifespan=lifespan,
+        docs_url=None if production_security else "/docs",
+        redoc_url=None,
+        openapi_url=None if production_security else "/openapi.json",
     )
     application.state.session_factory = session_factory
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=("http://127.0.0.1:5173", "http://localhost:5173"),
-        allow_credentials=False,
-        allow_methods=("GET", "POST"),
-        allow_headers=("Accept", "Authorization", "Content-Type"),
+    application.state.sentry_runtime = sentry_runtime
+    application.state.cloud_health_reader = (
+        cloud_health_reader if cloud_health_reader is not None else UnavailableCloudEndpointReader()
     )
+    application.state.monitor_rate_limiter = (
+        monitor_rate_limiter if monitor_rate_limiter is not None else InMemoryMonitorRateLimiter()
+    )
+    application.state.security = MissionControlSecurity(
+        settings=resolved_security,
+        control_token=resolved_control_token,
+        clock=resolved_clock,
+    )
+    if resolved_security.deployment_target is DeploymentTarget.LOCAL:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=("http://127.0.0.1:5173", "http://localhost:5173"),
+            allow_credentials=False,
+            allow_methods=("GET", "POST"),
+            allow_headers=("Accept", "Authorization", "Content-Type"),
+        )
 
     async def read_session() -> AsyncIterator[AsyncSession]:
         factory: SessionFactory | None = application.state.session_factory
@@ -198,32 +301,28 @@ def create_app(
                 await establish_read_only_snapshot(session)
                 yield session
 
-    async def require_control_token(
-        authorization: Annotated[str | None, Header()] = None,
-    ) -> None:
-        prefix = "Bearer "
-        supplied = (
-            authorization[len(prefix) :]
-            if authorization is not None and authorization.startswith(prefix)
-            else ""
-        )
-        if (
-            resolved_control_token is None
-            or not supplied
-            or not compare_digest(supplied, resolved_control_token)
-        ):
-            raise HTTPException(
-                status_code=401,
-                detail="valid local control bearer token required",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
     @application.middleware("http")
-    async def disable_browser_caching(request: Request, call_next):
-        response = await call_next(request)
-        if request.url.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
-        return response
+    async def mission_control_boundary(request: Request, call_next):
+        if resolved_security.auth_mode is AuthMode.OPERATOR_SESSION and requires_operator_session(
+            request.url.path
+        ):
+            try:
+                await require_operator(request)
+            except HTTPException as error:
+                response = JSONResponse(
+                    status_code=error.status_code,
+                    content={"detail": error.detail},
+                    headers=error.headers,
+                )
+            else:
+                response = await call_next(request)
+        else:
+            response = await call_next(request)
+        return apply_browser_headers(
+            request,
+            response,
+            production=production_security,
+        )
 
     @application.exception_handler(LookupError)
     async def not_found(_request: Request, error: LookupError) -> JSONResponse:
@@ -240,6 +339,286 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(error)})
 
+    @application.exception_handler(CloudEvidenceIntegrityError)
+    async def cloud_evidence_integrity_failed(
+        _request: Request,
+        _error: CloudEvidenceIntegrityError,
+    ) -> JSONResponse:
+        logger.error(
+            "cloud_evidence_integrity_failed",
+            error_code="cloud_evidence_integrity_failed",
+            outcome="failed",
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "cloud_evidence_integrity_failed"},
+        )
+
+    @application.get("/healthz/live", response_model=PublicLiveness)
+    async def public_liveness() -> PublicLiveness:
+        return PublicLiveness()
+
+    @application.get("/healthz/ready", response_model=PublicReadiness)
+    async def public_readiness() -> JSONResponse:
+        reader: CloudEndpointReader = application.state.cloud_health_reader
+        try:
+            ready = await reader.readiness()
+        except Exception:
+            logger.warning(
+                "public_readiness_probe_failed",
+                error_code="public_readiness_dependency_failed",
+                outcome="degraded",
+                exc_info=True,
+            )
+            ready = False
+        body = PublicReadiness(status="ready" if ready else "not_ready")
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content=body.model_dump(mode="json"),
+        )
+
+    @application.get("/monitor/v1/health", response_model=MonitorHealth)
+    async def monitor_health(http_request: Request) -> JSONResponse:
+        limiter: InMemoryMonitorRateLimiter = application.state.monitor_rate_limiter
+        if not limiter.allow(monitor_client_key(http_request)):
+            return JSONResponse(status_code=429, content={"detail": "rate_limited"})
+        if not monitor_token_matches(
+            http_request,
+            resolved_security.monitor_token_value,
+        ):
+            return JSONResponse(status_code=404, content={"detail": "not_found"})
+        reader: CloudEndpointReader = application.state.cloud_health_reader
+        try:
+            snapshot = await reader.monitor()
+        except Exception:
+            logger.warning(
+                "public_monitor_probe_failed",
+                error_code="public_monitor_dependency_failed",
+                outcome="degraded",
+                exc_info=True,
+            )
+            snapshot = await UnavailableCloudEndpointReader().monitor()
+        healthy = all(snapshot.components.values())
+        body = MonitorHealth(
+            status="ok" if healthy else "degraded",
+            **snapshot.components,
+        )
+        return JSONResponse(
+            status_code=200 if healthy else 503,
+            content=body.model_dump(mode="json"),
+        )
+
+    @application.post("/api/v1/auth/login", response_model=LoginResponse)
+    async def login(http_request: Request, response: Response) -> LoginResponse:
+        context = security_context(http_request)
+        if context.settings.auth_mode is not AuthMode.OPERATOR_SESSION:
+            raise HTTPException(status_code=404, detail="operator session login is not enabled")
+        try:
+            payload = await http_request.json()
+            login_request = LoginRequest.model_validate(payload)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail="invalid_login_payload") from error
+        observed_at = context.clock()
+        issued = None
+        async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
+            blocked = False
+            login_state = None
+            try:
+                login_state = await uow.sessions.require_login_allowed(observed_at=observed_at)
+            except LoginAuthenticationError:
+                blocked = True
+                login_state = await uow.sessions.login_state(observed_at=observed_at)
+            if not blocked:
+                verification = await asyncio.to_thread(
+                    verify_operator_password,
+                    login_request.password,
+                    context.settings.operator_password_hash_value,
+                )
+                if not verification.valid:
+                    login_state = await uow.sessions.record_login_failure(observed_at=observed_at)
+                    locked = login_state.locked(observed_at)
+                    await uow.observability.append_audit(
+                        event_id=uuid4(),
+                        source_role=AuditSourceRole.WEB,
+                        actor_reference=pseudonymous_reference("actor", "sole_operator"),
+                        session_reference=None,
+                        event_code=("auth.login.locked" if locked else "auth.login.rejected"),
+                        reason_code=("login_lockout_started" if locked else "invalid_credentials"),
+                        evidence={"failed_attempts": login_state.failed_attempts},
+                        run_id=None,
+                        service_boot_id=None,
+                        occurred_at=observed_at,
+                    )
+                else:
+                    await uow.sessions.record_login_success(observed_at=observed_at)
+                    revoked_sessions = await uow.sessions.revoke_all_active(revoked_at=observed_at)
+                    issued = issue_session_tokens(
+                        actor="sole_operator",
+                        observed_at=observed_at,
+                        session_pepper=context.settings.session_pepper,
+                        csrf_pepper=context.settings.csrf_pepper,
+                    )
+                    await uow.sessions.issue(issued.to_request())
+                    for revoked in revoked_sessions:
+                        await uow.observability.append_audit(
+                            event_id=deterministic_audit_event_id(
+                                "auth.session.revoked", revoked.id
+                            ),
+                            source_role=AuditSourceRole.WEB,
+                            actor_reference=pseudonymous_reference("actor", revoked.actor),
+                            session_reference=pseudonymous_reference("session", revoked.id),
+                            event_code="auth.session.revoked",
+                            reason_code="session_revoked",
+                            evidence={"terminal_state": "revoked"},
+                            run_id=None,
+                            service_boot_id=None,
+                            occurred_at=observed_at,
+                        )
+                    await uow.observability.append_audit(
+                        event_id=uuid4(),
+                        source_role=AuditSourceRole.WEB,
+                        actor_reference=pseudonymous_reference("actor", issued.session.actor),
+                        session_reference=pseudonymous_reference("session", issued.session.id),
+                        event_code="auth.login.succeeded",
+                        reason_code="valid_credentials",
+                        evidence={
+                            "authentication_method": "password",
+                            "revoked_prior_session_count": len(revoked_sessions),
+                        },
+                        run_id=None,
+                        service_boot_id=None,
+                        occurred_at=observed_at,
+                    )
+            else:
+                assert login_state is not None
+                await uow.observability.append_audit(
+                    event_id=uuid4(),
+                    source_role=AuditSourceRole.WEB,
+                    actor_reference=pseudonymous_reference("actor", "sole_operator"),
+                    session_reference=None,
+                    event_code="auth.login.locked",
+                    reason_code="login_lockout_active",
+                    evidence={"failed_attempts": login_state.failed_attempts},
+                    run_id=None,
+                    service_boot_id=None,
+                    occurred_at=observed_at,
+                )
+        if issued is None:
+            raise HTTPException(status_code=401, detail=INVALID_CREDENTIALS)
+        set_session_cookie(
+            response,
+            token=issued.token,
+            expires_at=issued.session.expires_at,
+        )
+        return LoginResponse(
+            actor=issued.session.actor,
+            auth_mode=AuthMode.OPERATOR_SESSION,
+            csrf_token=issued.csrf_token,
+            expires_at=issued.session.expires_at,
+        )
+
+    @application.get("/api/v1/auth/session", response_model=AuthSessionView)
+    async def auth_session(http_request: Request, response: Response) -> AuthSessionView:
+        context = security_context(http_request)
+        authenticated = await optional_operator_session(http_request)
+        if authenticated is None:
+            if http_request.cookies:
+                clear_session_cookie(response)
+            return AuthSessionView(
+                authenticated=False,
+                actor=None,
+                auth_mode=context.settings.auth_mode,
+                expires_at=None,
+            )
+        return AuthSessionView(
+            authenticated=True,
+            actor=authenticated.actor,
+            auth_mode=AuthMode.OPERATOR_SESSION,
+            expires_at=authenticated.expires_at,
+        )
+
+    @application.post("/api/v1/auth/csrf", response_model=CsrfTokenResponse)
+    async def csrf_bootstrap(
+        http_request: Request,
+        principal: OperatorPrincipal = Depends(require_operator),
+    ) -> CsrfTokenResponse:
+        if principal.auth_mode is not AuthMode.OPERATOR_SESSION:
+            raise HTTPException(status_code=404, detail="operator session CSRF is not enabled")
+        context = security_context(http_request)
+        try:
+            require_same_origin(http_request)
+        except HTTPException:
+            async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
+                await uow.observability.append_audit(
+                    event_id=uuid4(),
+                    source_role=AuditSourceRole.WEB,
+                    actor_reference=pseudonymous_reference("actor", principal.actor),
+                    session_reference=(
+                        pseudonymous_reference("session", principal.session_id)
+                        if principal.session_id is not None
+                        else None
+                    ),
+                    event_code="auth.csrf.rejected",
+                    reason_code="origin_verification_failed",
+                    evidence={"request_path": http_request.url.path},
+                    run_id=None,
+                    service_boot_id=None,
+                    occurred_at=context.clock(),
+                )
+            raise
+        current = http_request.state.operator_session
+        issued = rotate_csrf_token(
+            current,
+            observed_at=context.clock(),
+            csrf_pepper=context.settings.csrf_pepper,
+        )
+        async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
+            await uow.sessions.rotate_csrf(issued.session)
+        return CsrfTokenResponse(csrf_token=issued.csrf_token)
+
+    @application.post("/api/v1/auth/logout", status_code=204)
+    async def logout(
+        http_request: Request,
+        principal: OperatorPrincipal = Depends(require_csrf),
+    ) -> Response:
+        response = Response(status_code=204)
+        if principal.auth_mode is AuthMode.OPERATOR_SESSION:
+            assert principal.session_id is not None
+            context = security_context(http_request)
+            async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
+                revoked = await uow.sessions.revoke(
+                    principal.session_id,
+                    revoked_at=context.clock(),
+                )
+                assert revoked.revoked_at is not None
+                await uow.observability.append_audit(
+                    event_id=deterministic_audit_event_id("auth.session.revoked", revoked.id),
+                    source_role=AuditSourceRole.WEB,
+                    actor_reference=pseudonymous_reference("actor", revoked.actor),
+                    session_reference=pseudonymous_reference("session", revoked.id),
+                    event_code="auth.session.revoked",
+                    reason_code="session_revoked",
+                    evidence={"terminal_state": "revoked"},
+                    run_id=None,
+                    service_boot_id=None,
+                    occurred_at=revoked.revoked_at,
+                )
+                await uow.observability.append_audit(
+                    event_id=uuid4(),
+                    source_role=AuditSourceRole.WEB,
+                    actor_reference=pseudonymous_reference("actor", revoked.actor),
+                    session_reference=pseudonymous_reference("session", revoked.id),
+                    event_code="auth.logout",
+                    reason_code="operator_logout",
+                    evidence={"session_terminal": True},
+                    run_id=None,
+                    service_boot_id=None,
+                    occurred_at=revoked.revoked_at,
+                )
+            clear_session_cookie(response)
+        return response
+
     @application.get("/api/v1/health", response_model=ApiHealth)
     async def health(session: AsyncSession = Depends(read_session)) -> ApiHealth:
         transaction_mode = str(await session.scalar(text("SHOW transaction_read_only")))
@@ -249,7 +628,120 @@ def create_app(
             status="ok",
             database_transaction=("read only" if transaction_mode == "on" else transaction_mode),
             schema_revision=schema_revision,
-            checked_at=datetime.now(timezone.utc),
+            checked_at=resolved_clock(),
+        )
+
+    @application.get(
+        "/api/v1/platform/candidates/{candidate_hash}",
+        response_model=CloudCandidateView,
+    )
+    async def cloud_candidate(
+        candidate_hash: str,
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudCandidateView:
+        return await CloudOperationsQueryService(session).get_candidate(candidate_hash)
+
+    @application.get("/api/v1/runs/{run_id}", response_model=CloudRunView)
+    async def cloud_run(
+        run_id: UUID,
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudRunView:
+        return await CloudOperationsQueryService(session).get_run(run_id)
+
+    @application.get(
+        "/api/v1/experiments/{experiment_id}/cloud-run",
+        response_model=CloudRunView | None,
+    )
+    async def experiment_cloud_run(
+        experiment_id: UUID,
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudRunView | None:
+        return await CloudOperationsQueryService(session).find_experiment_run(experiment_id)
+
+    @application.get(
+        "/api/v1/runs/{run_id}/services",
+        response_model=CloudServicePage,
+    )
+    async def cloud_services(
+        run_id: UUID,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudServicePage:
+        return await CloudOperationsQueryService(session).list_services(
+            run_id,
+            before_at=before_at,
+            before_id=before_id,
+            limit=limit,
+        )
+
+    @application.get(
+        "/api/v1/runs/{run_id}/health",
+        response_model=CloudHealthEvaluationPage,
+    )
+    async def cloud_health_history(
+        run_id: UUID,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudHealthEvaluationPage:
+        return await CloudOperationsQueryService(session).list_health(
+            run_id,
+            before_at=before_at,
+            before_id=before_id,
+            limit=limit,
+        )
+
+    @application.get(
+        "/api/v1/runs/{run_id}/incidents",
+        response_model=CloudIncidentPage,
+    )
+    async def cloud_incidents(
+        run_id: UUID,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudIncidentPage:
+        return await CloudOperationsQueryService(session).list_incidents(
+            run_id,
+            before_at=before_at,
+            before_id=before_id,
+            limit=limit,
+        )
+
+    @application.get(
+        "/api/v1/runs/{run_id}/artifacts",
+        response_model=CloudArtifactPage,
+    )
+    async def cloud_artifacts(
+        run_id: UUID,
+        before_sequence: int | None = Query(None, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudArtifactPage:
+        return await CloudOperationsQueryService(session).list_artifacts(
+            run_id,
+            before_sequence=before_sequence,
+            limit=limit,
+        )
+
+    @application.get(
+        "/api/v1/runs/{run_id}/audit",
+        response_model=CloudAuditEventPage,
+    )
+    async def cloud_audit(
+        run_id: UUID,
+        before_sequence: int | None = Query(None, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudAuditEventPage:
+        return await CloudOperationsQueryService(session).list_audit_events(
+            run_id,
+            before_sequence=before_sequence,
+            limit=limit,
         )
 
     @application.get("/api/v1/experiments", response_model=tuple[ExperimentListItem, ...])
@@ -561,9 +1053,8 @@ def create_app(
     async def request_command(
         experiment_id: UUID,
         request: OperatorCommandRequest,
-        _authorized: None = Depends(require_control_token),
+        principal: OperatorPrincipal = Depends(require_csrf),
     ) -> OperatorCommandView:
-        del _authorized
         factory: SessionFactory | None = application.state.session_factory
         if factory is None:
             factory = get_session_factory()
@@ -573,15 +1064,42 @@ def create_app(
             experiment_id=experiment_id,
             command_type=request.command_type,
             idempotency_key=request.idempotency_key,
-            actor="local_operator",
+            actor=principal.actor,
             reason=request.reason,
             payload=request.payload,
             confirmation=request.confirmation,
-            requested_at=datetime.now(timezone.utc),
+            requested_at=resolved_clock(),
         )
         async with UnitOfWork(factory).begin() as uow:
             await uow.experiments.get_status(experiment_id)
             recorded = await uow.commands.enqueue(command)
+            persisted_command = recorded.command
+            await uow.observability.append_audit(
+                event_id=deterministic_audit_event_id(
+                    "operator.command.enqueued", persisted_command.command_id
+                ),
+                source_role=AuditSourceRole.WEB,
+                actor_reference=pseudonymous_reference("actor", principal.actor),
+                session_reference=(
+                    pseudonymous_reference("session", principal.session_id)
+                    if principal.session_id is not None
+                    else None
+                ),
+                event_code="operator.command.enqueued",
+                reason_code=(
+                    "operator_confirmed"
+                    if persisted_command.operator_confirmed
+                    else "operator_acknowledged"
+                ),
+                evidence={
+                    "command_id": str(persisted_command.command_id),
+                    "command_type": persisted_command.command_type.value,
+                    "experiment_id": str(persisted_command.experiment_id),
+                },
+                run_id=None,
+                service_boot_id=None,
+                occurred_at=persisted_command.requested_at,
+            )
         return OperatorCommandView.model_validate(recorded.command.to_dict())
 
     @application.get(
@@ -599,7 +1117,11 @@ def create_app(
         )
         if exists is None:
             raise LookupError(f"experiment not found: {experiment_id}")
-        repository = OperatorCommandRepository(session, EventRepository(session))
+        repository = OperatorCommandRepository(
+            session,
+            EventRepository(session),
+            ObservabilityRepository(session),
+        )
         items = await repository.list_for_experiment(
             experiment_id,
             status=status,
@@ -618,7 +1140,11 @@ def create_app(
         command_id: UUID,
         session: AsyncSession = Depends(read_session),
     ) -> OperatorCommandView:
-        repository = OperatorCommandRepository(session, EventRepository(session))
+        repository = OperatorCommandRepository(
+            session,
+            EventRepository(session),
+            ObservabilityRepository(session),
+        )
         stored = await repository.get(command_id)
         return OperatorCommandView.model_validate(stored.to_dict())
 
@@ -639,8 +1165,21 @@ def create_app(
         websocket: WebSocket,
         after_cursor: int = 0,
     ) -> None:
+        try:
+            websocket_auth = await authenticate_websocket(websocket)
+        except SessionAuthenticationError:
+            await _close_websocket(
+                websocket,
+                code=1008,
+                reason="session authentication required",
+            )
+            return
         if after_cursor < 0:
-            await websocket.close(code=1008, reason="after_cursor cannot be negative")
+            await _close_websocket(
+                websocket,
+                code=1008,
+                reason="after_cursor cannot be negative",
+            )
             return
         await websocket.accept()
         cursor = after_cursor
@@ -655,6 +1194,11 @@ def create_app(
                 async with factory() as session:
                     async with session.begin():
                         await establish_read_only_snapshot(session)
+                        if websocket_auth is not None:
+                            await OperatorSessionRepository(session).check(
+                                websocket_auth.token_hash,
+                                observed_at=resolved_clock(),
+                            )
                         page = await _outbox_cursor_page(
                             session,
                             after_cursor=cursor,
@@ -668,11 +1212,14 @@ def create_app(
                         {
                             "type": "heartbeat",
                             "next_cursor": cursor,
-                            "checked_at": datetime.now(timezone.utc).isoformat(),
+                            "checked_at": resolved_clock().isoformat(),
                         }
                     )
                     last_heartbeat = loop.time()
                 await asyncio.sleep(0.5)
+        except SessionAuthenticationError:
+            await _close_websocket(websocket, code=1008, reason="session expired")
+            return
         except WebSocketDisconnect:
             return
 

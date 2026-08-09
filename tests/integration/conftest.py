@@ -17,6 +17,11 @@ from sqlalchemy.ext.asyncio import (
 from maais.db.unit_of_work import UnitOfWork
 
 _PHASE_ONE_TABLES = (
+    "health_evaluations",
+    "audit_events",
+    "artifact_records",
+    "artifact_publication_attempts",
+    "scheduled_operations",
     "operator_commands",
     "trading_controls",
     "worker_leases",
@@ -46,7 +51,14 @@ _PHASE_ONE_TABLES = (
     "event_streams",
     "agent_versions",
     "strategy_versions",
+    "service_instances",
+    "run_instances",
+    "platform_candidates",
     "experiments",
+)
+_AUTH_TABLES = (
+    "maais_auth.operator_sessions",
+    "maais_auth.operator_auth_state",
 )
 
 
@@ -70,12 +82,23 @@ async def db_engine(test_database_url: str) -> AsyncIterator[AsyncEngine]:
 
 @pytest_asyncio.fixture(autouse=True)
 async def clean_phase_one_tables(db_engine: AsyncEngine) -> AsyncIterator[None]:
-    table_list = ", ".join(_PHASE_ONE_TABLES)
-    async with db_engine.begin() as connection:
-        await connection.execute(text(f"TRUNCATE {table_list} RESTART IDENTITY CASCADE"))
+    await _clean_all_tables(db_engine)
     yield
+    await _clean_all_tables(db_engine)
+
+
+async def _clean_all_tables(db_engine: AsyncEngine) -> None:
+    table_list = ", ".join((*_AUTH_TABLES, *_PHASE_ONE_TABLES))
     async with db_engine.begin() as connection:
         await connection.execute(text(f"TRUNCATE {table_list} RESTART IDENTITY CASCADE"))
+        await connection.execute(
+            text(
+                "INSERT INTO maais_auth.operator_auth_state "
+                "(id, failed_attempts, window_started_at, locked_until, updated_at, version) "
+                "VALUES (1, 0, NULL, NULL, "
+                "TIMESTAMPTZ '1970-01-01 00:00:00+00', 1)"
+            )
+        )
 
 
 @pytest_asyncio.fixture

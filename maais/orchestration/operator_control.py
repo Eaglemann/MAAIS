@@ -109,15 +109,19 @@ class OperatorCommandExecutor:
         uow: UnitOfWork,
         manifest: ExperimentManifest,
         worker_id: UUID,
+        platform_run_id: UUID | None = None,
         now: Callable[[], datetime] | None = None,
         flatten_planner: FlattenPlanner | None = None,
     ) -> None:
         if worker_id.int == 0:
             raise ValueError("operator command worker identity cannot be nil")
+        if platform_run_id is not None and platform_run_id.int == 0:
+            raise ValueError("operator command platform run identity cannot be nil")
         self._uow = uow
         self._manifest = manifest
         self._worker_id = worker_id
         self._worker_name = f"paper_worker:{worker_id}"
+        self._platform_run_id = platform_run_id
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._flatten_planner = flatten_planner
 
@@ -177,14 +181,22 @@ class OperatorCommandExecutor:
                         detail="start requires an inactive persistent kill switch",
                     )
                     return OperatorCommandExecution(command=rejected, stop_worker=False)
+                activated_at = self._now()
                 started = await transaction.experiments.ensure_running(
                     self._manifest,
-                    started_at=self._now(),
+                    started_at=activated_at,
                 )
+                if self._platform_run_id is not None:
+                    await transaction.platform.activate_run(
+                        self._platform_run_id,
+                        command_id=command.command_id,
+                        worker_boot_id=self._worker_id,
+                        started_at=activated_at,
+                    )
                 completed = await transaction.commands.complete(
                     command.command_id,
                     worker_id=self._worker_name,
-                    completed_at=self._now(),
+                    completed_at=activated_at,
                     result={
                         "command": command.command_type.value,
                         "experiment_status": "running",

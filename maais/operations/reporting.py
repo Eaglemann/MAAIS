@@ -1127,7 +1127,7 @@ async def build_configured_daily_report(
     *,
     generated_at: datetime | None = None,
 ) -> dict[str, object]:
-    engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
+    engine = create_async_engine(get_settings().database_url_value, pool_pre_ping=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:

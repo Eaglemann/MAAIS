@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from maais.db.repositories.artifacts import ArtifactRepository
 from maais.db.repositories.controls import TradingControlRepository
 from maais.db.repositories.counterfactuals import CounterfactualRepository
 from maais.db.repositories.decisions import DecisionRepository
@@ -14,8 +15,12 @@ from maais.db.repositories.execution import PaperExecutionRepository
 from maais.db.repositories.experiments import ExperimentRepository
 from maais.db.repositories.incidents import IncidentRepository
 from maais.db.repositories.market_data import MarketDataRepository
+from maais.db.repositories.observability import ObservabilityRepository
 from maais.db.repositories.operator_commands import OperatorCommandRepository
 from maais.db.repositories.orchestration import OrchestrationRepository
+from maais.db.repositories.platform import PlatformRepository
+from maais.db.repositories.scheduled_operations import ScheduledOperationRepository
+from maais.db.repositories.sessions import OperatorSessionRepository
 from maais.db.repositories.workers import WorkerLeaseRepository
 
 
@@ -33,6 +38,11 @@ class UnitOfWorkContext:
     workers: WorkerLeaseRepository
     controls: TradingControlRepository
     commands: OperatorCommandRepository
+    platform: PlatformRepository
+    artifacts: ArtifactRepository
+    scheduled_operations: ScheduledOperationRepository
+    sessions: OperatorSessionRepository
+    observability: ObservabilityRepository
 
 
 class UnitOfWork:
@@ -46,6 +56,7 @@ class UnitOfWork:
         async with self._session_factory() as session:
             async with session.begin():
                 events = EventRepository(session)
+                observability = ObservabilityRepository(session)
                 yield UnitOfWorkContext(
                     session=session,
                     events=events,
@@ -58,5 +69,13 @@ class UnitOfWork:
                     orchestration=OrchestrationRepository(session, events),
                     workers=WorkerLeaseRepository(session, events),
                     controls=TradingControlRepository(session, events),
-                    commands=OperatorCommandRepository(session, events),
+                    commands=OperatorCommandRepository(session, events, observability),
+                    platform=PlatformRepository(session, observability),
+                    artifacts=ArtifactRepository(session, observability),
+                    scheduled_operations=ScheduledOperationRepository(
+                        session,
+                        observability,
+                    ),
+                    sessions=OperatorSessionRepository(session),
+                    observability=observability,
                 )

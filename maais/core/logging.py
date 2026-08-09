@@ -3,6 +3,15 @@ import sys
 
 import structlog
 
+from maais.observability.events import (
+    add_event_schema_version,
+    enforce_event_contract,
+    normalize_exception,
+    remove_processor_metadata,
+    render_console_exception,
+)
+from maais.observability.redaction import redact_event
+
 
 def configure_logging(log_level: str = "INFO", is_production: bool = False) -> None:
     """Configure structlog for the MAAIS system.
@@ -12,16 +21,29 @@ def configure_logging(log_level: str = "INFO", is_production: bool = False) -> N
     """
     shared_processors = [
         structlog.contextvars.merge_contextvars,
+        structlog.stdlib.ExtraAdder(),
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
+        structlog.processors.TimeStamper(fmt="iso", utc=True, key="timestamp"),
+        normalize_exception,
+        redact_event,
+        enforce_event_contract,
+        add_event_schema_version,
     ]
 
     if is_production:
-        renderer = structlog.processors.JSONRenderer()
+        renderer = structlog.processors.JSONRenderer(sort_keys=True)
+        formatter_processors = [remove_processor_metadata, renderer]
     else:
-        renderer = structlog.dev.ConsoleRenderer(colors=True)
+        renderer = structlog.dev.ConsoleRenderer(
+            colors=sys.stdout.isatty(),
+            exception_formatter=structlog.dev.plain_traceback,
+        )
+        formatter_processors = [
+            remove_processor_metadata,
+            render_console_exception,
+            renderer,
+        ]
 
     structlog.configure(
         processors=[
@@ -36,10 +58,7 @@ def configure_logging(log_level: str = "INFO", is_production: bool = False) -> N
 
     formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=shared_processors,
-        processors=[
-            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            renderer,
-        ],
+        processors=formatter_processors,
     )
 
     handler = logging.StreamHandler(sys.stdout)

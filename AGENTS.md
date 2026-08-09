@@ -102,6 +102,12 @@ commands manually:
 - `scripts/stop-paper-week.sh`
 - `scripts/recover-paper-week.sh`
 
+Railway evidence is evaluated from frozen provider snapshots with
+`maais cloud-preflight`, `maais cloud-process-drill-verdict`, and
+`maais cloud-soak-verdict`. These commands are read-only with respect to provider
+failures and timed-run lifecycle; their operations-role publication step must succeed in
+both configured artifact stores.
+
 ## Change discipline
 
 - Use tests first for behavior changes and reproduce defects before fixing them.

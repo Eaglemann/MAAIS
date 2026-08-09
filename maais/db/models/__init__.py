@@ -8,6 +8,12 @@ from maais.db.models.accounts import (
     PositionModel,
 )
 from maais.db.models.agents import AgentWeightModel
+from maais.db.models.artifacts import (
+    ArtifactPublicationAttemptModel,
+    ArtifactRecordModel,
+    ScheduledOperationModel,
+)
+from maais.db.models.auth import OperatorAuthStateModel, OperatorSessionModel
 from maais.db.models.counterfactuals import CounterfactualModel
 from maais.db.models.decisions import (
     AgentEvaluationModel,
@@ -25,6 +31,7 @@ from maais.db.models.execution import (
 )
 from maais.db.models.experiments import AgentVersionModel, ExperimentModel, StrategyVersionModel
 from maais.db.models.ledger import DomainEventModel, EventStreamModel, OutboxEventModel
+from maais.db.models.observability import AuditEventModel, HealthEvaluationModel
 from maais.db.models.operations import (
     DataQualityEvaluationModel,
     IncidentModel,
@@ -35,12 +42,20 @@ from maais.db.models.operations import (
     WorkerCheckpointModel,
     WorkerLeaseModel,
 )
+from maais.db.models.platform import (
+    PlatformCandidateModel,
+    RunInstanceModel,
+    ServiceInstanceModel,
+)
 
 __all__ = [
     "AccountSnapshotModel",
     "AgentVersionModel",
     "AgentWeightModel",
     "AgentEvaluationModel",
+    "ArtifactPublicationAttemptModel",
+    "ArtifactRecordModel",
+    "AuditEventModel",
     "CounterfactualModel",
     "DecisionCycleModel",
     "DecisionSummaryModel",
@@ -53,6 +68,7 @@ __all__ = [
     "FillModel",
     "FundingEntryModel",
     "GateEvaluationModel",
+    "HealthEvaluationModel",
     "IncidentModel",
     "MarketFrameModel",
     "MarketCursorModel",
@@ -61,8 +77,14 @@ __all__ = [
     "OrderEventModel",
     "OrderIntentModel",
     "OperatorCommandModel",
+    "OperatorAuthStateModel",
+    "OperatorSessionModel",
     "PositionLotModel",
     "PositionModel",
+    "PlatformCandidateModel",
+    "RunInstanceModel",
+    "ScheduledOperationModel",
+    "ServiceInstanceModel",
     "StrategyVersionModel",
     "TradeProposalModel",
     "TradingControlModel",

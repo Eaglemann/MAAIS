@@ -1,0 +1,12 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "maais cloud-worker"
+restartPolicyType = "NEVER"
+overlapSeconds = 0
+drainingSeconds = 30
+
+[deploy.multiRegionConfig.europe-west4-drams3a]
+numReplicas = 1

@@ -3,8 +3,9 @@
 MAAIS is a local, auditable multi-agent research and paper-trading platform for
 USDT perpetual markets.
 
-> **Current status:** The platform implementation is complete, but it is **not yet ready for the seven-day paper experiment** until a fresh exact-commit 24-hour
-> soak and immutable readiness verdict pass. The paper broker, authoritative event
+> **Current status:** The local platform and Railway-ready paper runtime are implemented,
+> but it is **not yet ready for the seven-day paper experiment**. Deployment or a reachable
+> website is not readiness. A fresh exact-commit 24-hour soak and immutable verdict must pass. The paper broker, authoritative event
 > ledger, live orchestrator, Mission Control dashboard, reporting, backup/restore,
 > and process drills are implemented. No live-money execution is in scope.
 
@@ -40,7 +41,7 @@ CLI.
 cp .env.template .env
 uv sync --dev
 export MAAIS_DOCKER_CONTEXT=desktop-linux  # use `docker context show` to choose yours
-docker --context "${MAAIS_DOCKER_CONTEXT}" compose up -d --wait postgres
+docker --context "${MAAIS_DOCKER_CONTEXT}" compose up -d --wait --pull never postgres
 uv run alembic upgrade head
 uv run maais database-identity
 ```
@@ -92,6 +93,12 @@ rejects a failed, stale, incomplete, tampered, or different-commit bundle.
 - [Incident response](docs/runbooks/incidents.md)
 - [Recovery and restore](docs/runbooks/recovery.md)
 - [Seven-day protocol](docs/runbooks/seven-day-experiment.md)
+- [Railway variable contract](docs/runbooks/railway-variables.md)
+- [Railway qualification](docs/runbooks/railway-qualification.md)
+- [Railway production preflight](docs/runbooks/railway-production-preflight.md)
+- [Railway 24-hour soak](docs/runbooks/railway-soak.md)
+- [Railway recovery](docs/runbooks/railway-recovery.md)
+- [Railway incidents and logs](docs/runbooks/railway-incidents.md)
 
 ## Design and delivery
 
