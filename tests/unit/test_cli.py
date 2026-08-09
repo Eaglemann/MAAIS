@@ -95,6 +95,67 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
             "artifacts/cloud-restores",
         ]
     )
+    cloud_preflight = parser.parse_args(
+        [
+            "cloud-preflight",
+            "--candidate-hash",
+            "b" * 64,
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--manifest-hash",
+            "c" * 64,
+            "--environment",
+            "production",
+            "--local-preflight",
+            "artifacts/preflight/local.json",
+            "--snapshot",
+            "artifacts/preflight/cloud-snapshot.json",
+            "--output",
+            "artifacts/preflight",
+        ]
+    )
+    cloud_process_drills = parser.parse_args(
+        [
+            "cloud-process-drill-verdict",
+            "--candidate-hash",
+            "b" * 64,
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--manifest-hash",
+            "c" * 64,
+            "--environment",
+            "qualification",
+            "--snapshot",
+            "artifacts/drills/cloud-snapshot.json",
+            "--output",
+            "artifacts/process-drills",
+        ]
+    )
+    cloud_soak = parser.parse_args(
+        [
+            "cloud-soak-verdict",
+            "--candidate-hash",
+            "b" * 64,
+            "--run",
+            "22222222-2222-4222-8222-222222222222",
+            "--experiment",
+            "11111111-1111-4111-8111-111111111111",
+            "--manifest-hash",
+            "c" * 64,
+            "--environment",
+            "production",
+            "--local-soak",
+            "artifacts/readiness/local.json",
+            "--snapshot",
+            "artifacts/readiness/cloud-snapshot.json",
+            "--output",
+            "artifacts/readiness",
+        ]
+    )
     preflight = parser.parse_args(
         [
             "preflight",
@@ -202,6 +263,11 @@ def test_operator_cli_requires_explicit_manifest_and_output_paths() -> None:
     assert cloud_restore.artifact_record == UUID("88888888-8888-4888-8888-888888888888")
     assert not hasattr(cloud_restore, "target_database_url")
     assert not hasattr(cloud_restore, "object_key")
+    assert cloud_preflight.environment == "production"
+    assert cloud_preflight.local_preflight == Path("artifacts/preflight/local.json")
+    assert cloud_process_drills.environment == "qualification"
+    assert cloud_process_drills.snapshot == Path("artifacts/drills/cloud-snapshot.json")
+    assert cloud_soak.local_soak == Path("artifacts/readiness/local.json")
     assert preflight.repository == Path.cwd()
     assert preflight.minimum_free_gb == 20
     assert preflight.qualification == Path("artifacts/qualification/latest")

@@ -10,7 +10,7 @@ import logging
 import os
 import secrets
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
@@ -37,10 +37,26 @@ from maais.observability.sentry import (
 )
 from maais.operations.backups import backup_configured_database
 from maais.operations.cloud_artifacts import (
+    CloudOperationResult,
     backup_configured_cloud_database,
     close_configured_cloud_day,
     publish_configured_cloud_bundle,
     restore_configured_cloud_backup,
+)
+from maais.operations.cloud_evidence import CloudEvidenceSnapshot
+from maais.operations.cloud_preflight import (
+    evaluate_cloud_preflight,
+    write_cloud_preflight_bundle,
+)
+from maais.operations.cloud_process_drills import (
+    CloudProcessDrillSnapshot,
+    evaluate_cloud_process_drills,
+    write_cloud_process_drill_bundle,
+)
+from maais.operations.cloud_soak_readiness import (
+    CloudSoakSnapshot,
+    evaluate_cloud_soak_readiness,
+    write_cloud_soak_readiness_bundle,
 )
 from maais.operations.daily_supervisor import supervise_daily_closes
 from maais.operations.database_identity import collect_configured_database_identity
@@ -127,6 +143,18 @@ def _sha256(value: str) -> str:
     if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise argparse.ArgumentTypeError("value must be a lowercase SHA-256 digest")
     return value
+
+
+def _add_cloud_verdict_identity_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--candidate-hash", type=_sha256, required=True)
+    parser.add_argument("--run", type=UUID, required=True)
+    parser.add_argument("--experiment", type=UUID, required=True)
+    parser.add_argument("--manifest-hash", type=_sha256, required=True)
+    parser.add_argument(
+        "--environment",
+        choices=("qualification", "production"),
+        required=True,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -219,6 +247,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="run the single-owner immutable one-minute cloud health supervisor",
     )
     cloud_operations.add_argument("--run", type=UUID)
+    cloud_preflight = commands.add_parser(
+        "cloud-preflight",
+        help="evaluate and dual-store one frozen cloud preflight snapshot",
+    )
+    _add_cloud_verdict_identity_arguments(cloud_preflight)
+    cloud_preflight.add_argument("--local-preflight", type=Path, required=True)
+    cloud_preflight.add_argument("--snapshot", type=Path, required=True)
+    cloud_preflight.add_argument("--output", type=Path, required=True)
+    cloud_process_drills = commands.add_parser(
+        "cloud-process-drill-verdict",
+        help="evaluate and dual-store frozen, operator-triggered cloud drill observations",
+    )
+    _add_cloud_verdict_identity_arguments(cloud_process_drills)
+    cloud_process_drills.add_argument("--snapshot", type=Path, required=True)
+    cloud_process_drills.add_argument("--output", type=Path, required=True)
+    cloud_soak = commands.add_parser(
+        "cloud-soak-verdict",
+        help="evaluate and dual-store an uninterrupted cloud soak after 24 hours",
+    )
+    _add_cloud_verdict_identity_arguments(cloud_soak)
+    cloud_soak.add_argument("--local-soak", type=Path, required=True)
+    cloud_soak.add_argument("--snapshot", type=Path, required=True)
+    cloud_soak.add_argument("--output", type=Path, required=True)
     prepare = commands.add_parser(
         "prepare-paper-live",
         help="preflight public venues and write an immutable paper manifest",
@@ -532,6 +583,92 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"live_money": False, "status": "stopped"}, sort_keys=True))
         _flush_cloud_service_shutdown("cloud_operations", sentry_runtime)
         return 0
+    if arguments.command == "cloud-preflight":
+        evaluated_at = datetime.now(timezone.utc)
+        snapshot = CloudEvidenceSnapshot.from_dict(_load_json_object(arguments.snapshot))
+        report = evaluate_cloud_preflight(
+            local_preflight=_load_json_object(arguments.local_preflight),
+            snapshot=snapshot,
+            expected_candidate_hash=arguments.candidate_hash,
+            expected_run_id=arguments.run,
+            expected_experiment_id=arguments.experiment,
+            expected_manifest_hash=arguments.manifest_hash,
+            expected_environment=arguments.environment,
+            evaluated_at=evaluated_at,
+        )
+        paths = write_cloud_preflight_bundle(report, arguments.output)
+        result = asyncio.run(
+            _publish_cloud_verdict(
+                settings=settings,
+                run_id=arguments.run,
+                experiment_id=arguments.experiment,
+                environment=arguments.environment,
+                candidate_hash=arguments.candidate_hash,
+                artifact_type=ArtifactType.PREFLIGHT,
+                report=report,
+                bundle_directory=paths.directory,
+                generated_at=evaluated_at,
+            )
+        )
+        print(json.dumps(_cloud_verdict_output(report, paths.directory, result), sort_keys=True))
+        return 0 if report["passed"] is True else 1
+    if arguments.command == "cloud-process-drill-verdict":
+        evaluated_at = datetime.now(timezone.utc)
+        snapshot = CloudProcessDrillSnapshot.from_dict(_load_json_object(arguments.snapshot))
+        report = evaluate_cloud_process_drills(
+            snapshot,
+            expected_candidate_hash=arguments.candidate_hash,
+            expected_run_id=arguments.run,
+            expected_experiment_id=arguments.experiment,
+            expected_manifest_hash=arguments.manifest_hash,
+            expected_environment=arguments.environment,
+            evaluated_at=evaluated_at,
+        )
+        paths = write_cloud_process_drill_bundle(report, arguments.output)
+        result = asyncio.run(
+            _publish_cloud_verdict(
+                settings=settings,
+                run_id=arguments.run,
+                experiment_id=arguments.experiment,
+                environment=arguments.environment,
+                candidate_hash=arguments.candidate_hash,
+                artifact_type=ArtifactType.PROCESS_DRILL,
+                report=report,
+                bundle_directory=paths.directory,
+                generated_at=evaluated_at,
+            )
+        )
+        print(json.dumps(_cloud_verdict_output(report, paths.directory, result), sort_keys=True))
+        return 0 if report["passed"] is True else 1
+    if arguments.command == "cloud-soak-verdict":
+        evaluated_at = datetime.now(timezone.utc)
+        snapshot = CloudSoakSnapshot.from_dict(_load_json_object(arguments.snapshot))
+        report = evaluate_cloud_soak_readiness(
+            local_soak=_load_json_object(arguments.local_soak),
+            snapshot=snapshot,
+            expected_candidate_hash=arguments.candidate_hash,
+            expected_run_id=arguments.run,
+            expected_experiment_id=arguments.experiment,
+            expected_manifest_hash=arguments.manifest_hash,
+            expected_environment=arguments.environment,
+            evaluated_at=evaluated_at,
+        )
+        paths = write_cloud_soak_readiness_bundle(report, arguments.output)
+        result = asyncio.run(
+            _publish_cloud_verdict(
+                settings=settings,
+                run_id=arguments.run,
+                experiment_id=arguments.experiment,
+                environment=arguments.environment,
+                candidate_hash=arguments.candidate_hash,
+                artifact_type=ArtifactType.SOAK_VERDICT,
+                report=report,
+                bundle_directory=paths.directory,
+                generated_at=evaluated_at,
+            )
+        )
+        print(json.dumps(_cloud_verdict_output(report, paths.directory, result), sort_keys=True))
+        return 0 if report["passed"] is True else 1
     if arguments.command == "cloud-publish":
         result = asyncio.run(
             publish_configured_cloud_bundle(
@@ -925,6 +1062,60 @@ def _active_local_timed_run(state_path: Path) -> bool:
     if not isinstance(value.get("started_at"), str) or not value["started_at"]:
         raise ValueError("current run state requires a start time")
     return True
+
+
+def _load_json_object(path: Path) -> dict[str, object]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise TypeError(f"cloud evidence input must be a JSON object: {path.name}")
+    return value
+
+
+async def _publish_cloud_verdict(
+    *,
+    settings: Settings,
+    run_id: UUID,
+    experiment_id: UUID,
+    environment: str,
+    candidate_hash: str,
+    artifact_type: ArtifactType,
+    report: Mapping[str, object],
+    bundle_directory: Path,
+    generated_at: datetime,
+) -> CloudOperationResult:
+    if settings.environment != environment:
+        raise ValueError("cloud verdict environment differs from configured environment")
+    if settings.cloud_run_id != run_id:
+        raise ValueError("cloud verdict run differs from configured MAAIS_RUN_ID")
+    runtime = await verify_configured_runtime_identity(settings=settings, run_id=run_id)
+    if runtime.identity.candidate_hash != candidate_hash:
+        raise ValueError("cloud verdict candidate differs from the deployed runtime")
+    report_id = report.get("report_id")
+    if not isinstance(report_id, str):
+        raise ValueError("cloud verdict report is missing its immutable identity")
+    return await publish_configured_cloud_bundle(
+        settings=settings,
+        run_id=run_id,
+        experiment_id=experiment_id,
+        report_date=generated_at.date(),
+        artifact_type=artifact_type,
+        report_id=report_id,
+        bundle_directory=bundle_directory,
+    )
+
+
+def _cloud_verdict_output(
+    report: Mapping[str, object],
+    directory: Path,
+    result: CloudOperationResult,
+) -> dict[str, object]:
+    return {
+        "passed": report.get("passed") is True,
+        "report_id": report.get("report_id"),
+        "directory": str(directory),
+        "publication": result.to_json_data(),
+        "safety": {"paper_trading_only": True, "live_money": False},
+    }
 
 
 async def run_cloud_operations(
