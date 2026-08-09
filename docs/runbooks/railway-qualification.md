@@ -35,6 +35,9 @@ In order:
 2. Run `uv run maais cloud-bootstrap-roles --expected-revision 0022` using the
    one-time admin connection. The command creates principals first, migrates under
    `maais_migrator`, then finalizes runtime grants before removing bootstrap secrets.
+   It emits structured `principals`, `migration`, and `final_grants` stage markers;
+   maintenance lock waits are limited to 10 seconds and every database statement is
+   limited to 120 seconds so a blocked release fails with evidence instead of hanging.
 3. Run `uv run maais cloud-migrate --expected-revision 0022` as `maais_migrator`.
 4. Deploy web, worker, operations, and verifier from the same commit in standby. Only web
    receives a public domain.
