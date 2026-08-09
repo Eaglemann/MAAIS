@@ -27,6 +27,15 @@ class ConfiguredArtifactRuntime:
         await self.engine.dispose()
 
 
+@dataclass(slots=True, repr=False)
+class ConfiguredArtifactReader:
+    engine: AsyncEngine
+    canonical_store: S3ArtifactStore
+
+    async def close(self) -> None:
+        await self.engine.dispose()
+
+
 def build_configured_artifact_runtime(
     settings: Settings,
     *,
@@ -63,6 +72,31 @@ def build_configured_artifact_runtime(
             canonical=canonical,
             uow_factory=uow_factory,
         ),
+    )
+
+
+def build_configured_artifact_reader(
+    settings: Settings,
+    *,
+    client_factory: Callable[..., Any] = boto3.client,
+) -> ConfiguredArtifactReader:
+    artifacts = settings.artifacts
+    if artifacts.mode is not ArtifactStoreMode.CANONICAL_READ:
+        raise ValueError("configured artifact reader requires canonical_read mode")
+    canonical = S3ArtifactStore(
+        client=_s3_client(client_factory, artifacts, canonical=True),
+        bucket=artifacts.canonical_bucket,
+        canonical=True,
+        store_name="worm_canonical",
+    )
+    engine = create_async_engine(
+        settings.database_url_value,
+        pool_pre_ping=True,
+        hide_parameters=True,
+    )
+    return ConfiguredArtifactReader(
+        engine=engine,
+        canonical_store=canonical,
     )
 
 

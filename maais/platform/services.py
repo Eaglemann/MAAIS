@@ -21,7 +21,7 @@ from maais.api.health import (
     UnavailableCloudEndpointReader,
 )
 from maais.artifacts.bundles import BUNDLE_MANIFEST_NAME
-from maais.artifacts.configured import build_configured_artifact_runtime
+from maais.artifacts.configured import build_configured_artifact_reader
 from maais.artifacts.models import ArtifactRecord, ArtifactType, StoredArtifact
 from maais.artifacts.store import ArtifactStore
 from maais.config.cloud import ServiceRole
@@ -399,7 +399,7 @@ async def load_configured_manifest_artifact(
     expected_run_id: UUID,
     expected_candidate: CandidateDescriptor,
 ) -> ExperimentManifest:
-    runtime = build_configured_artifact_runtime(settings)
+    runtime = build_configured_artifact_reader(settings)
     try:
         return await load_verified_manifest_artifact(
             catalog=DatabaseManifestArtifactCatalog(

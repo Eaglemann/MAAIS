@@ -171,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
         "cloud-verifier",
         help="verify the read-only cloud runtime identity for one exact run",
     )
-    cloud_verifier.add_argument("--run-id", type=UUID, required=True)
+    cloud_verifier.add_argument("--run-id", type=UUID)
     cloud_identity = commands.add_parser(
         "cloud-identity",
         help="verify and register the current secret-free Railway runtime identity",
@@ -500,7 +500,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "cloud-verifier":
         try:
-            evidence = asyncio.run(run_cloud_verifier_service(settings, run_id=arguments.run_id))
+            run_id = arguments.run_id or settings.cloud_run_id
+            if run_id is None:
+                raise ValueError("cloud verifier requires MAAIS_RUN_ID")
+            if settings.cloud_run_id is not None and settings.cloud_run_id != run_id:
+                raise ValueError("cloud verifier run ID differs from MAAIS_RUN_ID")
+            evidence = asyncio.run(run_cloud_verifier_service(settings, run_id=run_id))
         except Exception as exc:
             return _cloud_terminal_failure("cloud_verifier", exc)
         print(json.dumps(evidence.to_json_data(), sort_keys=True))

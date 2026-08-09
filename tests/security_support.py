@@ -35,11 +35,10 @@ def railway_observability_values(service_role: ServiceRole) -> dict[str, object]
         "sentry_backend_dsn": (
             "https://backend-public-key@o0.ingest.sentry.io/123"  # pragma: allowlist secret
         ),
-    }
-    if service_role is ServiceRole.WEB:
-        values["sentry_browser_dsn"] = (
+        "sentry_browser_dsn": (
             "https://browser-public-key@o0.ingest.sentry.io/456"  # pragma: allowlist secret
-        )
+        ),
+    }
     if service_role is ServiceRole.OPERATIONS:
         values.update(
             {

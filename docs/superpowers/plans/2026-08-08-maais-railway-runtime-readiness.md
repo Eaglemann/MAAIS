@@ -205,13 +205,21 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
 - Create: `railway/migrator.toml`
 - Create: `railway/verifier.toml`
 - Create: `docs/runbooks/railway-variables.md`
+- Modify: `maais/artifacts/configured.py`
+- Modify: `maais/cli.py`
+- Modify: `maais/config/artifacts.py`
+- Modify: `maais/config/observability.py`
+- Modify: `maais/config/security.py`
+- Modify: `maais/config/settings.py`
+- Modify: `maais/platform/services.py`
 - Test: `tests/unit/platform/test_railway_configs.py`
+- Test: role-scoped configuration, artifact-reader, runtime-identity, and service-entrypoint tests
 
 **Consumes:** Role entrypoints and Railway Docker build.
 
 **Produces:** Explicit build/start/health/restart settings per role and a secret-safe variable contract.
 
-- [ ] Write TOML parser tests proving all app roles use the same Dockerfile, explicit start command, one replica, expected health path only for web, restart policy `NEVER`, and no command runs Alembic except migrator.
+- [x] Write TOML parser tests proving all app roles use the same Dockerfile, explicit start command, one replica, expected health path only for web, restart policy `NEVER`, and no command runs Alembic except migrator.
 
   ```python
   EXPECTED_START_COMMANDS = {
@@ -223,19 +231,22 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
   }
   ```
 
-- [ ] Run tests and confirm config files are absent.
+- [x] Run tests and confirm config files are absent.
 
   ```bash
   uv run pytest -q tests/unit/platform/test_railway_configs.py
   ```
 
-- [ ] Create configs using Railway's current config-as-code schema, `builder = "DOCKERFILE"`, `/healthz/ready` for web, bounded health timeout, overlap-disabled deploys, and `restartPolicyType = "NEVER"`.
+- [x] Create configs using Railway's current config-as-code schema, `builder = "DOCKERFILE"`, `/healthz/ready` for web, bounded health timeout, overlap-disabled deploys, and `restartPolicyType = "NEVER"`.
 
-- [ ] Document exact variable names grouped by shared, web, worker, operations, migrator, verifier, replica store, canonical store, backend Sentry, and public browser Sentry. Mark each as public metadata or secret and name the role(s) allowed to receive it. Direct the operator to run the interactive password-hash/secret generators personally and paste results directly into sealed provider fields; never ask the operator to paste them into chat.
+  All five files validate against the fetched Railway schema with SHA-256
+  `38d35a7de8d6fa511895abbcf9a2cac49a12494fd6a9cd2d4228a5b2a8af5e5f`.
 
-- [ ] Explicitly state that exchange variables are absent, the Sentry upload token belongs only in GitHub Actions, the operator password itself is never stored, and secrets must be entered directly in provider consoles.
+- [x] Document exact variable names grouped by shared, web, worker, operations, migrator, verifier, replica store, canonical store, backend Sentry, and public browser Sentry. Mark each as public metadata or secret and name the role(s) allowed to receive it. Direct the operator to run the interactive password-hash/secret generators personally and paste results directly into sealed provider fields; never ask the operator to paste them into chat.
 
-- [ ] Re-run TOML tests and secret scan.
+- [x] Explicitly state that exchange variables are absent, the Sentry upload token belongs only in GitHub Actions, the operator password itself is never stored, and secrets must be entered directly in provider consoles.
+
+- [x] Re-run TOML tests and secret scan.
 
   ```bash
   uv run pytest -q tests/unit/platform/test_railway_configs.py
@@ -243,6 +254,10 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
   ```
 
   Expected: all configs parse and no credential is committed.
+
+  Verified with 13 Railway contract tests, role/configuration regression tests, and a
+  baseline-aware secret hook over every changed or new file. The final full
+  isolated-database suite passed with 1,424 tests and one expected skip.
 
 - [ ] Commit.
 

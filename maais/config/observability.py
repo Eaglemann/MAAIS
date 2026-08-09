@@ -78,11 +78,10 @@ class ObservabilitySettings(BaseModel):
         if not backend_dsn:
             raise ValueError("Railway observability requires a backend Sentry DSN")
 
-        if self.service_role is ServiceRole.WEB:
-            if not self.browser_dsn:
-                raise ValueError("Railway web role requires the public browser Sentry DSN")
-        elif self.browser_dsn:
-            raise ValueError("only the web role may receive the public browser Sentry DSN")
+        if not self.browser_dsn:
+            raise ValueError(
+                "Railway images require the public browser Sentry DSN as shared build metadata"
+            )
 
         if self.service_role is ServiceRole.OPERATIONS:
             if not all(cron_slugs):

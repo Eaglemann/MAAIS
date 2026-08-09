@@ -52,38 +52,67 @@ def _settings(
         ServiceRole.OPERATIONS: "maais_ops",
         ServiceRole.VERIFIER: "maais_verifier",
     }
-    return Settings(
-        **railway_security_values(),
+    values: dict[str, object] = {
         **railway_observability_values(service_role),
-        deployment_target=DeploymentTarget.RAILWAY,
-        run_mode="paper_live",
-        environment="qualification",
-        service_role=service_role,
-        railway_project_id="project-1",
-        railway_environment_id="environment-1",
-        railway_service_id=service_id,
-        railway_deployment_id="deployment-1",
-        railway_snapshot_id="snapshot-1",
-        railway_replica_id=f"replica-{service_role.value}",
-        railway_region=EU_WEST_RAILWAY_REGION,
-        expected_railway_region=EU_WEST_RAILWAY_REGION,
-        railway_git_commit_sha=_descriptor().git_sha,
-        candidate_descriptor_path=candidate_path,
-        expected_schema_revision="0022",
-        database_role_name=database_roles[service_role],
-        artifact_store_mode="dual_s3",
-        artifact_replica_endpoint_url="https://storage.railway.example",
-        artifact_replica_region="auto",
-        artifact_replica_bucket="maais-replica",
-        artifact_replica_access_key="replica-access",  # pragma: allowlist secret
-        artifact_replica_secret_key="replica-secret",  # pragma: allowlist secret
-        artifact_canonical_endpoint_url="https://s3.worm-provider.example",
-        artifact_canonical_region="eu-central-1",
-        artifact_canonical_bucket="maais-canonical",
-        artifact_canonical_access_key="canonical-access",  # pragma: allowlist secret
-        artifact_canonical_secret_key="canonical-secret",  # pragma: allowlist secret
-        _env_file=None,
-    )
+        "deployment_target": DeploymentTarget.RAILWAY,
+        "run_mode": "paper_live",
+        "environment": "qualification",
+        "service_role": service_role,
+        "railway_project_id": "project-1",
+        "railway_environment_id": "environment-1",
+        "railway_service_id": service_id,
+        "railway_deployment_id": "deployment-1",
+        "railway_snapshot_id": "snapshot-1",
+        "railway_replica_id": f"replica-{service_role.value}",
+        "railway_region": EU_WEST_RAILWAY_REGION,
+        "expected_railway_region": EU_WEST_RAILWAY_REGION,
+        "railway_git_commit_sha": _descriptor().git_sha,
+        "candidate_descriptor_path": candidate_path,
+        "expected_schema_revision": "0022",
+        "database_role_name": database_roles[service_role],
+        "_env_file": None,
+    }
+    if service_role is ServiceRole.WEB:
+        values.update(railway_security_values())
+    if service_role in {ServiceRole.WORKER, ServiceRole.OPERATIONS, ServiceRole.VERIFIER}:
+        values["cloud_run_id"] = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    if service_role is ServiceRole.WORKER:
+        values.update(
+            {
+                "manifest_artifact_id": UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+                "artifact_store_mode": "canonical_read",
+                "artifact_canonical_endpoint_url": "https://s3.worm-provider.example",
+                "artifact_canonical_region": "eu-central-1",
+                "artifact_canonical_bucket": "maais-canonical",
+                "artifact_canonical_access_key": (
+                    "canonical-read-access"  # pragma: allowlist secret
+                ),
+                "artifact_canonical_secret_key": (
+                    "canonical-read-secret"  # pragma: allowlist secret
+                ),
+            }
+        )
+    if service_role is ServiceRole.OPERATIONS:
+        values.update(
+            {
+                "artifact_store_mode": "dual_s3",
+                "artifact_replica_endpoint_url": "https://storage.railway.example",
+                "artifact_replica_region": "auto",
+                "artifact_replica_bucket": "maais-replica",
+                "artifact_replica_access_key": "replica-access",  # pragma: allowlist secret
+                "artifact_replica_secret_key": "replica-secret",  # pragma: allowlist secret
+                "artifact_canonical_endpoint_url": "https://s3.worm-provider.example",
+                "artifact_canonical_region": "eu-central-1",
+                "artifact_canonical_bucket": "maais-canonical",
+                "artifact_canonical_access_key": (
+                    "canonical-write-access"  # pragma: allowlist secret
+                ),
+                "artifact_canonical_secret_key": (
+                    "canonical-write-secret"  # pragma: allowlist secret
+                ),
+            }
+        )
+    return Settings(**values)
 
 
 async def test_runtime_registration_uses_real_database_identity_and_freezes_boot(

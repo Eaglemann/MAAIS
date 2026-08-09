@@ -1,4 +1,5 @@
 import json
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -13,7 +14,7 @@ from maais.config.artifacts import (
 )
 from maais.config.cloud import EU_WEST_RAILWAY_REGION, DeploymentTarget, ServiceRole
 from maais.config.settings import Settings
-from tests.security_support import railway_observability_values, railway_security_values
+from tests.security_support import railway_observability_values
 
 
 def _dual_store_values(**overrides: object) -> dict[str, object]:
@@ -34,9 +35,21 @@ def _dual_store_values(**overrides: object) -> dict[str, object]:
     return values
 
 
+def _canonical_read_values(**overrides: object) -> dict[str, object]:
+    values = {
+        "mode": ArtifactStoreMode.CANONICAL_READ,
+        "canonical_endpoint_url": "https://s3.worm-provider.example",
+        "canonical_region": "eu-central-1",
+        "canonical_bucket": "maais-canonical",
+        "canonical_access_key": "canonical-read-access",  # pragma: allowlist secret
+        "canonical_secret_key": "canonical-read-secret",  # pragma: allowlist secret
+    }
+    values.update(overrides)
+    return values
+
+
 def _railway_values(**overrides: object) -> dict[str, object]:
     values: dict[str, object] = {
-        **railway_security_values(),
         **railway_observability_values(ServiceRole.WORKER),
         "deployment_target": DeploymentTarget.RAILWAY,
         "run_mode": "paper_live",
@@ -52,6 +65,8 @@ def _railway_values(**overrides: object) -> dict[str, object]:
         "railway_git_commit_sha": "a" * 40,
         "expected_schema_revision": "0022",
         "database_role_name": "maais_worker",
+        "cloud_run_id": UUID("11111111-1111-4111-8111-111111111111"),
+        "manifest_artifact_id": UUID("22222222-2222-4222-8222-222222222222"),
         "_env_file": None,
     }
     values.update(overrides)
@@ -74,6 +89,20 @@ def test_dual_store_accepts_two_complete_independent_targets() -> None:
     assert artifacts.replica_configured is True
     assert artifacts.canonical_configured is True
     assert artifacts.canonical_object_lock_required is True
+
+
+def test_canonical_read_mode_forbids_replica_credentials() -> None:
+    artifacts = ArtifactSettings(**_canonical_read_values())
+
+    assert artifacts.mode is ArtifactStoreMode.CANONICAL_READ
+    assert artifacts.replica_configured is False
+    assert artifacts.canonical_configured is True
+    with pytest.raises(ValidationError, match="forbids replica"):
+        ArtifactSettings(
+            **_canonical_read_values(
+                replica_endpoint_url="https://storage.railway.example",
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -177,21 +206,21 @@ def test_artifact_credentials_never_serialize_or_appear_in_diagnostics() -> None
             assert canary not in representation
 
 
-def test_railway_runtime_requires_dual_store_configuration() -> None:
-    with pytest.raises(ValidationError, match="dual_s3"):
+def test_railway_worker_requires_canonical_read_configuration() -> None:
+    with pytest.raises(ValidationError, match="canonical_read"):
         Settings(**_railway_values())
 
     settings = Settings(
         **_railway_values(
-            artifact_store_mode=ArtifactStoreMode.DUAL_S3,
+            artifact_store_mode=ArtifactStoreMode.CANONICAL_READ,
             **{
                 f"artifact_{name}": value
-                for name, value in _dual_store_values().items()
+                for name, value in _canonical_read_values().items()
                 if name != "mode"
             },
         )
     )
-    assert settings.artifacts.mode is ArtifactStoreMode.DUAL_S3
+    assert settings.artifacts.mode is ArtifactStoreMode.CANONICAL_READ
 
 
 def test_artifact_environment_names_populate_settings(

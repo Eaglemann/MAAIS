@@ -88,11 +88,13 @@ def test_cloud_runtime_commands_are_explicit_and_accept_no_arbitrary_manifest_pa
     assert parser.parse_args(["cloud-web"]).command == "cloud-web"
     assert parser.parse_args(["cloud-worker"]).command == "cloud-worker"
     assert parser.parse_args(["cloud-operations"]).command == "cloud-operations"
+    configured_verifier = parser.parse_args(["cloud-verifier"])
     verifier = parser.parse_args(["cloud-verifier", "--run-id", str(RUN_ID)])
     migration = parser.parse_args(
         ["cloud-migrate", "--expected-revision", "0022", "--repository", "."]
     )
 
+    assert configured_verifier.run_id is None
     assert verifier.run_id == RUN_ID
     assert migration.expected_revision == "0022"
     for command in ("cloud-web", "cloud-worker", "cloud-operations"):
@@ -158,6 +160,66 @@ def test_clean_cloud_command_flushes_sentry_before_reporting_success(
 
     assert main(("cloud-web",)) == 0
     assert runtime.flushes == [5.0]
+
+
+def test_cloud_verifier_uses_the_frozen_settings_run_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[UUID] = []
+
+    class Evidence:
+        @staticmethod
+        def to_json_data() -> dict[str, bool]:
+            return {"verified": True}
+
+    async def verify(_settings: Settings, *, run_id: UUID) -> Evidence:
+        observed.append(run_id)
+        return Evidence()
+
+    monkeypatch.setattr(
+        "maais.cli.get_settings",
+        lambda: Settings(cloud_run_id=RUN_ID, _env_file=None),
+    )
+    monkeypatch.setattr("maais.cli.run_cloud_verifier_service", verify)
+
+    assert main(("cloud-verifier",)) == 0
+    assert observed == [RUN_ID]
+
+
+def test_cloud_verifier_fails_closed_without_a_frozen_run_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def verify(*_args: object, **_values: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("maais.cli.get_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr("maais.cli.run_cloud_verifier_service", verify)
+
+    assert main(("cloud-verifier",)) == 1
+    assert called is False
+
+
+def test_cloud_verifier_rejects_a_run_id_that_differs_from_frozen_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+    different_run_id = UUID("99999999-9999-4999-8999-999999999999")
+
+    async def verify(*_args: object, **_values: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "maais.cli.get_settings",
+        lambda: Settings(cloud_run_id=RUN_ID, _env_file=None),
+    )
+    monkeypatch.setattr("maais.cli.run_cloud_verifier_service", verify)
+
+    assert main(("cloud-verifier", "--run-id", str(different_run_id))) == 1
+    assert called is False
 
 
 @pytest.mark.asyncio
@@ -514,7 +576,10 @@ async def test_cloud_worker_refuses_missing_catalog_identity_before_any_runtime_
 
     with pytest.raises(ValueError, match="MAAIS_MANIFEST_ARTIFACT_ID"):
         await run_cloud_worker_service(
-            _railway_settings(cloud_run_id=RUN_ID),
+            _railway_settings(
+                cloud_run_id=RUN_ID,
+                manifest_artifact_id=None,
+            ),
             lifecycle_factory=lifecycle_factory,
         )
 

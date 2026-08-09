@@ -8,10 +8,6 @@ from maais.config.cloud import EU_WEST_RAILWAY_REGION, DeploymentTarget, Service
 from maais.config.modes import RunMode
 from maais.config.settings import Settings
 from tests.security_support import (
-    TEST_CSRF_PEPPER,
-    TEST_MONITOR_TOKEN,
-    TEST_SESSION_PEPPER,
-    operator_password_hash_for_tests,
     railway_observability_values,
     railway_security_values,
 )
@@ -19,7 +15,6 @@ from tests.security_support import (
 
 def _railway_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
-        **railway_security_values(),
         "deployment_target": DeploymentTarget.RAILWAY,
         "run_mode": RunMode.PAPER_LIVE,
         "environment": "qualification",
@@ -34,21 +29,47 @@ def _railway_settings(**overrides: object) -> Settings:
         "railway_git_commit_sha": "a" * 40,
         "expected_schema_revision": "0022",
         "database_role_name": "maais_worker",
-        "artifact_store_mode": "dual_s3",
-        "artifact_replica_endpoint_url": "https://storage.railway.example",
-        "artifact_replica_region": "auto",
-        "artifact_replica_bucket": "maais-replica",
-        "artifact_replica_access_key": "replica-access",  # pragma: allowlist secret
-        "artifact_replica_secret_key": "replica-secret",  # pragma: allowlist secret
-        "artifact_canonical_endpoint_url": "https://s3.worm-provider.example",
-        "artifact_canonical_region": "eu-central-1",
-        "artifact_canonical_bucket": "maais-canonical",
-        "artifact_canonical_access_key": "canonical-access",  # pragma: allowlist secret
-        "artifact_canonical_secret_key": "canonical-secret",  # pragma: allowlist secret
         "_env_file": None,
     }
     values.update(overrides)
     service_role = ServiceRole(values["service_role"])
+    if service_role is ServiceRole.WEB:
+        for name, value in railway_security_values().items():
+            values.setdefault(name, value)
+    if service_role is ServiceRole.WORKER:
+        artifact_values = {
+            "artifact_store_mode": "canonical_read",
+            "artifact_canonical_endpoint_url": "https://s3.worm-provider.example",
+            "artifact_canonical_region": "eu-central-1",
+            "artifact_canonical_bucket": "maais-canonical",
+            "artifact_canonical_access_key": "canonical-read-access",  # pragma: allowlist secret
+            "artifact_canonical_secret_key": "canonical-read-secret",  # pragma: allowlist secret
+        }
+        for name, value in artifact_values.items():
+            values.setdefault(name, value)
+    if service_role is ServiceRole.OPERATIONS:
+        artifact_values = {
+            "artifact_store_mode": "dual_s3",
+            "artifact_replica_endpoint_url": "https://storage.railway.example",
+            "artifact_replica_region": "auto",
+            "artifact_replica_bucket": "maais-replica",
+            "artifact_replica_access_key": "replica-access",  # pragma: allowlist secret
+            "artifact_replica_secret_key": "replica-secret",  # pragma: allowlist secret
+            "artifact_canonical_endpoint_url": "https://s3.worm-provider.example",
+            "artifact_canonical_region": "eu-central-1",
+            "artifact_canonical_bucket": "maais-canonical",
+            "artifact_canonical_access_key": "canonical-access",  # pragma: allowlist secret
+            "artifact_canonical_secret_key": "canonical-secret",  # pragma: allowlist secret
+        }
+        for name, value in artifact_values.items():
+            values.setdefault(name, value)
+    if service_role in {ServiceRole.WORKER, ServiceRole.OPERATIONS, ServiceRole.VERIFIER}:
+        values.setdefault("cloud_run_id", UUID("11111111-1111-4111-8111-111111111111"))
+    if service_role is ServiceRole.WORKER:
+        values.setdefault(
+            "manifest_artifact_id",
+            UUID("22222222-2222-4222-8222-222222222222"),
+        )
     for name, value in railway_observability_values(service_role).items():
         values.setdefault(name, value)
     return Settings(**values)
@@ -123,6 +144,34 @@ def test_railway_service_role_requires_its_purpose_bound_database_role(
         )
 
 
+def test_railway_non_web_roles_reject_operator_authentication_secrets() -> None:
+    with pytest.raises(ValidationError, match="only the web role"):
+        _railway_settings(
+            service_role=ServiceRole.WORKER,
+            database_role_name="maais_worker",
+            **railway_security_values(),
+        )
+
+
+def test_railway_roles_without_artifact_authority_reject_store_credentials() -> None:
+    with pytest.raises(ValidationError, match="artifact authority"):
+        _railway_settings(
+            service_role=ServiceRole.VERIFIER,
+            database_role_name="maais_verifier",
+            artifact_store_mode="dual_s3",
+            artifact_replica_endpoint_url="https://storage.railway.example",
+            artifact_replica_region="auto",
+            artifact_replica_bucket="maais-replica",
+            artifact_replica_access_key="replica-access",  # pragma: allowlist secret
+            artifact_replica_secret_key="replica-secret",  # pragma: allowlist secret
+            artifact_canonical_endpoint_url="https://s3.worm-provider.example",
+            artifact_canonical_region="eu-central-1",
+            artifact_canonical_bucket="maais-canonical",
+            artifact_canonical_access_key="canonical-access",  # pragma: allowlist secret
+            artifact_canonical_secret_key="canonical-secret",  # pragma: allowlist secret
+        )
+
+
 def test_railway_application_runtime_requires_paper_live_mode() -> None:
     with pytest.raises(ValidationError, match="paper_live"):
         _railway_settings(run_mode=RunMode.REPLAY)
@@ -159,6 +208,21 @@ def test_railway_candidate_descriptor_path_must_be_absolute() -> None:
 def test_railway_runtime_rejects_nil_catalog_identifiers(field: str) -> None:
     with pytest.raises(ValidationError, match="non-nil UUID"):
         _railway_settings(**{field: UUID(int=0)})
+
+
+def test_railway_catalog_identifiers_are_role_scoped() -> None:
+    with pytest.raises(ValidationError, match="web and migrator roles forbid run identity"):
+        _railway_settings(
+            service_role=ServiceRole.WEB,
+            database_role_name="maais_web",
+            cloud_run_id=UUID("11111111-1111-4111-8111-111111111111"),
+        )
+    with pytest.raises(ValidationError, match="only the worker role"):
+        _railway_settings(
+            service_role=ServiceRole.OPERATIONS,
+            database_role_name="maais_ops",
+            manifest_artifact_id=UUID("22222222-2222-4222-8222-222222222222"),
+        )
 
 
 def test_redacted_summary_is_an_explicit_non_secret_allowlist() -> None:
@@ -304,24 +368,15 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
             "https://backend-public-key@o0.ingest.sentry.io/123"  # pragma: allowlist secret
         ),
         "MAAIS_CANDIDATE_DESCRIPTOR_PATH": "/app/candidate.json",
-        "MAAIS_AUTH_MODE": "operator_session",
-        "MAAIS_OPERATOR_PASSWORD_HASH": operator_password_hash_for_tests(),
-        "MAAIS_SESSION_PEPPER": TEST_SESSION_PEPPER,
-        "MAAIS_CSRF_PEPPER": TEST_CSRF_PEPPER,
-        "MAAIS_MONITOR_TOKEN": TEST_MONITOR_TOKEN,
-        "MAAIS_OPERATOR_SECURE_COOKIES": "true",
-        "MAAIS_OPERATOR_PUBLIC_ORIGIN": "https://mission-control.test",
-        "MAAIS_ARTIFACT_STORE_MODE": "dual_s3",
-        "MAAIS_ARTIFACT_REPLICA_ENDPOINT_URL": "https://storage.railway.example",
-        "MAAIS_ARTIFACT_REPLICA_REGION": "auto",
-        "MAAIS_ARTIFACT_REPLICA_BUCKET": "maais-replica",
-        "MAAIS_ARTIFACT_REPLICA_ACCESS_KEY": "replica-access",  # pragma: allowlist secret
-        "MAAIS_ARTIFACT_REPLICA_SECRET_KEY": "replica-secret",  # pragma: allowlist secret
+        "VITE_SENTRY_DSN": (
+            "https://browser-public-key@o0.ingest.sentry.io/456"  # pragma: allowlist secret
+        ),
+        "MAAIS_ARTIFACT_STORE_MODE": "canonical_read",
         "MAAIS_ARTIFACT_CANONICAL_ENDPOINT_URL": "https://s3.worm-provider.example",
         "MAAIS_ARTIFACT_CANONICAL_REGION": "eu-central-1",
         "MAAIS_ARTIFACT_CANONICAL_BUCKET": "maais-canonical",
-        "MAAIS_ARTIFACT_CANONICAL_ACCESS_KEY": "canonical-access",  # pragma: allowlist secret
-        "MAAIS_ARTIFACT_CANONICAL_SECRET_KEY": "canonical-secret",  # pragma: allowlist secret
+        "MAAIS_ARTIFACT_CANONICAL_ACCESS_KEY": "canonical-read-access",  # pragma: allowlist secret
+        "MAAIS_ARTIFACT_CANONICAL_SECRET_KEY": "canonical-read-secret",  # pragma: allowlist secret
     }
     for name, value in environment.items():
         monkeypatch.setenv(name, value)

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from maais.artifacts.configured import build_configured_artifact_runtime
+from maais.artifacts.configured import (
+    build_configured_artifact_reader,
+    build_configured_artifact_runtime,
+)
 from maais.config.artifacts import ArtifactStoreMode
 from maais.config.settings import Settings
 
@@ -49,3 +52,34 @@ async def test_configured_artifact_runtime_builds_two_distinct_secret_safe_clien
             assert canary not in rendered
     finally:
         await runtime.close()
+
+
+async def test_configured_artifact_reader_builds_only_the_canonical_client() -> None:
+    calls: list[dict[str, Any]] = []
+
+    def client_factory(_service: str, **kwargs: Any) -> object:
+        calls.append(kwargs)
+        return object()
+
+    settings = Settings(
+        _env_file=None,
+        database_url=(
+            "postgresql+psycopg://maais:"
+            "local-password@localhost:5432/maais"  # pragma: allowlist secret
+        ),
+        artifact_store_mode=ArtifactStoreMode.CANONICAL_READ,
+        artifact_canonical_endpoint_url="https://s3.worm-provider.example",
+        artifact_canonical_region="eu-central-1",
+        artifact_canonical_bucket="maais-canonical",
+        artifact_canonical_access_key="canonical-read-access",  # pragma: allowlist secret
+        artifact_canonical_secret_key="canonical-read-secret",  # pragma: allowlist secret
+    )
+
+    reader = build_configured_artifact_reader(settings, client_factory=client_factory)
+    try:
+        assert len(calls) == 1
+        assert calls[0]["endpoint_url"] == "https://s3.worm-provider.example"
+        assert reader.canonical_store is not None
+        assert "canonical-read-secret" not in repr(reader)
+    finally:
+        await reader.close()

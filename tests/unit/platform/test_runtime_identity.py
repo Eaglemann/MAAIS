@@ -19,7 +19,7 @@ from maais.platform.runtime import (
     build_runtime_identity_evidence,
     process_boot_identity,
 )
-from tests.security_support import railway_observability_values, railway_security_values
+from tests.security_support import railway_observability_values
 from tests.unit.platform.test_registry_domain import _descriptor
 
 NOW = datetime(2026, 8, 8, 12, tzinfo=timezone.utc)
@@ -31,7 +31,6 @@ def _settings(tmp_path: Path, descriptor: CandidateDescriptor, **overrides: obje
     candidate_path = tmp_path / "candidate.json"
     candidate_path.write_text(json.dumps(descriptor.to_json_data()), encoding="utf-8")
     values: dict[str, object] = {
-        **railway_security_values(),
         **railway_observability_values(ServiceRole.WORKER),
         "deployment_target": DeploymentTarget.RAILWAY,
         "run_mode": "paper_live",
@@ -49,17 +48,14 @@ def _settings(tmp_path: Path, descriptor: CandidateDescriptor, **overrides: obje
         "candidate_descriptor_path": candidate_path,
         "expected_schema_revision": descriptor.schema_revision,
         "database_role_name": "maais_worker",
-        "artifact_store_mode": "dual_s3",
-        "artifact_replica_endpoint_url": "https://storage.railway.example",
-        "artifact_replica_region": "auto",
-        "artifact_replica_bucket": "maais-replica",
-        "artifact_replica_access_key": "replica-access",  # pragma: allowlist secret
-        "artifact_replica_secret_key": "replica-secret",  # pragma: allowlist secret
+        "cloud_run_id": UUID("11111111-1111-4111-8111-111111111111"),
+        "manifest_artifact_id": UUID("22222222-2222-4222-8222-222222222222"),
+        "artifact_store_mode": "canonical_read",
         "artifact_canonical_endpoint_url": "https://s3.worm-provider.example",
         "artifact_canonical_region": "eu-central-1",
         "artifact_canonical_bucket": "maais-canonical",
-        "artifact_canonical_access_key": "canonical-access",  # pragma: allowlist secret
-        "artifact_canonical_secret_key": "canonical-secret",  # pragma: allowlist secret
+        "artifact_canonical_access_key": "canonical-read-access",  # pragma: allowlist secret
+        "artifact_canonical_secret_key": "canonical-read-secret",  # pragma: allowlist secret
         "_env_file": None,
     }
     values.update(overrides)

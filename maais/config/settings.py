@@ -341,16 +341,34 @@ class Settings(BaseSettings):
         if self.manifest_artifact_id is not None and self.manifest_artifact_id.int == 0:
             raise ValueError("Railway manifest artifact identifier must be a non-nil UUID")
         assert self.service_role is not None
+        if self.service_role is ServiceRole.WORKER:
+            if self.cloud_run_id is None or self.manifest_artifact_id is None:
+                raise ValueError(
+                    "Railway worker requires MAAIS_RUN_ID and MAAIS_MANIFEST_ARTIFACT_ID"
+                )
+        elif self.service_role in {ServiceRole.OPERATIONS, ServiceRole.VERIFIER}:
+            if self.cloud_run_id is None:
+                raise ValueError("Railway operations and verifier roles require MAAIS_RUN_ID")
+            if self.manifest_artifact_id is not None:
+                raise ValueError("only the worker role may receive MAAIS_MANIFEST_ARTIFACT_ID")
+        elif self.cloud_run_id is not None or self.manifest_artifact_id is not None:
+            raise ValueError("Railway web and migrator roles forbid run identity variables")
         expected_role = DATABASE_ROLE_BY_SERVICE[self.service_role]
         if self.database_role_name != expected_role:
             raise ValueError(
                 "Railway service database role mismatch: "
                 f"service_role={self.service_role.value} expected={expected_role}"
             )
-        if self.artifacts.mode is not ArtifactStoreMode.DUAL_S3:
-            raise ValueError("Railway runtime requires MAAIS_ARTIFACT_STORE_MODE=dual_s3")
-        if self.security.auth_mode is not AuthMode.OPERATOR_SESSION:
-            raise ValueError("Railway runtime requires MAAIS_AUTH_MODE=operator_session")
+        artifacts = self.artifacts
+        if self.service_role is ServiceRole.WORKER:
+            if artifacts.mode is not ArtifactStoreMode.CANONICAL_READ:
+                raise ValueError("Railway worker requires MAAIS_ARTIFACT_STORE_MODE=canonical_read")
+        elif self.service_role is ServiceRole.OPERATIONS:
+            if artifacts.mode is not ArtifactStoreMode.DUAL_S3:
+                raise ValueError("Railway operations requires MAAIS_ARTIFACT_STORE_MODE=dual_s3")
+        elif artifacts.mode is not ArtifactStoreMode.FILESYSTEM:
+            raise ValueError("Railway service role does not have artifact authority")
+        _ = self.security
         _ = self.observability
         return self
 
@@ -429,6 +447,7 @@ class Settings(BaseSettings):
     def security(self) -> SecuritySettings:
         return SecuritySettings(
             deployment_target=self.deployment_target,
+            service_role=self.service_role,
             auth_mode=self.auth_mode,
             operator_password_hash=self.operator_password_hash,
             session_pepper=self.session_pepper,

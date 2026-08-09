@@ -25,7 +25,7 @@ def _railway_values(
         "release": RELEASE,
         "log_format": LogFormat.JSON,
         "backend_dsn": SecretStr(BACKEND_DSN),
-        "browser_dsn": BROWSER_DSN if service_role is ServiceRole.WEB else "",
+        "browser_dsn": BROWSER_DSN,
         "daily_close_monitor_slug": (
             "maais-qualification-daily-close" if service_role is ServiceRole.OPERATIONS else ""
         ),
@@ -74,8 +74,9 @@ def test_railway_requires_json_exact_release_environment_and_backend_dsn(
         ObservabilitySettings(**_railway_values(**{field: value}))
 
 
-def test_only_web_may_receive_the_public_browser_dsn() -> None:
+def test_public_browser_dsn_is_shared_build_metadata_for_identical_images() -> None:
     web = ObservabilitySettings(**_railway_values(ServiceRole.WEB))
+    worker = ObservabilitySettings(**_railway_values(ServiceRole.WORKER))
 
     assert web.browser_public_config() == {
         "dsn": BROWSER_DSN,
@@ -83,11 +84,10 @@ def test_only_web_may_receive_the_public_browser_dsn() -> None:
         "release": RELEASE,
         "traces_sample_rate": 0.0,
     }
+    assert worker.browser_public_config() == web.browser_public_config()
 
-    with pytest.raises(ValidationError, match="web role requires"):
+    with pytest.raises(ValidationError, match="public browser Sentry DSN"):
         ObservabilitySettings(**_railway_values(ServiceRole.WEB, browser_dsn=""))
-    with pytest.raises(ValidationError, match="only the web role"):
-        ObservabilitySettings(**_railway_values(ServiceRole.WORKER, browser_dsn=BROWSER_DSN))
 
 
 def test_only_operations_may_receive_distinct_cron_monitor_slugs() -> None:

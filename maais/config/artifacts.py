@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 
 class ArtifactStoreMode(StrEnum):
     FILESYSTEM = "filesystem"
+    CANONICAL_READ = "canonical_read"
     DUAL_S3 = "dual_s3"
 
 
@@ -158,12 +159,20 @@ class ArtifactSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_storage_topology(self) -> Self:
-        configured_values = self._target_values()
+        replica_values = self._replica_values()
+        canonical_values = self._canonical_values()
+        configured_values = (*replica_values, *canonical_values)
         any_configured = any(configured_values)
         all_configured = all(configured_values)
         if self.mode is ArtifactStoreMode.FILESYSTEM:
             if any_configured:
                 raise ValueError("filesystem artifact mode forbids inactive cloud target settings")
+            return self
+        if self.mode is ArtifactStoreMode.CANONICAL_READ:
+            if any(replica_values):
+                raise ValueError("canonical_read artifact mode forbids replica settings")
+            if not all(canonical_values):
+                raise ValueError("canonical_read requires a complete canonical target")
             return self
         if not all_configured:
             raise ValueError("dual_s3 requires complete replica and canonical targets")
@@ -180,12 +189,19 @@ class ArtifactSettings(BaseModel):
         return self
 
     def _target_values(self) -> tuple[str, ...]:
+        return (*self._replica_values(), *self._canonical_values())
+
+    def _replica_values(self) -> tuple[str, ...]:
         return (
             self.replica_endpoint_url,
             self.replica_region,
             self.replica_bucket,
             self.replica_access_key_value,
             self.replica_secret_key_value,
+        )
+
+    def _canonical_values(self) -> tuple[str, ...]:
+        return (
             self.canonical_endpoint_url,
             self.canonical_region,
             self.canonical_bucket,
@@ -219,11 +235,11 @@ class ArtifactSettings(BaseModel):
 
     @property
     def replica_configured(self) -> bool:
-        return all(self._target_values()[:5])
+        return all(self._replica_values())
 
     @property
     def canonical_configured(self) -> bool:
-        return all(self._target_values()[5:])
+        return all(self._canonical_values())
 
     def redacted_summary(self) -> dict[str, str | bool | int]:
         return {

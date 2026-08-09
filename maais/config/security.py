@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
-from maais.config.cloud import DeploymentTarget
+from maais.config.cloud import DeploymentTarget, ServiceRole
 from maais.security.passwords import validate_operator_password_hash
 
 
@@ -23,6 +23,7 @@ class SecuritySettings(BaseModel):
     )
 
     deployment_target: DeploymentTarget = DeploymentTarget.LOCAL
+    service_role: ServiceRole | None = None
     auth_mode: AuthMode = AuthMode.LOCAL_TOKEN
     operator_password_hash: SecretStr = Field(
         default_factory=lambda: SecretStr(""),
@@ -59,10 +60,15 @@ class SecuritySettings(BaseModel):
         csrf_pepper = self.csrf_pepper.get_secret_value()
         monitor_token = self.monitor_token.get_secret_value()
         secrets = (session_pepper, csrf_pepper, monitor_token)
-        if self.deployment_target is DeploymentTarget.RAILWAY and (
-            self.auth_mode is not AuthMode.OPERATOR_SESSION
-        ):
-            raise ValueError("Railway security requires auth_mode=operator_session")
+        if self.deployment_target is DeploymentTarget.RAILWAY:
+            if self.service_role not in {None, ServiceRole.WEB}:
+                if self.auth_mode is not AuthMode.LOCAL_TOKEN or any(
+                    (password_hash, *secrets, self.public_origin)
+                ):
+                    raise ValueError("only the web role may receive operator authentication")
+                return self
+            if self.auth_mode is not AuthMode.OPERATOR_SESSION:
+                raise ValueError("Railway web security requires auth_mode=operator_session")
         if self.auth_mode is AuthMode.LOCAL_TOKEN:
             if any((password_hash, *secrets, self.public_origin)):
                 raise ValueError("local_token auth forbids inactive operator session secrets")

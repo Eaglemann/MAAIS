@@ -1,0 +1,14 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "maais cloud-web"
+healthcheckPath = "/healthz/ready"
+healthcheckTimeout = 120
+restartPolicyType = "NEVER"
+overlapSeconds = 0
+drainingSeconds = 30
+
+[deploy.multiRegionConfig.europe-west4-drams3a]
+numReplicas = 1

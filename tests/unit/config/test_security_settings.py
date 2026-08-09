@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from maais.config.cloud import DeploymentTarget
+from maais.config.cloud import DeploymentTarget, ServiceRole
 from maais.config.security import AuthMode, SecuritySettings
 from maais.security.passwords import hash_operator_password
 
@@ -16,6 +16,7 @@ HASH = hash_operator_password(PASSPHRASE)
 def _railway_values(**overrides: object) -> dict[str, object]:
     values: dict[str, object] = {
         "deployment_target": DeploymentTarget.RAILWAY,
+        "service_role": ServiceRole.WEB,
         "auth_mode": AuthMode.OPERATOR_SESSION,
         "operator_password_hash": SecretStr(HASH),
         "session_pepper": SecretStr("s" * 43),
@@ -47,6 +48,27 @@ def test_railway_rejects_local_token_auth_and_missing_or_weak_secrets() -> None:
                 csrf_pepper=SecretStr("s" * 43),
             )
         )
+
+
+@pytest.mark.parametrize(
+    "service_role",
+    (
+        ServiceRole.WORKER,
+        ServiceRole.OPERATIONS,
+        ServiceRole.VERIFIER,
+        ServiceRole.MIGRATOR,
+    ),
+)
+def test_non_web_railway_roles_are_auth_free(service_role: ServiceRole) -> None:
+    settings = SecuritySettings(
+        deployment_target=DeploymentTarget.RAILWAY,
+        service_role=service_role,
+    )
+
+    assert settings.auth_mode is AuthMode.LOCAL_TOKEN
+    assert settings.operator_session_configured is False
+    with pytest.raises(ValidationError, match="only the web role"):
+        SecuritySettings(**_railway_values(service_role=service_role))
 
 
 def test_railway_rejects_malformed_hash_and_insecure_cookie() -> None:
