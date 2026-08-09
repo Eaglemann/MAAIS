@@ -23,6 +23,7 @@ from maais.operations.migrations import (
     SchemaIdentityError,
     _database_url_for_role,
     _database_url_with_maintenance_timeouts,
+    _upgrade_to_head,
     assert_expected_schema,
     ensure_no_active_runs,
     initialize_database_with_url,
@@ -152,15 +153,62 @@ def test_existing_object_ownership_skips_objects_already_owned_by_migrator() -> 
     assert "owner.rolname <> 'maais_migrator'" in rendered
 
 
+def test_upgrade_to_head_reuses_the_connection_that_holds_the_advisory_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class FakeConfig:
+        def __init__(self, path: str) -> None:
+            observed["config_path"] = path
+            self.attributes: dict[str, object] = {}
+
+        def set_main_option(self, key: str, value: str) -> None:
+            observed[key] = value
+
+    def upgrade(config: FakeConfig, target: str) -> None:
+        observed["connection"] = config.attributes.get("connection")
+        observed["target"] = target
+
+    held_connection = object()
+    config_path = Path("/workspace/alembic.ini")
+    monkeypatch.setattr("maais.operations.migrations.Config", FakeConfig)
+    monkeypatch.setattr("maais.operations.migrations.command.upgrade", upgrade)
+
+    _upgrade_to_head(held_connection, config_path)
+
+    assert observed == {
+        "config_path": str(config_path),
+        "script_location": "/workspace/alembic",
+        "connection": held_connection,
+        "target": "head",
+    }
+
+
+def test_alembic_environment_accepts_an_externally_managed_connection() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    source = (repository_root / "alembic" / "env.py").read_text()
+
+    assert 'config.attributes.get("connection")' in source
+    assert "do_run_migrations(external_connection)" in source
+
+
 @pytest.mark.asyncio
 async def test_database_initialization_orders_principals_migration_and_final_grants(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, object]] = []
-    stage_events: list[tuple[str, str, str]] = []
+    stage_events: list[tuple[str, str, str, str]] = []
 
-    def log_stage(event: str, *, stage: str, outcome: str, **_: object) -> None:
-        stage_events.append((event, stage, outcome))
+    def log_stage(
+        event: str,
+        *,
+        stage: str,
+        operation_id: str,
+        outcome: str,
+        **_: object,
+    ) -> None:
+        stage_events.append((event, stage, operation_id, outcome))
 
     async def bootstrap_principals(url: str, passwords: DatabaseRolePasswords) -> None:
         calls.append(("principals", (make_url(url).username, passwords)))
@@ -218,12 +266,17 @@ async def test_database_initialization_orders_principals_migration_and_final_gra
     )
     assert calls[2][1] == ("admin", _passwords())
     assert stage_events == [
-        ("cloud_database_bootstrap_stage", "principals", "started"),
-        ("cloud_database_bootstrap_stage", "principals", "completed"),
-        ("cloud_database_bootstrap_stage", "migration", "started"),
-        ("cloud_database_bootstrap_stage", "migration", "completed"),
-        ("cloud_database_bootstrap_stage", "final_grants", "started"),
-        ("cloud_database_bootstrap_stage", "final_grants", "completed"),
+        ("cloud_database_bootstrap_stage", "principals", "bootstrap:principals", "started"),
+        ("cloud_database_bootstrap_stage", "principals", "bootstrap:principals", "completed"),
+        ("cloud_database_bootstrap_stage", "migration", "bootstrap:migration", "started"),
+        ("cloud_database_bootstrap_stage", "migration", "bootstrap:migration", "completed"),
+        ("cloud_database_bootstrap_stage", "final_grants", "bootstrap:final_grants", "started"),
+        (
+            "cloud_database_bootstrap_stage",
+            "final_grants",
+            "bootstrap:final_grants",
+            "completed",
+        ),
     ]
 
 

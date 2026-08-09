@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -10,6 +9,7 @@ from pathlib import Path
 
 from alembic.config import Config
 from sqlalchemy import make_url, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
 from alembic import command
@@ -130,15 +130,30 @@ async def initialize_database_with_url(
 ) -> tuple[str, tuple[str, ...]]:
     """Create principals, migrate as the migrator, then finalize runtime grants."""
 
-    logger.info("cloud_database_bootstrap_stage", stage="principals", outcome="started")
+    logger.info(
+        "cloud_database_bootstrap_stage",
+        stage="principals",
+        operation_id="bootstrap:principals",
+        outcome="started",
+    )
     await _bootstrap_principals_with_url(administrator_database_url, passwords)
-    logger.info("cloud_database_bootstrap_stage", stage="principals", outcome="completed")
+    logger.info(
+        "cloud_database_bootstrap_stage",
+        stage="principals",
+        operation_id="bootstrap:principals",
+        outcome="completed",
+    )
     migrator_database_url = _database_url_for_role(
         administrator_database_url,
         role_name="maais_migrator",
         password=passwords.migrator,
     )
-    logger.info("cloud_database_bootstrap_stage", stage="migration", outcome="started")
+    logger.info(
+        "cloud_database_bootstrap_stage",
+        stage="migration",
+        operation_id="bootstrap:migration",
+        outcome="started",
+    )
     revision = await migrate_with_url(
         migrator_database_url,
         expected_revision=expected_revision,
@@ -147,14 +162,21 @@ async def initialize_database_with_url(
     logger.info(
         "cloud_database_bootstrap_stage",
         stage="migration",
+        operation_id="bootstrap:migration",
         outcome="completed",
-        schema_revision=revision,
+        reason_code=f"schema_revision_{revision}",
     )
-    logger.info("cloud_database_bootstrap_stage", stage="final_grants", outcome="started")
+    logger.info(
+        "cloud_database_bootstrap_stage",
+        stage="final_grants",
+        operation_id="bootstrap:final_grants",
+        outcome="started",
+    )
     roles = await bootstrap_roles_with_url(administrator_database_url, passwords)
     logger.info(
         "cloud_database_bootstrap_stage",
         stage="final_grants",
+        operation_id="bootstrap:final_grants",
         outcome="completed",
     )
     return revision, roles
@@ -251,11 +273,7 @@ async def migrate_with_url(
             async with migration_advisory_lock(connection):
                 await ensure_no_active_runs(connection)
                 await connection.commit()
-                await asyncio.to_thread(
-                    _upgrade_to_head,
-                    config_path,
-                    bounded_database_url,
-                )
+                await connection.run_sync(_upgrade_to_head, config_path)
                 await ensure_no_active_runs(connection)
                 await assert_expected_schema(connection, expected_revision)
                 await connection.commit()
@@ -264,8 +282,8 @@ async def migrate_with_url(
         await engine.dispose()
 
 
-def _upgrade_to_head(config_path: Path, database_url: str) -> None:
+def _upgrade_to_head(connection: Connection, config_path: Path) -> None:
     config = Config(str(config_path))
     config.set_main_option("script_location", str(config_path.parent / "alembic"))
-    config.attributes["database_url"] = database_url
+    config.attributes["connection"] = connection
     command.upgrade(config, "head")

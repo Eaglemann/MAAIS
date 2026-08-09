@@ -19,7 +19,7 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def include_name(name: str | None, type_: str, _parent_names: dict[str, str | None]) -> bool:
+def include_name(name: str | None, type_: str, _parent_names: object) -> bool:
     if type_ == "schema":
         return name in (None, "public", "maais_auth")
     return True
@@ -56,14 +56,22 @@ def do_run_migrations(connection) -> None:
         context.run_migrations()
 
 
-async def run_migrations_online() -> None:
+async def run_async_migrations() -> None:
     engine = create_async_engine(get_url())
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await engine.dispose()
 
 
+def run_migrations_online() -> None:
+    external_connection = config.attributes.get("connection")
+    if external_connection is not None:
+        do_run_migrations(external_connection)
+        return
+    asyncio.run(run_async_migrations())
+
+
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_migrations_online())
+    run_migrations_online()
