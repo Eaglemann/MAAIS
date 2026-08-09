@@ -138,14 +138,14 @@ ALLOWED_COMMON_FIELDS = frozenset(
 - Create: `maais/observability/context.py`
 - Create: `maais/observability/redaction.py`
 - Modify: `maais/core/logging.py`
-- Test: `tests/unit/observability/test_logging.py`
+- Test: `tests/unit/observability/test_structured_logging.py`
 - Test: `tests/unit/observability/test_redaction.py`
 
 **Consumes:** `TelemetryContext`, structlog event dictionaries, standard-library log records, exception chains.
 
 **Produces:** One-line JSON schema, context binding, stable field allowlist, recursive redaction, and bounded exceptions.
 
-- [ ] Write failing tests that seed canaries in plain strings, nested mappings/lists, URLs, headers, exception messages/causes/stacks, standard logging, and arbitrary payloads. Assert every output line is valid JSON and contains no canary.
+- [x] Write failing tests that seed canaries in plain strings, nested mappings/lists, URLs, headers, exception messages/causes/stacks, standard logging, and arbitrary payloads. Assert every output line is valid JSON and contains no canary.
 
   ```python
   CANARIES = (
@@ -163,15 +163,15 @@ ALLOWED_COMMON_FIELDS = frozenset(
           assert canary not in value
   ```
 
-- [ ] Add tests proving unknown fields are dropped, allowed domain references are bounded, account/order-sensitive keys are masked, oversized strings are truncated, and exceptions retain type/causal order.
+- [x] Add tests proving unknown fields are dropped, allowed domain references are bounded, account/order-sensitive keys are masked, oversized strings are truncated, and exceptions retain type/causal order.
 
-- [ ] Run tests and confirm the current logging pipeline leaks canaries or lacks schema fields.
+- [x] Run tests and confirm the current logging pipeline leaks canaries or lacks schema fields.
 
   ```bash
-  uv run pytest -q tests/unit/observability/test_logging.py tests/unit/observability/test_redaction.py
+  uv run pytest -q tests/unit/observability/test_structured_logging.py tests/unit/observability/test_redaction.py
   ```
 
-- [ ] Implement normalization in this fixed order: merge context, add logger/level/timestamp, normalize exception, redact recursively, enforce allowlist/bounds, add schema version, render JSON.
+- [x] Implement normalization in this fixed order: merge context, add logger/level/timestamp, normalize exception, redact recursively, enforce allowlist/bounds, add schema version, render JSON.
 
   ```python
   shared_processors = [
@@ -186,11 +186,11 @@ ALLOWED_COMMON_FIELDS = frozenset(
   ]
   ```
 
-- [ ] Preserve human-readable development logs by applying the same redaction/allowlist before console rendering.
+- [x] Preserve human-readable development logs by applying the same redaction/allowlist before console rendering.
 
-- [ ] Bind correlation/operation context with context managers that always clear contextvars in `finally`.
+- [x] Bind correlation/operation context with context managers that always clear contextvars in `finally`.
 
-- [ ] Run tests, Ruff, Pyright, and a JSONL parsing smoke.
+- [x] Run tests, Ruff, Pyright, and a JSONL parsing smoke.
 
   ```bash
   uv run pytest -q tests/unit/observability
@@ -200,10 +200,10 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
   Expected: all commands exit `0`; every captured production line parses as one JSON object.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
-  git add maais/observability maais/core/logging.py tests/unit/observability/test_logging.py tests/unit/observability/test_redaction.py
+  git add maais/observability maais/core/logging.py tests/unit/observability/test_structured_logging.py tests/unit/observability/test_redaction.py
   git commit -m "feat: add redacted production telemetry"
   git push origin feat/paper-platform-baseline
   ```
