@@ -26,6 +26,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from maais.api.auth import load_control_token
+from maais.api.cloud_queries import CloudEvidenceIntegrityError, CloudOperationsQueryService
 from maais.api.headers import apply_browser_headers, requires_operator_session
 from maais.api.health import (
     CloudEndpointReader,
@@ -38,6 +39,13 @@ from maais.api.queries import MissionControlQueryService
 from maais.api.schemas import (
     ApiHealth,
     AuthSessionView,
+    CloudArtifactPage,
+    CloudAuditEventPage,
+    CloudCandidateView,
+    CloudHealthEvaluationPage,
+    CloudIncidentPage,
+    CloudRunView,
+    CloudServicePage,
     CsrfTokenResponse,
     DecisionDetail,
     DecisionListItem,
@@ -331,6 +339,22 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(error)})
 
+    @application.exception_handler(CloudEvidenceIntegrityError)
+    async def cloud_evidence_integrity_failed(
+        _request: Request,
+        _error: CloudEvidenceIntegrityError,
+    ) -> JSONResponse:
+        logger.error(
+            "cloud_evidence_integrity_failed",
+            error_code="cloud_evidence_integrity_failed",
+            outcome="failed",
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "cloud_evidence_integrity_failed"},
+        )
+
     @application.get("/healthz/live", response_model=PublicLiveness)
     async def public_liveness() -> PublicLiveness:
         return PublicLiveness()
@@ -605,6 +629,119 @@ def create_app(
             database_transaction=("read only" if transaction_mode == "on" else transaction_mode),
             schema_revision=schema_revision,
             checked_at=resolved_clock(),
+        )
+
+    @application.get(
+        "/api/v1/platform/candidates/{candidate_hash}",
+        response_model=CloudCandidateView,
+    )
+    async def cloud_candidate(
+        candidate_hash: str,
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudCandidateView:
+        return await CloudOperationsQueryService(session).get_candidate(candidate_hash)
+
+    @application.get("/api/v1/runs/{run_id}", response_model=CloudRunView)
+    async def cloud_run(
+        run_id: UUID,
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudRunView:
+        return await CloudOperationsQueryService(session).get_run(run_id)
+
+    @application.get(
+        "/api/v1/experiments/{experiment_id}/cloud-run",
+        response_model=CloudRunView | None,
+    )
+    async def experiment_cloud_run(
+        experiment_id: UUID,
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudRunView | None:
+        return await CloudOperationsQueryService(session).find_experiment_run(experiment_id)
+
+    @application.get(
+        "/api/v1/runs/{run_id}/services",
+        response_model=CloudServicePage,
+    )
+    async def cloud_services(
+        run_id: UUID,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudServicePage:
+        return await CloudOperationsQueryService(session).list_services(
+            run_id,
+            before_at=before_at,
+            before_id=before_id,
+            limit=limit,
+        )
+
+    @application.get(
+        "/api/v1/runs/{run_id}/health",
+        response_model=CloudHealthEvaluationPage,
+    )
+    async def cloud_health_history(
+        run_id: UUID,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudHealthEvaluationPage:
+        return await CloudOperationsQueryService(session).list_health(
+            run_id,
+            before_at=before_at,
+            before_id=before_id,
+            limit=limit,
+        )
+
+    @application.get(
+        "/api/v1/runs/{run_id}/incidents",
+        response_model=CloudIncidentPage,
+    )
+    async def cloud_incidents(
+        run_id: UUID,
+        before_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudIncidentPage:
+        return await CloudOperationsQueryService(session).list_incidents(
+            run_id,
+            before_at=before_at,
+            before_id=before_id,
+            limit=limit,
+        )
+
+    @application.get(
+        "/api/v1/runs/{run_id}/artifacts",
+        response_model=CloudArtifactPage,
+    )
+    async def cloud_artifacts(
+        run_id: UUID,
+        before_sequence: int | None = Query(None, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudArtifactPage:
+        return await CloudOperationsQueryService(session).list_artifacts(
+            run_id,
+            before_sequence=before_sequence,
+            limit=limit,
+        )
+
+    @application.get(
+        "/api/v1/runs/{run_id}/audit",
+        response_model=CloudAuditEventPage,
+    )
+    async def cloud_audit(
+        run_id: UUID,
+        before_sequence: int | None = Query(None, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(read_session),
+    ) -> CloudAuditEventPage:
+        return await CloudOperationsQueryService(session).list_audit_events(
+            run_id,
+            before_sequence=before_sequence,
+            limit=limit,
         )
 
     @application.get("/api/v1/experiments", response_model=tuple[ExperimentListItem, ...])

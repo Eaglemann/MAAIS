@@ -1,4 +1,12 @@
 import type {
+  CloudArtifactPage,
+  CloudAuditEventPage,
+  CloudCandidateView,
+  CloudHealthEvaluationPage,
+  CloudIncidentPage,
+  CloudOperationsEvidence,
+  CloudRunView,
+  CloudServicePage,
   DecisionDetail,
   DecisionFilters,
   DecisionPage,
@@ -97,6 +105,100 @@ export function getOverview(
   signal?: AbortSignal,
 ): Promise<ExperimentOverview> {
   return getJson<ExperimentOverview>(`/experiments/${experimentId}/overview`, signal);
+}
+
+export function getCloudRunForExperiment(
+  experimentId: string,
+  signal?: AbortSignal,
+): Promise<CloudRunView | null> {
+  return getJson<CloudRunView | null>(`/experiments/${experimentId}/cloud-run`, signal);
+}
+
+export function getCloudCandidate(
+  candidateHash: string,
+  signal?: AbortSignal,
+): Promise<CloudCandidateView> {
+  return getJson<CloudCandidateView>(`/platform/candidates/${candidateHash}`, signal);
+}
+
+function cloudTimestampParams(
+  cursor: PageCursor | null,
+  limit = 25,
+): URLSearchParams {
+  const params = new URLSearchParams({ limit: String(limit) });
+  addCursor(params, cursor);
+  return params;
+}
+
+function cloudSequenceParams(
+  beforeSequence: number | null,
+  limit = 25,
+): URLSearchParams {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (beforeSequence !== null) params.set("before_sequence", String(beforeSequence));
+  return params;
+}
+
+export function listCloudServices(
+  runId: string,
+  cursor: PageCursor | null = null,
+  signal?: AbortSignal,
+): Promise<CloudServicePage> {
+  const params = cloudTimestampParams(cursor);
+  return getJson<CloudServicePage>(`/runs/${runId}/services?${params.toString()}`, signal);
+}
+
+export function listCloudHealth(
+  runId: string,
+  cursor: PageCursor | null = null,
+  signal?: AbortSignal,
+): Promise<CloudHealthEvaluationPage> {
+  const params = cloudTimestampParams(cursor);
+  return getJson<CloudHealthEvaluationPage>(`/runs/${runId}/health?${params.toString()}`, signal);
+}
+
+export function listCloudIncidents(
+  runId: string,
+  cursor: PageCursor | null = null,
+  signal?: AbortSignal,
+): Promise<CloudIncidentPage> {
+  const params = cloudTimestampParams(cursor);
+  return getJson<CloudIncidentPage>(`/runs/${runId}/incidents?${params.toString()}`, signal);
+}
+
+export function listCloudArtifacts(
+  runId: string,
+  beforeSequence: number | null = null,
+  signal?: AbortSignal,
+): Promise<CloudArtifactPage> {
+  const params = cloudSequenceParams(beforeSequence);
+  return getJson<CloudArtifactPage>(`/runs/${runId}/artifacts?${params.toString()}`, signal);
+}
+
+export function listCloudAudit(
+  runId: string,
+  beforeSequence: number | null = null,
+  signal?: AbortSignal,
+): Promise<CloudAuditEventPage> {
+  const params = cloudSequenceParams(beforeSequence);
+  return getJson<CloudAuditEventPage>(`/runs/${runId}/audit?${params.toString()}`, signal);
+}
+
+export async function getCloudOperationsEvidence(
+  experimentId: string,
+  signal?: AbortSignal,
+): Promise<CloudOperationsEvidence | null> {
+  const run = await getCloudRunForExperiment(experimentId, signal);
+  if (run === null) return null;
+  const [candidate, services, health, incidents, artifacts, audit] = await Promise.all([
+    getCloudCandidate(run.candidate_hash, signal),
+    listCloudServices(run.id, null, signal),
+    listCloudHealth(run.id, null, signal),
+    listCloudIncidents(run.id, null, signal),
+    listCloudArtifacts(run.id, null, signal),
+    listCloudAudit(run.id, null, signal),
+  ]);
+  return { candidate, run, services, health, incidents, artifacts, audit };
 }
 
 export function listDecisions(

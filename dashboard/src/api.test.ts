@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decisionCsvUrl,
   decisionJsonUrl,
+  getCloudOperationsEvidence,
   listExperiments,
+  listCloudAudit,
+  listCloudServices,
   listDecisions,
   listTrades,
   requestOperatorCommand,
@@ -195,6 +198,61 @@ describe("Mission Control audit query contract", () => {
     expect(decisionJsonUrl("decision-1")).toBe(
       "/api/v1/decisions/decision-1/export.json",
     );
+  });
+
+  it("discovers one experiment run then reads every cloud evidence page same-origin", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const path = String(input);
+      const payload = path.endsWith("/experiments/experiment-1/cloud-run")
+        ? { id: "run-1", candidate_hash: "candidate-1" }
+        : { items: [], limit: 25, has_more: false };
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getCloudOperationsEvidence("experiment-1");
+
+    expect(fetchMock).toHaveBeenCalledTimes(7);
+    const paths = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(paths).toContain("/api/v1/experiments/experiment-1/cloud-run");
+    expect(paths).toContain("/api/v1/platform/candidates/candidate-1");
+    expect(paths).toContain("/api/v1/runs/run-1/services?limit=25");
+    expect(paths).toContain("/api/v1/runs/run-1/health?limit=25");
+    expect(paths).toContain("/api/v1/runs/run-1/incidents?limit=25");
+    expect(paths).toContain("/api/v1/runs/run-1/artifacts?limit=25");
+    expect(paths).toContain("/api/v1/runs/run-1/audit?limit=25");
+    for (const call of fetchMock.mock.calls) {
+      expect(call[1]).toEqual(expect.objectContaining({
+        credentials: "same-origin",
+        cache: "no-store",
+      }));
+    }
+  });
+
+  it("serializes resumable timestamp and sequence cloud cursors", async () => {
+    const fetchMock = stubPage();
+
+    await listCloudServices("run-1", {
+      beforeAt: "2026-08-08T12:00:00Z",
+      beforeId: "boot-1",
+    });
+    let url = requestedUrl(fetchMock);
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      limit: "25",
+      before_at: "2026-08-08T12:00:00Z",
+      before_id: "boot-1",
+    });
+
+    fetchMock.mockClear();
+    await listCloudAudit("run-1", 42);
+    url = requestedUrl(fetchMock);
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      limit: "25",
+      before_sequence: "42",
+    });
   });
 });
 

@@ -564,17 +564,17 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
 **Produces:** Authenticated, paginated, no-store views of exact cloud identity and evidence with links back to decisions, trades, rationale metadata, incidents, reports, and exports.
 
-- [ ] Write failing API tests for `GET /api/v1/platform/candidates/{candidate_hash}`, `GET /api/v1/runs/{run_id}`, and paginated `/services`, `/health`, `/artifacts`, and `/audit` routes. Require authentication, stable cursors, run scoping, no-store headers, and exact content-hash verification before response.
+- [x] Write failing API tests for `GET /api/v1/platform/candidates/{candidate_hash}`, `GET /api/v1/runs/{run_id}`, and paginated `/services`, `/health`, `/artifacts`, and `/audit` routes. Require authentication, stable cursors, run scoping, no-store headers, and exact content-hash verification before response.
 
-- [ ] Add disclosure tests that allow the operator to see exact deployment/replica/boot/schema/database-cluster identity and artifact version/retention evidence, while rejecting DSNs, credentials, cookies, tokens, password hashes, provider secrets, raw exception payloads, IP addresses, and user agents.
+- [x] Add disclosure tests that allow the operator to see exact deployment/replica/boot/schema/database-cluster identity and artifact version/retention evidence, while rejecting DSNs, credentials, cookies, tokens, password hashes, provider secrets, raw exception payloads, IP addresses, and user agents.
 
-- [ ] Run API tests and confirm the cloud query layer is absent.
+- [x] Run API tests and confirm the cloud query layer is absent.
 
   ```bash
   uv run pytest -q tests/integration/test_cloud_operations_api.py
   ```
 
-- [ ] Implement read-only snapshot queries with a fixed maximum page size, keyset cursors, candidate/run ownership checks, and recomputation of candidate, artifact, audit, and health content hashes.
+- [x] Implement read-only snapshot queries with a fixed maximum page size, keyset cursors, candidate/run ownership checks, and recomputation of candidate, artifact, audit, and health content hashes.
 
   ```python
   class CloudOperationsQueryService:
@@ -594,13 +594,13 @@ ALLOWED_COMMON_FIELDS = frozenset(
           raise NotImplementedError
   ```
 
-- [ ] Write failing frontend tests for an “Operations evidence” view showing candidate/run/database identity, current required boot continuity, minute health history, incidents, artifact target/version/retention status, audit timeline, and links to the existing decisions/trades/research pages.
+- [x] Write failing frontend tests for an “Operations evidence” view showing candidate/run/database identity, current required boot continuity, minute health history, incidents, artifact target/version/retention status, audit timeline, and links to the existing decisions/trades/research pages.
 
-- [ ] Add explicit UI states for standby, active, continuity invalidated, interrupted, failed evidence replication, stale health, no fills, and incomplete decision rationale. No-fills is informational unless another gate fails.
+- [x] Add explicit UI states for standby, active, continuity invalidated, interrupted, failed evidence replication, stale health, no fills, and incomplete decision rationale. No-fills is informational unless another gate fails.
 
-- [ ] Implement the view with authenticated same-origin clients and resumable pagination. Do not stream routine logs into PostgreSQL; link the operator to the exact Railway/Sentry release/deployment context documented in the runbook.
+- [x] Implement the view with authenticated same-origin clients and resumable pagination. Do not stream routine logs into PostgreSQL; link the operator to the exact Railway/Sentry release/deployment context documented in the runbook.
 
-- [ ] Run backend/frontend tests, typecheck, and build.
+- [x] Run backend/frontend tests, typecheck, and build.
 
   ```bash
   uv run pytest -q tests/integration/test_cloud_operations_api.py tests/integration/test_mission_control_surface_security.py
@@ -611,7 +611,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
   Expected: all commands exit `0`; every displayed cloud fact comes from an authenticated, hash-verified query.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/api/cloud_queries.py maais/api/schemas.py maais/api/app.py dashboard/src/CloudOperations.tsx dashboard/src/api.ts dashboard/src/types.ts dashboard/src/App.tsx dashboard/src/styles.css tests/integration/test_cloud_operations_api.py dashboard/src/CloudOperations.test.tsx dashboard/src/api.test.ts

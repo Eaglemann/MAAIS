@@ -1,12 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   decisionCsvUrl,
   decisionJsonUrl,
+  getCloudOperationsEvidence,
   getDecision,
   getOverview,
   getResearch,
   listCommands,
+  listCloudArtifacts,
+  listCloudAudit,
+  listCloudHealth,
+  listCloudIncidents,
+  listCloudServices,
   listDecisions,
   listExperiments,
   listTrades,
@@ -30,6 +36,8 @@ import type {
   DecisionFilters,
   DecisionListItem,
   DecisionPage,
+  CloudEvidencePageKind,
+  CloudOperationsEvidence,
   ExperimentListItem,
   ExperimentOverview,
   EventFeedStatus,
@@ -52,8 +60,9 @@ import { Login } from "./Login";
 import { OperatorConsole } from "./OperatorConsole";
 import { ResearchLab } from "./ResearchLab";
 import { BrowserErrorBoundary } from "./observability";
+import { CloudOperations } from "./CloudOperations";
 
-export { OperatorConsole, ResearchLab };
+export { CloudOperations, OperatorConsole, ResearchLab };
 
 const EMPTY_FILTERS: DecisionFilters = {
   symbol: "",
@@ -543,6 +552,10 @@ export default function App() {
   const [tradePage, setTradePage] = useState<TradePage | null>(null);
   const [commands, setCommands] = useState<OperatorCommandPage | null>(null);
   const [research, setResearch] = useState<ResearchLabView | null>(null);
+  const [cloudEvidence, setCloudEvidence] = useState<CloudOperationsEvidence | null>(null);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const cloudPaging = useRef(false);
   const [filters, setFilters] = useState<DecisionFilters>(EMPTY_FILTERS);
   const [tradeFilters, setTradeFilters] = useState<TradeFilters>(EMPTY_TRADE_FILTERS);
   const [decisionCursors, setDecisionCursors] = useState<PageCursor[]>([]);
@@ -568,6 +581,9 @@ export default function App() {
     setTradePage(null);
     setCommands(null);
     setResearch(null);
+    setCloudEvidence(null);
+    setCloudLoading(false);
+    setCloudError(null);
     setSelectedDecision(null);
     setDrawerOpen(false);
     setLastUpdated(null);
@@ -661,6 +677,19 @@ export default function App() {
     }
   }, [handleRequestError, selectedId]);
 
+  const refreshCloudEvidence = useCallback(async (signal?: AbortSignal) => {
+    if (!selectedId) return;
+    setCloudLoading(true);
+    try {
+      setCloudEvidence(await getCloudOperationsEvidence(selectedId, signal));
+      setCloudError(null);
+    } catch (reason: unknown) {
+      if (!signal?.aborted) handleRequestError(reason, setCloudError);
+    } finally {
+      if (!signal?.aborted) setCloudLoading(false);
+    }
+  }, [handleRequestError, selectedId]);
+
   useEffect(() => {
     if (authState.status !== "authenticated" || !selectedId) return;
     const controller = new AbortController();
@@ -683,6 +712,17 @@ export default function App() {
       controller.abort();
     };
   }, [authState.status, refreshResearch, selectedId]);
+
+  useEffect(() => {
+    if (authState.status !== "authenticated" || !selectedId) return;
+    const controller = new AbortController();
+    void refreshCloudEvidence(controller.signal);
+    const interval = window.setInterval(() => void refreshCloudEvidence(controller.signal), 60_000);
+    return () => {
+      window.clearInterval(interval);
+      controller.abort();
+    };
+  }, [authState.status, refreshCloudEvidence, selectedId]);
 
   useEffect(() => {
     if (authState.status !== "authenticated" || !selectedId) return;
@@ -772,6 +812,76 @@ export default function App() {
         ? current
         : [...current, next];
     });
+  }
+
+  async function loadOlderCloudEvidence(kind: CloudEvidencePageKind) {
+    const current = cloudEvidence;
+    if (!current || cloudPaging.current) return;
+    cloudPaging.current = true;
+    const runId = current.run.id;
+    setCloudLoading(true);
+    try {
+      if (kind === "services") {
+        if (!current.services.has_more
+          || !current.services.next_before_at
+          || !current.services.next_before_id) return;
+        const next = await listCloudServices(runId, {
+          beforeAt: current.services.next_before_at,
+          beforeId: current.services.next_before_id,
+        });
+        setCloudEvidence((value) => value && ({
+          ...value,
+          services: { ...next, items: [...value.services.items, ...next.items] },
+        }));
+      } else if (kind === "health") {
+        if (!current.health.has_more
+          || !current.health.next_before_at
+          || !current.health.next_before_id) return;
+        const next = await listCloudHealth(runId, {
+          beforeAt: current.health.next_before_at,
+          beforeId: current.health.next_before_id,
+        });
+        setCloudEvidence((value) => value && ({
+          ...value,
+          health: { ...next, items: [...value.health.items, ...next.items] },
+        }));
+      } else if (kind === "incidents") {
+        if (!current.incidents.has_more
+          || !current.incidents.next_before_at
+          || !current.incidents.next_before_id) return;
+        const next = await listCloudIncidents(runId, {
+          beforeAt: current.incidents.next_before_at,
+          beforeId: current.incidents.next_before_id,
+        });
+        setCloudEvidence((value) => value && ({
+          ...value,
+          incidents: { ...next, items: [...value.incidents.items, ...next.items] },
+        }));
+      } else if (kind === "artifacts") {
+        if (!current.artifacts.has_more || current.artifacts.next_before_sequence === null) return;
+        const next = await listCloudArtifacts(
+          runId,
+          current.artifacts.next_before_sequence,
+        );
+        setCloudEvidence((value) => value && ({
+          ...value,
+          artifacts: { ...next, items: [...value.artifacts.items, ...next.items] },
+        }));
+      } else {
+        if (!current.audit.has_more || current.audit.next_before_sequence === null) return;
+        const next = await listCloudAudit(runId, current.audit.next_before_sequence);
+        setCloudEvidence((value) => value && ({
+          ...value,
+          audit: { ...next, items: [...value.audit.items, ...next.items] },
+        }));
+      }
+      setCloudError(null);
+    } catch (reason: unknown) {
+      handleRequestError(reason, setCloudError);
+    } finally {
+      cloudPaging.current = false;
+      setCloudLoading(false);
+    }
   }
 
   async function submitOperatorCommand(draft: OperatorActionDraft) {
@@ -881,7 +991,7 @@ export default function App() {
           <a className="nav-link nav-link--active" href="#mission"><span>01</span>Mission Control</a>
           <a className="nav-link" href="#trades"><span>02</span>Trade Ledger</a>
           <a className="nav-link" href="#ledger"><span>03</span>Audit Ledger</a>
-          <a className="nav-link" href="#operations"><span>04</span>Operations</a>
+          <a className="nav-link" href="#cloud-operations"><span>04</span>Operations</a>
           <a className="nav-link" href="#operator-console"><span>05</span>Operator Console</a>
           <a className="nav-link" href="#research"><span>06</span>Research Lab</a>
         </nav>
@@ -913,6 +1023,8 @@ export default function App() {
                   setTradeCursors([]);
                   setDecisionPage(null);
                   setTradePage(null);
+                  setCloudEvidence(null);
+                  setCloudError(null);
                 }}
               >
                 {experiments.map((item) => (
@@ -923,6 +1035,7 @@ export default function App() {
             <button className="refresh-button" type="button" onClick={() => {
               void refresh();
               void refreshResearch();
+              void refreshCloudEvidence();
             }}>
               <span className={loading ? "refresh-icon refresh-icon--spinning" : "refresh-icon"}>↻</span>
               Refresh
@@ -984,7 +1097,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="two-column" id="operations">
+        <section className="two-column" id="runtime-health">
           <div className="dashboard-section panel">
             <SectionHeader title="Runtime health" subtitle="Durable worker ownership, data coverage, and controls" />
             <div className="status-list">
@@ -1012,6 +1125,17 @@ export default function App() {
             </div>
           </div>
         </section>
+
+        <CloudOperations
+          evidence={cloudEvidence}
+          loading={cloudLoading}
+          error={cloudError}
+          fillCount={operations?.fills ?? 0}
+          rationaleComplete={(decisionPage?.items ?? []).every((decision) => (
+            decision.reason_code.trim().length > 0 && decision.quality_status.trim().length > 0
+          ))}
+          onLoadOlder={(kind) => void loadOlderCloudEvidence(kind)}
+        />
 
         {overview?.incidents.length ? (
           <section className="dashboard-section">

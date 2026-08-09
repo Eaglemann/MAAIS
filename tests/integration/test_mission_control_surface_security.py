@@ -37,7 +37,15 @@ PROTECTED_HTTP = {
     ("POST", "/api/v1/auth/csrf"),
     ("POST", "/api/v1/auth/logout"),
     ("GET", "/api/v1/health"),
+    ("GET", "/api/v1/platform/candidates/{candidate_hash}"),
+    ("GET", "/api/v1/runs/{run_id}"),
+    ("GET", "/api/v1/runs/{run_id}/services"),
+    ("GET", "/api/v1/runs/{run_id}/health"),
+    ("GET", "/api/v1/runs/{run_id}/incidents"),
+    ("GET", "/api/v1/runs/{run_id}/artifacts"),
+    ("GET", "/api/v1/runs/{run_id}/audit"),
     ("GET", "/api/v1/experiments"),
+    ("GET", "/api/v1/experiments/{experiment_id}/cloud-run"),
     ("GET", "/api/v1/experiments/{experiment_id}/overview"),
     ("GET", "/api/v1/experiments/{experiment_id}/decisions"),
     ("GET", "/api/v1/experiments/{experiment_id}/decisions/export.csv"),
@@ -97,6 +105,8 @@ def _app(
 def _concrete_path(path: str) -> str:
     return (
         path.replace("{experiment_id}", IDENTIFIER)
+        .replace("{candidate_hash}", "a" * 64)
+        .replace("{run_id}", IDENTIFIER)
         .replace("{decision_id}", IDENTIFIER)
         .replace("{command_id}", IDENTIFIER)
     )

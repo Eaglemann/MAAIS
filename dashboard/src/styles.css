@@ -454,6 +454,67 @@ code { color: #b9d8cc; font-family: ui-monospace, SFMono-Regular, Menlo, monospa
 .timeline__title strong { font-size: 10px; text-transform: capitalize; }
 .timeline li > div > span { color: var(--faint); font-size: 9px; }
 
+.cloud-operations { scroll-margin-top: 20px; }
+.cloud-evidence-links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.cloud-evidence-links a { padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--mint); font-size: 9px; text-decoration: none; }
+.cloud-evidence-links a:hover, .cloud-evidence-links a:focus-visible { border-color: var(--mint); background: rgb(112 225 179 / 0.07); }
+.cloud-identity-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--surface); }
+.cloud-identity-grid > div { min-width: 0; padding: 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 5px; }
+.cloud-identity-grid > div:nth-child(4n) { border-right: 0; }
+.cloud-identity-grid > div:nth-last-child(-n + 4) { border-bottom: 0; }
+.cloud-identity-grid span, .cloud-evidence-panel header span { color: var(--faint); font-size: 8px; text-transform: uppercase; letter-spacing: 0.08em; }
+.cloud-identity-grid strong, .cloud-identity-grid code { color: #dbece5; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloud-state-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0 12px; }
+.cloud-state { min-height: 78px; padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); display: flex; flex-direction: column; gap: 7px; }
+.cloud-state strong { font-size: 10px; }
+.cloud-state span { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.cloud-state--good { border-color: rgb(112 225 179 / 0.25); }
+.cloud-state--good strong { color: var(--mint); }
+.cloud-state--warn { border-color: rgb(240 187 102 / 0.3); }
+.cloud-state--warn strong { color: var(--amber); }
+.cloud-state--bad { border-color: rgb(255 129 123 / 0.34); background: rgb(255 129 123 / 0.04); }
+.cloud-state--bad strong { color: #ffaaa6; }
+.cloud-state--info { border-color: rgb(114 183 255 / 0.25); }
+.cloud-state--info strong { color: #a8d2ff; }
+.cloud-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.cloud-evidence-panel { min-width: 0; }
+.cloud-evidence-panel--wide { grid-column: 1 / -1; }
+.cloud-evidence-panel > header { margin-bottom: 12px; }
+.cloud-evidence-panel > header > div { display: flex; flex-direction: column; gap: 4px; }
+.cloud-evidence-panel > header strong { font-size: 12px; }
+.cloud-service-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+.cloud-service-list > article, .cloud-artifact-list > article, .cloud-timeline > article { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--surface-2); }
+.cloud-card-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.cloud-card-title > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cloud-card-title strong { font-size: 10px; }
+.cloud-card-title span, .cloud-card-title time, .cloud-service-list small { color: var(--faint); font-size: 8px; }
+.cloud-card-title code { font-size: 8px; }
+.cloud-service-list dl, .cloud-inventory dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 11px 0 0; }
+.cloud-service-list dl > div, .cloud-inventory dl > div { min-width: 0; }
+.cloud-service-list dt, .cloud-inventory dt { color: var(--faint); font-size: 7px; text-transform: uppercase; letter-spacing: 0.07em; }
+.cloud-service-list dd, .cloud-inventory dd { margin: 3px 0 0; color: #cddfd8; font: 8px/1.4 var(--mono); overflow-wrap: anywhere; }
+.cloud-timeline { display: flex; flex-direction: column; gap: 7px; max-height: 410px; overflow-y: auto; }
+.cloud-timeline > article { display: flex; flex-direction: column; gap: 6px; }
+.cloud-timeline > article > strong { font-size: 9px; }
+.cloud-timeline > article > span, .cloud-timeline > article > code { color: var(--muted); font-size: 8px; }
+.cloud-timeline details summary { color: var(--faint); cursor: pointer; font-size: 8px; }
+.cloud-timeline details pre { max-height: 220px; overflow: auto; padding: 8px; border-radius: 6px; background: #050c0a; color: #a8c4b9; font: 8px/1.5 var(--mono); white-space: pre-wrap; }
+.cloud-artifact-list { display: flex; flex-direction: column; gap: 8px; }
+.cloud-inventory-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.cloud-inventory { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 7px; }
+.cloud-inventory > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cloud-inventory > div:first-child strong { font-size: 9px; }
+.cloud-inventory > code { display: block; margin-top: 7px; color: var(--muted); font-size: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloud-audit-list { display: flex; flex-direction: column; max-height: 430px; overflow-y: auto; }
+.cloud-audit-list > article { display: grid; grid-template-columns: 35px minmax(0, 1fr) 90px 70px; align-items: center; gap: 10px; padding: 9px 3px; border-top: 1px solid var(--line); }
+.cloud-audit-list > article:first-child { border-top: 0; }
+.cloud-audit-list > article > span, .cloud-audit-list time, .cloud-audit-list code { color: var(--faint); font-size: 8px; }
+.cloud-audit-list > article > div { display: flex; flex-direction: column; gap: 3px; }
+.cloud-audit-list strong { font-size: 9px; }
+.cloud-audit-list small { color: var(--muted); font-size: 8px; }
+.cloud-load-older { min-height: 32px; margin-top: 10px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--mint); cursor: pointer; font-size: 9px; }
+.cloud-provider-note { margin: 12px 0 0; color: var(--faint); font-size: 9px; line-height: 1.6; }
+
 .error-panel { margin: 12px 0; border: 1px solid rgb(255 129 123 / 0.35); border-radius: 9px; padding: 11px 13px; color: #ffaaa6; background: rgb(255 129 123 / 0.07); font-size: 11px; }
 
 .boot-state { min-height: 100vh; display: grid; place-content: center; justify-items: center; text-align: center; padding: 25px; }
@@ -468,6 +529,7 @@ footer { margin-top: 38px; padding-top: 18px; border-top: 1px solid var(--line);
   .model-boundary { grid-template-columns: minmax(180px, 0.8fr) minmax(300px, 1.5fr); }
   .model-boundary > strong { grid-column: 1 / -1; }
   .identity-strip { grid-template-columns: repeat(3, 1fr); }
+  .cloud-state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .identity-strip > div:nth-child(3) { border-right: 0; }
   .identity-strip > div:nth-child(-n + 3) { border-bottom: 1px solid var(--line); }
 }
@@ -480,6 +542,13 @@ footer { margin-top: 38px; padding-top: 18px; border-top: 1px solid var(--line);
   .workspace { margin-left: 0; }
   .two-column { grid-template-columns: 1fr; }
   .operator-layout, .research-grid { grid-template-columns: 1fr; }
+  .cloud-evidence-grid { grid-template-columns: 1fr; }
+  .cloud-evidence-panel--wide { grid-column: auto; }
+  .cloud-identity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cloud-identity-grid > div:nth-child(4n) { border-right: 1px solid var(--line); }
+  .cloud-identity-grid > div:nth-child(2n) { border-right: 0; }
+  .cloud-identity-grid > div:nth-last-child(-n + 4) { border-bottom: 1px solid var(--line); }
+  .cloud-identity-grid > div:nth-last-child(-n + 2) { border-bottom: 0; }
   .panel.dashboard-section + .panel.dashboard-section { margin-top: 0; }
   .safety-banner { align-items: flex-start; }
   .safety-banner__facts { flex-wrap: wrap; }
@@ -507,6 +576,10 @@ footer { margin-top: 38px; padding-top: 18px; border-top: 1px solid var(--line);
   .operator-action-grid { grid-template-columns: repeat(2, 1fr); }
   .incident-actions article { grid-template-columns: 1fr; }
   .hash-grid { grid-template-columns: 1fr; }
+  .cloud-state-grid, .cloud-inventory-grid { grid-template-columns: 1fr; }
+  .cloud-evidence-links { justify-content: flex-start; }
+  .cloud-audit-list > article { grid-template-columns: 30px minmax(0, 1fr); }
+  .cloud-audit-list time, .cloud-audit-list > article > code { grid-column: 2; }
   .audit-drawer { width: 100vw; }
   .audit-drawer__body, .audit-drawer__header { padding-left: 15px; padding-right: 15px; }
   footer { flex-direction: column; }
