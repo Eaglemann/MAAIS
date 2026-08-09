@@ -13,6 +13,7 @@ from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
 from alembic import command
+from maais.core.logging import get_logger
 from maais.db.roles import (
     DatabaseRolePasswords,
     bootstrap_database_principals,
@@ -20,6 +21,10 @@ from maais.db.roles import (
 )
 
 MIGRATION_LOCK_KEY = 5_321_109_104_001_922_019
+MAINTENANCE_LOCK_TIMEOUT_MS = 10_000
+MAINTENANCE_STATEMENT_TIMEOUT_MS = 120_000
+
+logger = get_logger(__name__)
 
 
 class SchemaIdentityError(RuntimeError):
@@ -83,7 +88,11 @@ async def bootstrap_roles_with_url(
     database_url: str,
     passwords: DatabaseRolePasswords,
 ) -> tuple[str, ...]:
-    engine = create_async_engine(database_url, pool_pre_ping=True, hide_parameters=True)
+    engine = create_async_engine(
+        _database_url_with_maintenance_timeouts(database_url),
+        pool_pre_ping=True,
+        hide_parameters=True,
+    )
     try:
         async with engine.connect() as connection:
             async with migration_advisory_lock(connection):
@@ -121,18 +130,33 @@ async def initialize_database_with_url(
 ) -> tuple[str, tuple[str, ...]]:
     """Create principals, migrate as the migrator, then finalize runtime grants."""
 
+    logger.info("cloud_database_bootstrap_stage", stage="principals", outcome="started")
     await _bootstrap_principals_with_url(administrator_database_url, passwords)
+    logger.info("cloud_database_bootstrap_stage", stage="principals", outcome="completed")
     migrator_database_url = _database_url_for_role(
         administrator_database_url,
         role_name="maais_migrator",
         password=passwords.migrator,
     )
+    logger.info("cloud_database_bootstrap_stage", stage="migration", outcome="started")
     revision = await migrate_with_url(
         migrator_database_url,
         expected_revision=expected_revision,
         repository_root=repository_root,
     )
+    logger.info(
+        "cloud_database_bootstrap_stage",
+        stage="migration",
+        outcome="completed",
+        schema_revision=revision,
+    )
+    logger.info("cloud_database_bootstrap_stage", stage="final_grants", outcome="started")
     roles = await bootstrap_roles_with_url(administrator_database_url, passwords)
+    logger.info(
+        "cloud_database_bootstrap_stage",
+        stage="final_grants",
+        outcome="completed",
+    )
     return revision, roles
 
 
@@ -140,7 +164,11 @@ async def _bootstrap_principals_with_url(
     database_url: str,
     passwords: DatabaseRolePasswords,
 ) -> None:
-    engine = create_async_engine(database_url, pool_pre_ping=True, hide_parameters=True)
+    engine = create_async_engine(
+        _database_url_with_maintenance_timeouts(database_url),
+        pool_pre_ping=True,
+        hide_parameters=True,
+    )
     try:
         async with engine.connect() as connection:
             async with migration_advisory_lock(connection):
@@ -178,6 +206,25 @@ def _database_url_for_role(
     ).render_as_string(hide_password=False)
 
 
+def _database_url_with_maintenance_timeouts(database_url: str) -> str:
+    """Bound every bootstrap or migration statement without exposing credentials."""
+
+    url = make_url(database_url)
+    if url.get_backend_name() != "postgresql" or not url.database or not url.host:
+        raise ValueError("cloud database maintenance requires one PostgreSQL network URL")
+    existing_options = str(url.query.get("options", "")).strip()
+    bounded_options = " ".join(
+        part
+        for part in (
+            existing_options,
+            f"-c lock_timeout={MAINTENANCE_LOCK_TIMEOUT_MS}ms",
+            f"-c statement_timeout={MAINTENANCE_STATEMENT_TIMEOUT_MS}ms",
+        )
+        if part
+    )
+    return url.update_query_dict({"options": bounded_options}).render_as_string(hide_password=False)
+
+
 async def migrate_with_url(
     database_url: str,
     *,
@@ -189,7 +236,12 @@ async def migrate_with_url(
     config_path = repository_root / "alembic.ini"
     if not config_path.is_file():
         raise ValueError("repository root does not contain alembic.ini")
-    engine = create_async_engine(database_url, pool_pre_ping=True, hide_parameters=True)
+    bounded_database_url = _database_url_with_maintenance_timeouts(database_url)
+    engine = create_async_engine(
+        bounded_database_url,
+        pool_pre_ping=True,
+        hide_parameters=True,
+    )
     try:
         async with engine.connect() as connection:
             current_user = str(await connection.scalar(text("SELECT current_user")))
@@ -202,7 +254,7 @@ async def migrate_with_url(
                 await asyncio.to_thread(
                     _upgrade_to_head,
                     config_path,
-                    database_url,
+                    bounded_database_url,
                 )
                 await ensure_no_active_runs(connection)
                 await assert_expected_schema(connection, expected_revision)

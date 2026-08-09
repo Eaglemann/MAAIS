@@ -22,6 +22,7 @@ from maais.operations.migrations import (
     ActiveRunBlocksMaintenance,
     SchemaIdentityError,
     _database_url_for_role,
+    _database_url_with_maintenance_timeouts,
     assert_expected_schema,
     ensure_no_active_runs,
     initialize_database_with_url,
@@ -130,11 +131,36 @@ def test_database_role_url_uses_psycopg_and_replaces_administrator_identity() ->
     assert "admin@" not in role_url.render_as_string(hide_password=False)
 
 
+def test_maintenance_database_url_bounds_locks_without_dropping_query_options() -> None:
+    bounded = make_url(
+        _database_url_with_maintenance_timeouts(
+            "postgresql+psycopg://admin@postgres.railway.internal:5432/railway?sslmode=require"
+        )
+    )
+
+    assert bounded.query["sslmode"] == "require"
+    assert "lock_timeout=10000ms" in bounded.query["options"]
+    assert "statement_timeout=120000ms" in bounded.query["options"]
+
+
+def test_existing_object_ownership_skips_objects_already_owned_by_migrator() -> None:
+    rendered = "\n".join(
+        statement.sql for statement in build_role_principal_statements(_passwords())
+    )
+
+    assert "JOIN pg_catalog.pg_roles AS owner" in rendered
+    assert "owner.rolname <> 'maais_migrator'" in rendered
+
+
 @pytest.mark.asyncio
 async def test_database_initialization_orders_principals_migration_and_final_grants(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, object]] = []
+    stage_events: list[tuple[str, str, str]] = []
+
+    def log_stage(event: str, *, stage: str, outcome: str, **_: object) -> None:
+        stage_events.append((event, stage, outcome))
 
     async def bootstrap_principals(url: str, passwords: DatabaseRolePasswords) -> None:
         calls.append(("principals", (make_url(url).username, passwords)))
@@ -168,6 +194,7 @@ async def test_database_initialization_orders_principals_migration_and_final_gra
         "maais.operations.migrations._bootstrap_principals_with_url",
         bootstrap_principals,
     )
+    monkeypatch.setattr("maais.operations.migrations.logger.info", log_stage)
     monkeypatch.setattr("maais.operations.migrations.migrate_with_url", migrate)
     monkeypatch.setattr("maais.operations.migrations.bootstrap_roles_with_url", bootstrap_roles)
     repository_root = Path("/workspace")
@@ -190,6 +217,14 @@ async def test_database_initialization_orders_principals_migration_and_final_gra
         repository_root,
     )
     assert calls[2][1] == ("admin", _passwords())
+    assert stage_events == [
+        ("cloud_database_bootstrap_stage", "principals", "started"),
+        ("cloud_database_bootstrap_stage", "principals", "completed"),
+        ("cloud_database_bootstrap_stage", "migration", "started"),
+        ("cloud_database_bootstrap_stage", "migration", "completed"),
+        ("cloud_database_bootstrap_stage", "final_grants", "started"),
+        ("cloud_database_bootstrap_stage", "final_grants", "completed"),
+    ]
 
 
 def test_runtime_roles_are_explicitly_unprivileged_and_web_has_no_public_dml() -> None:

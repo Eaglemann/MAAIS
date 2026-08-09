@@ -400,7 +400,10 @@ BEGIN
         SELECT c.relkind, n.nspname, c.relname
         FROM pg_catalog.pg_class AS c
         JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm')
+        JOIN pg_catalog.pg_roles AS owner ON owner.oid = c.relowner
+        WHERE n.nspname = 'public'
+          AND c.relkind IN ('r', 'p', 'v', 'm')
+          AND owner.rolname <> 'maais_migrator'
     LOOP
         EXECUTE pg_catalog.format(
             'ALTER %s %I.%I OWNER TO maais_migrator',
