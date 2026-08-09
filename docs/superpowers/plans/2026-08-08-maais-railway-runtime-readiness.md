@@ -259,7 +259,7 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
   baseline-aware secret hook over every changed or new file. The final full
   isolated-database suite passed with 1,424 tests and one expected skip.
 
-- [ ] Commit.
+- [x] Commit (`4530465`).
 
   ```bash
   git add railway docs/runbooks/railway-variables.md tests/unit/platform/test_railway_configs.py
