@@ -224,7 +224,7 @@ class InMemoryMonitorRateLimiter:
 
     def allow(self, client_key: str) -> bool:
         if not client_key or len(client_key) > 255:
-            client_key = "unknown"
+            client_key = "unknown"  # pragma: allowlist secret
         now = self._monotonic()
         with self._lock:
             current = self._windows.get(client_key)

@@ -133,7 +133,7 @@ async def test_unconfigured_cloud_authority_is_live_but_never_ready_or_healthy()
 
 
 async def test_failed_or_unavailable_dependencies_return_only_generic_503_bodies() -> None:
-    canary = "postgresql://secret-user:secret-pass@private-db/run-identifier"
+    canary = "private-database-run-identifier"
     unavailable = StubHealthReader(error=RuntimeError(canary))
     async with await _client(unavailable) as client:
         live = await client.get("/healthz/live")
