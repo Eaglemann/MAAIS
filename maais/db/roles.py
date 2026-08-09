@@ -310,6 +310,7 @@ def build_role_bootstrap_statements(passwords: DatabaseRolePasswords) -> tuple[B
             BoundSQL(_COMMAND_GATEWAY_SQL, {}),
             BoundSQL(_REGISTER_SERVICE_GATEWAY_SQL, {}),
             BoundSQL(_HEARTBEAT_SERVICE_GATEWAY_SQL, {}),
+            BoundSQL(_STOP_SERVICE_GATEWAY_SQL, {}),
             BoundSQL(_FUNCTION_OWNERS_AND_GRANTS_SQL, {}),
             BoundSQL(_AUDIT_FUNCTION_GRANTS_SQL, {}),
             BoundSQL(
@@ -835,6 +836,57 @@ END
 $maais_heartbeat$;
 """.strip()
 
+_STOP_SERVICE_GATEWAY_SQL = """
+CREATE OR REPLACE FUNCTION public.maais_stop_service_instance(
+    p_boot_id uuid,
+    p_reason_code text,
+    p_stopped_at timestamp with time zone
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $maais_stop$
+DECLARE
+    expected_role text;
+    existing public.service_instances%ROWTYPE;
+BEGIN
+    expected_role := CASE session_user
+        WHEN 'maais_migrator' THEN 'migrator'
+        WHEN 'maais_web' THEN 'web'
+        WHEN 'maais_worker' THEN 'worker'
+        WHEN 'maais_ops' THEN 'operations'
+        WHEN 'maais_verifier' THEN 'verifier'
+        ELSE NULL
+    END;
+    SELECT * INTO existing FROM public.service_instances WHERE boot_id = p_boot_id FOR UPDATE;
+    IF existing.boot_id IS NULL THEN
+        RAISE EXCEPTION 'service boot does not exist' USING ERRCODE = 'P0002';
+    END IF;
+    IF expected_role IS NULL OR existing.service_role <> expected_role THEN
+        RAISE EXCEPTION 'service stop caller role is invalid' USING ERRCODE = '42501';
+    END IF;
+    IF p_reason_code IS NULL
+        OR p_reason_code !~ '^[a-z][a-z0-9_]{0,127}$'
+        OR p_stopped_at IS NULL
+        OR p_stopped_at < existing.last_heartbeat_at THEN
+        RAISE EXCEPTION 'service stop arguments are invalid' USING ERRCODE = '22023';
+    END IF;
+    IF existing.stopped_at IS NOT NULL THEN
+        IF existing.stopped_at = p_stopped_at
+            AND existing.terminal_reason = p_reason_code THEN
+            RETURN p_boot_id;
+        END IF;
+        RAISE EXCEPTION 'service stop evidence conflicts' USING ERRCODE = '23505';
+    END IF;
+    UPDATE public.service_instances
+    SET stopped_at = p_stopped_at, terminal_reason = p_reason_code
+    WHERE boot_id = p_boot_id;
+    RETURN p_boot_id;
+END
+$maais_stop$;
+""".strip()
+
 _FUNCTION_OWNERS_AND_GRANTS_SQL = """
 ALTER FUNCTION public._maais_utc_iso(timestamp with time zone) OWNER TO maais_migrator;
 ALTER FUNCTION public._maais_canonical_jsonb(jsonb) OWNER TO maais_migrator;
@@ -848,6 +900,9 @@ ALTER FUNCTION public.maais_register_service_instance(
 ALTER FUNCTION public.maais_heartbeat_service_instance(
     uuid, integer, timestamp with time zone
 ) OWNER TO maais_migrator;
+ALTER FUNCTION public.maais_stop_service_instance(
+    uuid, text, timestamp with time zone
+) OWNER TO maais_migrator;
 REVOKE ALL ON FUNCTION public._maais_utc_iso(timestamp with time zone) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public._maais_canonical_jsonb(jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.maais_enqueue_operator_command(
@@ -860,6 +915,9 @@ REVOKE ALL ON FUNCTION public.maais_register_service_instance(
 REVOKE ALL ON FUNCTION public.maais_heartbeat_service_instance(
     uuid, integer, timestamp with time zone
 ) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.maais_stop_service_instance(
+    uuid, text, timestamp with time zone
+) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.maais_enqueue_operator_command(
     uuid, uuid, text, text, text, text, jsonb, boolean, timestamp with time zone
 ) TO maais_web;
@@ -869,6 +927,9 @@ GRANT EXECUTE ON FUNCTION public.maais_register_service_instance(
 ) TO maais_migrator, maais_worker, maais_web, maais_ops, maais_verifier;
 GRANT EXECUTE ON FUNCTION public.maais_heartbeat_service_instance(
     uuid, integer, timestamp with time zone
+) TO maais_migrator, maais_worker, maais_web, maais_ops, maais_verifier;
+GRANT EXECUTE ON FUNCTION public.maais_stop_service_instance(
+    uuid, text, timestamp with time zone
 ) TO maais_migrator, maais_worker, maais_web, maais_ops, maais_verifier;
 """.strip()
 
@@ -886,7 +947,7 @@ BEGIN
         ) FROM PUBLIC;
         GRANT EXECUTE ON FUNCTION public.maais_append_audit_event(
             uuid, text, text, text, text, jsonb, uuid, uuid, timestamp with time zone
-        ) TO maais_migrator, maais_worker, maais_web, maais_ops;
+        ) TO maais_migrator, maais_worker, maais_web, maais_ops, maais_verifier;
     END IF;
     IF pg_catalog.to_regprocedure('public._maais_audit_evidence_safe(jsonb)') IS NOT NULL THEN
         ALTER FUNCTION public._maais_audit_evidence_safe(jsonb) OWNER TO maais_migrator;

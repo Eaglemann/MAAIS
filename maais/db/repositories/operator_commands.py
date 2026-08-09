@@ -14,9 +14,17 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from maais.db.models.operations import OperatorCommandModel
+from maais.db.models.platform import RunInstanceModel, ServiceInstanceModel
 from maais.db.repositories.events import EventRepository
+from maais.db.repositories.observability import ObservabilityRepository
 from maais.domain.events import NewDomainEvent
 from maais.domain.json import JsonValue, MutableJsonValue, freeze_json, to_json_data
+from maais.observability.audit import (
+    AuditSourceRole,
+    bounded_reason_code,
+    deterministic_audit_event_id,
+    pseudonymous_reference,
+)
 from maais.operations.operator_commands import CommandStatus, CommandType, OperatorCommand
 
 
@@ -84,9 +92,15 @@ def _verify(row: OperatorCommandModel) -> OperatorCommand:
 
 
 class OperatorCommandRepository:
-    def __init__(self, session: AsyncSession, events: EventRepository) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        events: EventRepository,
+        observability: ObservabilityRepository,
+    ) -> None:
         self._session = session
         self._events = events
+        self._observability = observability
 
     async def enqueue(self, command: OperatorCommand) -> OperatorCommandWriteResult:
         if command.status is not CommandStatus.REQUESTED:
@@ -300,6 +314,13 @@ class OperatorCommandRepository:
             current.version,
             (_new_event(accepted, "operator_command.accepted", accepted_at),),
         )
+        await self._audit_command(
+            accepted,
+            worker_id=worker_id,
+            event_code="operator.command.accepted",
+            reason_code="worker_claimed",
+            occurred_at=accepted_at,
+        )
         return accepted
 
     async def complete(
@@ -316,6 +337,14 @@ class OperatorCommandRepository:
             raise OperatorCommandConflict("operator command belongs to a different worker")
         completed = current.complete(completed_at=completed_at, result=result)
         if completed == current:
+            assert current.completed_at is not None
+            await self._audit_command(
+                current,
+                worker_id=worker_id,
+                event_code="operator.command.completed",
+                reason_code="command_completed",
+                occurred_at=current.completed_at,
+            )
             return current
         row.status = completed.status.value
         row.version = completed.version
@@ -327,6 +356,13 @@ class OperatorCommandRepository:
             "operator_command",
             current.version,
             (_new_event(completed, "operator_command.completed", completed_at),),
+        )
+        await self._audit_command(
+            completed,
+            worker_id=worker_id,
+            event_code="operator.command.completed",
+            reason_code="command_completed",
+            occurred_at=completed_at,
         )
         return completed
 
@@ -349,6 +385,22 @@ class OperatorCommandRepository:
             detail=detail,
         )
         if rejected == current:
+            assert current.completed_at is not None
+            stored_reason = (
+                str(current.result.get("reason_code"))
+                if current.result is not None
+                else "command_rejected"
+            )
+            await self._audit_command(
+                current,
+                worker_id=worker_id,
+                event_code="operator.command.rejected",
+                reason_code=bounded_reason_code(
+                    stored_reason,
+                    fallback="command_rejected",
+                ),
+                occurred_at=current.completed_at,
+            )
             return current
         row.status = rejected.status.value
         row.version = rejected.version
@@ -361,7 +413,73 @@ class OperatorCommandRepository:
             current.version,
             (_new_event(rejected, "operator_command.rejected", completed_at),),
         )
+        await self._audit_command(
+            rejected,
+            worker_id=worker_id,
+            event_code="operator.command.rejected",
+            reason_code=bounded_reason_code(reason_code, fallback="command_rejected"),
+            occurred_at=completed_at,
+        )
         return rejected
+
+    async def _audit_command(
+        self,
+        command: OperatorCommand,
+        *,
+        worker_id: str,
+        event_code: str,
+        reason_code: str,
+        occurred_at: datetime,
+    ) -> None:
+        run_id: UUID | None = None
+        raw_run_id = command.payload.get("run_id")
+        if isinstance(raw_run_id, str):
+            try:
+                candidate_run_id = UUID(raw_run_id)
+            except ValueError:
+                candidate_run_id = None
+            if candidate_run_id is not None:
+                run = await self._session.get(RunInstanceModel, candidate_run_id)
+                if run is not None and run.experiment_id == command.experiment_id:
+                    run_id = candidate_run_id
+
+        service_boot_id: UUID | None = None
+        prefix = "paper_worker:"
+        if worker_id.startswith(prefix):
+            try:
+                candidate_boot_id = UUID(worker_id[len(prefix) :])
+            except ValueError:
+                candidate_boot_id = None
+            if candidate_boot_id is not None:
+                service = await self._session.get(ServiceInstanceModel, candidate_boot_id)
+                if (
+                    service is not None
+                    and service.service_role == "worker"
+                    and (run_id is None or service.run_id == run_id)
+                ):
+                    service_boot_id = candidate_boot_id
+
+        await self._observability.append_audit(
+            event_id=deterministic_audit_event_id(
+                event_code,
+                f"{command.command_id}:{command.version}",
+            ),
+            source_role=AuditSourceRole.WORKER,
+            actor_reference=pseudonymous_reference("service", worker_id),
+            session_reference=None,
+            event_code=event_code,
+            reason_code=reason_code,
+            evidence={
+                "command_id": str(command.command_id),
+                "command_type": command.command_type.value,
+                "experiment_id": str(command.experiment_id),
+                "status": command.status.value,
+                "version": command.version,
+            },
+            run_id=run_id,
+            service_boot_id=service_boot_id,
+            occurred_at=occurred_at,
+        )
 
     async def _locked(self, command_id: UUID) -> OperatorCommandModel:
         row = await self._session.scalar(

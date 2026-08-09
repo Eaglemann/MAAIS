@@ -65,6 +65,7 @@ class AuditSourceRole(StrEnum):
     WORKER = "worker"
     OPERATIONS = "operations"
     MIGRATOR = "migrator"
+    VERIFIER = "verifier"
 
 
 AUDIT_EVENT_CODES_BY_SOURCE: Mapping[AuditSourceRole, frozenset[str]] = MappingProxyType(
@@ -79,6 +80,8 @@ AUDIT_EVENT_CODES_BY_SOURCE: Mapping[AuditSourceRole, frozenset[str]] = MappingP
                 "auth.session.expired",
                 "auth.session.revoked",
                 "operator.command.enqueued",
+                "service.booted",
+                "service.stopped",
             }
         ),
         AuditSourceRole.WORKER: frozenset(
@@ -113,6 +116,12 @@ AUDIT_EVENT_CODES_BY_SOURCE: Mapping[AuditSourceRole, frozenset[str]] = MappingP
             {
                 "migration.completed",
                 "migration.started",
+                "service.booted",
+                "service.stopped",
+            }
+        ),
+        AuditSourceRole.VERIFIER: frozenset(
+            {
                 "service.booted",
                 "service.stopped",
             }
@@ -395,6 +404,15 @@ def deterministic_audit_event_id(event_code: str, identity: object) -> UUID:
     if not rendered or len(rendered) > 2_048:
         raise ValueError("audit event identity must be 1-2048 characters")
     return uuid5(_AUDIT_EVENT_NAMESPACE, f"{event_code}\x00{rendered}")
+
+
+def bounded_reason_code(value: str, *, fallback: str) -> str:
+    """Retain declared machine codes while keeping free-form text out of audit fields."""
+
+    _require_code(fallback, "audit fallback reason_code", _REASON_CODE_PATTERN)
+    if isinstance(value, str) and len(value) <= 128 and _REASON_CODE_PATTERN.fullmatch(value):
+        return value
+    return fallback
 
 
 def health_deduplication_key(run_id: UUID, failed_check_names: Iterable[str]) -> str:

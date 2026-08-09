@@ -23,7 +23,7 @@ from maais.domain.json import MutableJsonValue
 _WEB_EVENTS = (
     "'auth.csrf.rejected','auth.login.locked','auth.login.rejected',"
     "'auth.login.succeeded','auth.logout','auth.session.expired',"
-    "'auth.session.revoked','operator.command.enqueued'"
+    "'auth.session.revoked','operator.command.enqueued','service.booted','service.stopped'"
 )
 _WORKER_EVENTS = (
     "'operator.command.accepted','operator.command.completed','operator.command.rejected',"
@@ -35,6 +35,7 @@ _OPERATIONS_EVENTS = (
     "'restore.failed','restore.succeeded','service.booted','service.stopped'"
 )
 _MIGRATOR_EVENTS = "'migration.completed','migration.started','service.booted','service.stopped'"
+_VERIFIER_EVENTS = "'service.booted','service.stopped'"
 
 
 class AuditEventModel(Base):
@@ -64,7 +65,7 @@ class AuditEventModel(Base):
             name="ck_audit_event_content_hash",
         ),
         CheckConstraint(
-            "source_role IN ('web','worker','operations','migrator')",
+            "source_role IN ('web','worker','operations','migrator','verifier')",
             name="ck_audit_event_source_role",
         ),
         CheckConstraint(
@@ -83,7 +84,8 @@ class AuditEventModel(Base):
             f"(source_role = 'web' AND event_code IN ({_WEB_EVENTS})) OR "
             f"(source_role = 'worker' AND event_code IN ({_WORKER_EVENTS})) OR "
             f"(source_role = 'operations' AND event_code IN ({_OPERATIONS_EVENTS})) OR "
-            f"(source_role = 'migrator' AND event_code IN ({_MIGRATOR_EVENTS}))",
+            f"(source_role = 'migrator' AND event_code IN ({_MIGRATOR_EVENTS})) OR "
+            f"(source_role = 'verifier' AND event_code IN ({_VERIFIER_EVENTS}))",
             name="ck_audit_event_role_code",
         ),
         CheckConstraint(

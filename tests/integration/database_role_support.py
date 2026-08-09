@@ -20,6 +20,12 @@ async def cleanup_database_roles(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as connection:
         await connection.execute(
             text(
+                "DROP FUNCTION IF EXISTS public.maais_stop_service_instance("
+                "uuid, text, timestamp with time zone)"
+            )
+        )
+        await connection.execute(
+            text(
                 "DROP FUNCTION IF EXISTS public.maais_heartbeat_service_instance("
                 "uuid, integer, timestamp with time zone)"
             )

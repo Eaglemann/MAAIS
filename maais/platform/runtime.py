@@ -17,8 +17,16 @@ from maais.config.cloud import (
     DATABASE_ROLE_BY_SERVICE,
     EU_WEST_RAILWAY_REGION,
     DeploymentTarget,
+    ServiceRole,
 )
 from maais.config.settings import Settings
+from maais.db.repositories.observability import ObservabilityRepository
+from maais.observability.audit import (
+    AuditSourceRole,
+    bounded_reason_code,
+    deterministic_audit_event_id,
+    pseudonymous_reference,
+)
 from maais.platform.identity import CandidateDescriptor, RailwayRuntimeIdentity
 
 
@@ -75,6 +83,14 @@ _PROCESS_BOOT = ProcessBootIdentity(
     boot_id=uuid4(),
     started_at=datetime.now(timezone.utc),
 )
+
+_AUDIT_SOURCE_BY_SERVICE_ROLE = {
+    ServiceRole.MIGRATOR: AuditSourceRole.MIGRATOR,
+    ServiceRole.WORKER: AuditSourceRole.WORKER,
+    ServiceRole.WEB: AuditSourceRole.WEB,
+    ServiceRole.OPERATIONS: AuditSourceRole.OPERATIONS,
+    ServiceRole.VERIFIER: AuditSourceRole.VERIFIER,
+}
 
 
 def process_boot_identity() -> ProcessBootIdentity:
@@ -214,6 +230,64 @@ async def verify_configured_runtime_identity(
         await engine.dispose()
 
 
+async def stop_registered_runtime(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    identity: RailwayRuntimeIdentity,
+    reason_code: str,
+    stopped_at: datetime,
+) -> None:
+    if bounded_reason_code(reason_code, fallback="service_stopped") != reason_code:
+        raise RuntimeIdentityError("service stop reason must be a stable code")
+    try:
+        async with session_factory() as session:
+            async with session.begin():
+                await session.execute(text("SET TRANSACTION READ WRITE"))
+                run_id = await session.scalar(
+                    text("SELECT run_id FROM public.service_instances WHERE boot_id = :boot_id"),
+                    {"boot_id": identity.boot_id},
+                )
+                stopped = await session.scalar(
+                    text(
+                        "SELECT public.maais_stop_service_instance("
+                        ":boot_id, :reason_code, :stopped_at)"
+                    ),
+                    {
+                        "boot_id": identity.boot_id,
+                        "reason_code": reason_code,
+                        "stopped_at": stopped_at,
+                    },
+                )
+                if stopped != identity.boot_id:
+                    raise RuntimeIdentityError("service stop returned wrong identity")
+                await ObservabilityRepository(session).append_audit(
+                    event_id=deterministic_audit_event_id(
+                        "service.stopped",
+                        identity.boot_id,
+                    ),
+                    source_role=_AUDIT_SOURCE_BY_SERVICE_ROLE[identity.service_role],
+                    actor_reference=pseudonymous_reference("service", identity.boot_id),
+                    session_reference=None,
+                    event_code="service.stopped",
+                    reason_code=reason_code,
+                    evidence={
+                        "candidate_hash": identity.candidate_hash,
+                        "deployment_id": identity.deployment_id,
+                        "service_id": identity.service_id,
+                        "service_role": identity.service_role.value,
+                    },
+                    run_id=run_id if isinstance(run_id, UUID) else None,
+                    service_boot_id=identity.boot_id,
+                    occurred_at=stopped_at,
+                )
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) == "23505":
+            raise RuntimeIdentityError("service stop evidence conflicts") from exc
+        raise RuntimeIdentityError("service stop registration failed") from exc
+    except SQLAlchemyError as exc:
+        raise RuntimeIdentityError("service stop registration failed") from exc
+
+
 def _load_embedded_descriptor(settings: Settings) -> CandidateDescriptor:
     path = settings.candidate_descriptor_path
     try:
@@ -304,6 +378,23 @@ async def _register_runtime_identity(
                 )
                 if registered != identity.boot_id:
                     raise RuntimeIdentityError("service boot registration returned wrong identity")
+                await ObservabilityRepository(session).append_audit(
+                    event_id=deterministic_audit_event_id("service.booted", identity.boot_id),
+                    source_role=_AUDIT_SOURCE_BY_SERVICE_ROLE[identity.service_role],
+                    actor_reference=pseudonymous_reference("service", identity.boot_id),
+                    session_reference=None,
+                    event_code="service.booted",
+                    reason_code="runtime_identity_verified",
+                    evidence={
+                        "candidate_hash": identity.candidate_hash,
+                        "deployment_id": identity.deployment_id,
+                        "service_id": identity.service_id,
+                        "service_role": identity.service_role.value,
+                    },
+                    run_id=run_id,
+                    service_boot_id=identity.boot_id,
+                    occurred_at=identity.started_at,
+                )
     except DBAPIError as exc:
         if getattr(exc.orig, "sqlstate", None) == "23505":
             raise RuntimeIdentityError("service boot identity conflicts") from exc

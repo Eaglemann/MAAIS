@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -14,7 +14,11 @@ from maais.config.cloud import EU_WEST_RAILWAY_REGION, DeploymentTarget, Service
 from maais.config.settings import Settings
 from maais.db.models.platform import ServiceInstanceModel
 from maais.operations.migrations import bootstrap_roles_with_url
-from maais.platform.runtime import RuntimeIdentityError, verify_and_register_runtime_evidence
+from maais.platform.runtime import (
+    RuntimeIdentityError,
+    stop_registered_runtime,
+    verify_and_register_runtime_evidence,
+)
 from tests.integration.database_role_support import (
     cleanup_database_roles,
     integration_role_passwords,
@@ -117,6 +121,7 @@ async def test_runtime_registration_uses_real_database_identity_and_freezes_boot
         }
         engines.extend(role_engines.values())
 
+        registered = {}
         for role, role_engine in role_engines.items():
             evidence = await verify_and_register_runtime_evidence(
                 settings=_settings(
@@ -134,6 +139,24 @@ async def test_runtime_registration_uses_real_database_identity_and_freezes_boot
             assert evidence.identity.service_role is role
             assert evidence.schema_revision == "0022"
             assert len(evidence.database_system_identifier_sha256) == 64
+            registered[role] = evidence.identity
+
+        for role, role_engine in role_engines.items():
+            await stop_registered_runtime(
+                session_factory=async_sessionmaker(role_engine, expire_on_commit=False),
+                identity=registered[role],
+                reason_code="clean_shutdown",
+                stopped_at=NOW + timedelta(seconds=1),
+            )
+        await stop_registered_runtime(
+            session_factory=async_sessionmaker(
+                role_engines[ServiceRole.WORKER],
+                expire_on_commit=False,
+            ),
+            identity=registered[ServiceRole.WORKER],
+            reason_code="clean_shutdown",
+            stopped_at=NOW + timedelta(seconds=1),
+        )
 
         async with db_engine.connect() as connection:
             rows = tuple(
@@ -143,6 +166,25 @@ async def test_runtime_registration_uses_real_database_identity_and_freezes_boot
             )
             await connection.rollback()
         assert set(rows) == set(ROLE_BOOT_IDS.values())
+        async with uow_factory.begin() as uow:
+            audit = await uow.observability.list_audit_events()
+        assert [event.event_code for event in audit] == [
+            *(["service.booted"] * 5),
+            *(["service.stopped"] * 5),
+        ]
+        assert [event.source_role.value for event in audit] == [
+            "web",
+            "worker",
+            "operations",
+            "verifier",
+            "migrator",
+            "web",
+            "worker",
+            "operations",
+            "verifier",
+            "migrator",
+        ]
+        assert {event.service_boot_id for event in audit} == set(ROLE_BOOT_IDS.values())
 
         with pytest.raises(RuntimeIdentityError, match="database role"):
             await verify_and_register_runtime_evidence(

@@ -19,6 +19,7 @@ from maais.config.cloud import DeploymentTarget
 from maais.config.settings import get_settings
 from maais.core.logging import configure_logging, get_logger
 from maais.db.connection import get_session_factory
+from maais.db.repositories.observability import ObservabilityRepository
 from maais.db.repositories.platform import PlatformRepository
 from maais.db.roles import load_database_role_passwords
 from maais.live import (
@@ -849,7 +850,10 @@ async def _active_cloud_timed_run(railway_environment_id: str) -> bool:
     async with session_factory() as session:
         async with session.begin():
             await establish_read_only_snapshot(session)
-            active = await PlatformRepository(session).get_active_run(railway_environment_id)
+            active = await PlatformRepository(
+                session,
+                ObservabilityRepository(session),
+            ).get_active_run(railway_environment_id)
     return active is not None
 
 

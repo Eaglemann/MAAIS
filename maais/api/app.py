@@ -70,6 +70,7 @@ from maais.db.connection import get_engine, get_session_factory
 from maais.db.models.experiments import ExperimentModel
 from maais.db.models.ledger import OutboxEventModel
 from maais.db.repositories.events import EventRepository
+from maais.db.repositories.observability import ObservabilityRepository
 from maais.db.repositories.operator_commands import (
     OperatorCommandConflict,
     OperatorCommandRepository,
@@ -903,7 +904,11 @@ def create_app(
         )
         if exists is None:
             raise LookupError(f"experiment not found: {experiment_id}")
-        repository = OperatorCommandRepository(session, EventRepository(session))
+        repository = OperatorCommandRepository(
+            session,
+            EventRepository(session),
+            ObservabilityRepository(session),
+        )
         items = await repository.list_for_experiment(
             experiment_id,
             status=status,
@@ -922,7 +927,11 @@ def create_app(
         command_id: UUID,
         session: AsyncSession = Depends(read_session),
     ) -> OperatorCommandView:
-        repository = OperatorCommandRepository(session, EventRepository(session))
+        repository = OperatorCommandRepository(
+            session,
+            EventRepository(session),
+            ObservabilityRepository(session),
+        )
         stored = await repository.get(command_id)
         return OperatorCommandView.model_validate(stored.to_dict())
 

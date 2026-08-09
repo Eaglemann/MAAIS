@@ -233,6 +233,44 @@ async def test_failed_operation_retries_monotonically_without_losing_failure(
     assert retried.generated_at == NOW
 
 
+async def test_failed_backup_restore_and_readiness_operations_are_audited(
+    uow_factory: UnitOfWork,
+) -> None:
+    await _prepare_authority(uow_factory)
+    operation_types = (
+        ScheduledOperationType.LOGICAL_BACKUP,
+        ScheduledOperationType.RESTORE_DRILL,
+        ScheduledOperationType.SOAK_VERDICT,
+    )
+    async with uow_factory.begin() as uow:
+        for offset, operation_type in enumerate(operation_types, start=1):
+            candidate = ScheduledOperation.start(
+                operation_id=UUID(int=offset),
+                run_id=RUN_ID,
+                experiment_id=EXPERIMENT_ID,
+                operation_type=operation_type,
+                berlin_date=BERLIN_DATE,
+                owner_boot_id=OWNER_ONE,
+                generated_at=NOW + timedelta(seconds=offset),
+                started_at=NOW + timedelta(seconds=offset + 1),
+            )
+            operation = await uow.scheduled_operations.acquire(candidate)
+            await uow.scheduled_operations.fail(
+                operation.id,
+                owner_boot_id=OWNER_ONE,
+                reason_code=f"{operation_type.value}_failed",
+                failed_at=NOW + timedelta(minutes=offset),
+            )
+        audit = await uow.observability.list_audit_events()
+
+    assert [event.event_code for event in audit if event.event_code != "service.booted"] == [
+        "backup.failed",
+        "restore.failed",
+        "readiness.verdict",
+    ]
+    assert audit[-1].reason_code == "soak_verdict_failed"
+
+
 async def test_database_trigger_rejects_same_owner_restart_while_operation_is_running(
     uow_factory: UnitOfWork,
 ) -> None:
@@ -248,6 +286,21 @@ async def test_database_trigger_rejects_same_owner_restart_while_operation_is_ru
                     attempt=operation.attempt + 1,
                     started_at=operation.started_at + timedelta(minutes=1),
                 )
+            )
+
+
+async def test_operation_cannot_complete_with_uncataloged_artifact_identity(
+    uow_factory: UnitOfWork,
+) -> None:
+    await _prepare_authority(uow_factory)
+    operation = await _acquire_operation(uow_factory)
+    with pytest.raises(ScheduledOperationConflict, match="cataloged"):
+        async with uow_factory.begin() as uow:
+            await uow.scheduled_operations.complete(
+                operation.id,
+                owner_boot_id=OWNER_ONE,
+                result_artifact_ids=(UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),),
+                completed_at=NOW + timedelta(minutes=1),
             )
 
 
@@ -345,6 +398,7 @@ async def test_successful_record_is_idempotent_immutable_and_marks_attempt_succe
             completed_at=NOW + timedelta(minutes=4),
         )
         stored_attempt = await uow.session.get(ArtifactPublicationAttemptModel, attempt.id)
+        audit = await uow.observability.list_audit_events()
 
     changed = _record(
         record_id=UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"),
@@ -362,6 +416,12 @@ async def test_successful_record_is_idempotent_immutable_and_marks_attempt_succe
     assert completed.result_artifact_ids == (record.id,)
     assert stored_attempt is not None
     assert stored_attempt.status == PublicationAttemptStatus.SUCCEEDED.value
+    assert [event.event_code for event in audit if event.event_code != "service.booted"] == [
+        "artifact.published",
+    ]
+    publication = next(event for event in audit if event.event_code == "artifact.published")
+    assert publication.evidence["artifact_record_id"] == str(record.id)
+    assert publication.evidence["artifact_type"] == record.artifact_type.value
 
 
 async def test_catalog_chain_requires_exact_previous_hash_and_revalidates_on_read(

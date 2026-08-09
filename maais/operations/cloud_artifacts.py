@@ -21,6 +21,11 @@ from maais.artifacts.publisher import ArtifactPublicationError
 from maais.config.cloud import ServiceRole
 from maais.config.settings import Settings
 from maais.db.unit_of_work import UnitOfWork
+from maais.observability.audit import (
+    AuditSourceRole,
+    deterministic_audit_event_id,
+    pseudonymous_reference,
+)
 from maais.operations.artifact_publication import (
     CloudArtifactIdentity,
     CloudDailyCloseAuthority,
@@ -253,12 +258,49 @@ async def restore_configured_cloud_backup(
             or source.candidate_hash != evidence.identity.candidate_hash
         ):
             raise ValueError("restore source differs from verified runtime authority")
-        paths, passed = await restore_canonical_backup_artifact(
-            uow_factory=runtime.uow_factory,
-            canonical_store=runtime.canonical_store,
+        attempt_started_at = datetime.now(UTC)
+        try:
+            paths, passed = await restore_canonical_backup_artifact(
+                uow_factory=runtime.uow_factory,
+                canonical_store=runtime.canonical_store,
+                artifact_record_id=artifact_record_id,
+                target_database_url=target_url,
+                output_directory=output_directory,
+            )
+        except Exception as error:
+            try:
+                await _append_restore_audit(
+                    runtime.uow_factory,
+                    evidence=evidence,
+                    artifact_record_id=artifact_record_id,
+                    run_id=source.run_id,
+                    attempt_started_at=attempt_started_at,
+                    passed=False,
+                    reason_code="restore_operation_failed",
+                )
+            except Exception as persistence_error:
+                LOGGER.error(
+                    "cloud_restore_failure_audit_persistence_failed",
+                    extra={
+                        "error_code": "restore_audit_persistence_failed",
+                        "operation_exception_type": type(error).__name__,
+                        "persistence_exception_type": type(persistence_error).__name__,
+                    },
+                    exc_info=(
+                        type(persistence_error),
+                        persistence_error,
+                        persistence_error.__traceback__,
+                    ),
+                )
+            raise
+        await _append_restore_audit(
+            runtime.uow_factory,
+            evidence=evidence,
             artifact_record_id=artifact_record_id,
-            target_database_url=target_url,
-            output_directory=output_directory,
+            run_id=source.run_id,
+            attempt_started_at=attempt_started_at,
+            passed=passed,
+            reason_code="restore_verified" if passed else "restore_verification_failed",
         )
         return {
             "artifact_record_id": str(artifact_record_id),
@@ -267,6 +309,45 @@ async def restore_configured_cloud_backup(
         }
     finally:
         await runtime.close()
+
+
+async def _append_restore_audit(
+    uow_factory: UnitOfWork,
+    *,
+    evidence: RuntimeIdentityEvidence,
+    artifact_record_id: UUID,
+    run_id: UUID,
+    attempt_started_at: datetime,
+    passed: bool,
+    reason_code: str,
+) -> None:
+    event_code = "restore.succeeded" if passed else "restore.failed"
+    completed_at = datetime.now(UTC)
+    async with uow_factory.begin() as uow:
+        await uow.observability.append_audit(
+            event_id=deterministic_audit_event_id(
+                event_code,
+                (
+                    f"{artifact_record_id}:{evidence.identity.boot_id}:"
+                    f"{attempt_started_at.isoformat()}"
+                ),
+            ),
+            source_role=AuditSourceRole.OPERATIONS,
+            actor_reference=pseudonymous_reference(
+                "service",
+                evidence.identity.boot_id,
+            ),
+            session_reference=None,
+            event_code=event_code,
+            reason_code=reason_code,
+            evidence={
+                "artifact_record_id": str(artifact_record_id),
+                "passed": passed,
+            },
+            run_id=run_id,
+            service_boot_id=evidence.identity.boot_id,
+            occurred_at=completed_at,
+        )
 
 
 async def _operations_evidence(settings: Settings, run_id: UUID) -> RuntimeIdentityEvidence:

@@ -18,6 +18,13 @@ from maais.db.models.platform import (
     RunInstanceModel,
     ServiceInstanceModel,
 )
+from maais.db.repositories.observability import ObservabilityRepository
+from maais.observability.audit import (
+    AuditSourceRole,
+    bounded_reason_code,
+    deterministic_audit_event_id,
+    pseudonymous_reference,
+)
 from maais.operations.operator_commands import CommandStatus, CommandType
 from maais.platform.identity import CandidateDescriptor, RailwayRuntimeIdentity
 from maais.platform.registry import (
@@ -42,8 +49,13 @@ class PlatformStateConflict(RuntimeError):
 class PlatformRepository:
     """Persist platform evidence without authority to mutate the trading event ledger."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        observability: ObservabilityRepository,
+    ) -> None:
         self._session = session
+        self._observability = observability
 
     async def register_candidate(
         self,
@@ -174,6 +186,12 @@ class PlatformRepository:
             and current.activating_worker_boot_id == worker_boot_id
             and current.started_at == started_at
         ):
+            await self._audit_run(
+                current,
+                event_code="run.started",
+                reason_code="operator_start_accepted",
+                occurred_at=started_at,
+            )
             return current
         updated = current.activate(
             command_id=command_id,
@@ -236,6 +254,12 @@ class PlatformRepository:
             raise PlatformStateConflict(
                 "run activation violates an authoritative identity"
             ) from exc
+        await self._audit_run(
+            updated,
+            event_code="run.started",
+            reason_code="operator_start_accepted",
+            occurred_at=started_at,
+        )
         return updated
 
     async def invalidate_run(
@@ -248,15 +272,33 @@ class PlatformRepository:
         row = await self._locked_run(run_id)
         updated = _run_from_row(row).invalidate(reason, invalidated_at)
         _write_run(row, updated)
+        await self._audit_run(
+            updated,
+            event_code="run.invalidated",
+            reason_code=bounded_reason_code(reason, fallback="run_invalidated"),
+            occurred_at=invalidated_at,
+        )
         return updated
 
-    async def complete_run(self, run_id: UUID) -> PlatformRun:
+    async def complete_run(self, run_id: UUID, *, completed_at: datetime) -> PlatformRun:
         row = await self._locked_run(run_id)
         current = _run_from_row(row)
         if current.status is RunStatus.COMPLETED:
+            await self._audit_run(
+                current,
+                event_code="run.completed",
+                reason_code="run_completed",
+                occurred_at=completed_at,
+            )
             return current
         updated = current.complete()
         _write_run(row, updated)
+        await self._audit_run(
+            updated,
+            event_code="run.completed",
+            reason_code="run_completed",
+            occurred_at=completed_at,
+        )
         return updated
 
     async def register_service_instance(self, instance: ServiceInstance) -> ServiceInstance:
@@ -283,6 +325,12 @@ class PlatformRepository:
             .returning(ServiceInstanceModel.boot_id)
         )
         if created_id is not None:
+            await self._audit_service(
+                instance,
+                event_code="service.booted",
+                reason_code="runtime_identity_verified",
+                occurred_at=instance.first_seen_at,
+            )
             return instance
         row = await self._locked_service(instance.boot_id)
         try:
@@ -291,6 +339,12 @@ class PlatformRepository:
             raise PlatformIdentityConflict("stored service boot identity is invalid") from exc
         if existing != instance:
             raise PlatformIdentityConflict("service boot identity has changed")
+        await self._audit_service(
+            existing,
+            event_code="service.booted",
+            reason_code="runtime_identity_verified",
+            occurred_at=existing.first_seen_at,
+        )
         return existing
 
     async def heartbeat_service_instance(
@@ -320,7 +374,80 @@ class PlatformRepository:
         updated = _service_from_row(row).stop(reason, stopped_at)
         row.stopped_at = updated.stopped_at
         row.terminal_reason = updated.terminal_reason
+        await self._audit_service(
+            updated,
+            event_code="service.stopped",
+            reason_code=bounded_reason_code(reason, fallback="service_stopped"),
+            occurred_at=stopped_at,
+        )
         return updated
+
+    async def _audit_service(
+        self,
+        instance: ServiceInstance,
+        *,
+        event_code: str,
+        reason_code: str,
+        occurred_at: datetime,
+    ) -> None:
+        source_role = {
+            ServiceRole.MIGRATOR: AuditSourceRole.MIGRATOR,
+            ServiceRole.WORKER: AuditSourceRole.WORKER,
+            ServiceRole.WEB: AuditSourceRole.WEB,
+            ServiceRole.OPERATIONS: AuditSourceRole.OPERATIONS,
+            ServiceRole.VERIFIER: AuditSourceRole.VERIFIER,
+        }[instance.identity.service_role]
+        await self._observability.append_audit(
+            event_id=deterministic_audit_event_id(event_code, instance.boot_id),
+            source_role=source_role,
+            actor_reference=pseudonymous_reference("service", instance.boot_id),
+            session_reference=None,
+            event_code=event_code,
+            reason_code=reason_code,
+            evidence={
+                "candidate_hash": instance.identity.candidate_hash,
+                "deployment_id": instance.identity.deployment_id,
+                "service_id": instance.identity.service_id,
+                "service_role": instance.identity.service_role.value,
+            },
+            run_id=instance.run_id,
+            service_boot_id=instance.boot_id,
+            occurred_at=occurred_at,
+        )
+
+    async def _audit_run(
+        self,
+        run: PlatformRun,
+        *,
+        event_code: str,
+        reason_code: str,
+        occurred_at: datetime,
+    ) -> None:
+        boot_id = run.activating_worker_boot_id
+        actor_reference = pseudonymous_reference(
+            "service" if boot_id is not None else "system",
+            boot_id or run.id,
+        )
+        evidence: dict[str, object] = {
+            "candidate_hash": run.candidate_hash,
+            "experiment_id": str(run.experiment_id),
+            "purpose": run.purpose.value,
+            "status": run.status.value,
+        }
+        if run.requested_operator_command_id is not None:
+            evidence["command_id"] = str(run.requested_operator_command_id)
+        await self._observability.append_audit(
+            event_id=deterministic_audit_event_id(event_code, run.id),
+            source_role=AuditSourceRole.WORKER,
+            actor_reference=actor_reference,
+            session_reference=None,
+            event_code=event_code,
+            reason_code=reason_code,
+            evidence=evidence,
+            run_id=run.id,
+            service_boot_id=boot_id,
+            occurred_at=occurred_at,
+        )
 
     async def get_run(self, run_id: UUID) -> PlatformRun:
         row = await self._session.get(RunInstanceModel, run_id)

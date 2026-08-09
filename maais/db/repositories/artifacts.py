@@ -24,6 +24,13 @@ from maais.db.models.artifacts import (
     ScheduledOperationModel,
 )
 from maais.db.models.platform import RunInstanceModel, ServiceInstanceModel
+from maais.db.repositories.observability import ObservabilityRepository
+from maais.observability.audit import (
+    AuditSourceRole,
+    bounded_reason_code,
+    deterministic_audit_event_id,
+    pseudonymous_reference,
+)
 
 
 class ArtifactCatalogConflict(RuntimeError):
@@ -35,8 +42,13 @@ class ArtifactCatalogIntegrityError(RuntimeError):
 
 
 class ArtifactRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        observability: ObservabilityRepository,
+    ) -> None:
         self._session = session
+        self._observability = observability
 
     async def start_attempt(
         self,
@@ -118,12 +130,14 @@ class ArtifactRepository:
         current = _attempt_from_row(row)
         if current.status is PublicationAttemptStatus.FAILED:
             if current.reason_code == reason_code and current.completed_at == failed_at:
+                await self._audit_failed_attempt(current)
                 return current
             raise ArtifactCatalogConflict("failed publication attempt evidence is immutable")
         if current.status is PublicationAttemptStatus.SUCCEEDED:
             raise ArtifactCatalogConflict("successful publication attempt cannot fail")
         updated = current.fail(reason_code=reason_code, failed_at=failed_at)
         _write_attempt(row, updated)
+        await self._audit_failed_attempt(updated)
         return updated
 
     async def record_publication(self, record: ArtifactRecord) -> ArtifactRecord:
@@ -147,6 +161,7 @@ class ArtifactRepository:
             restored = _record_from_row(existing)
             if restored != record:
                 raise ArtifactCatalogConflict("successful artifact record is immutable")
+            await self._audit_publication(restored)
             return restored
 
         attempt_row = await self._locked_attempt(record.publication_attempt_id)
@@ -213,7 +228,76 @@ class ArtifactRepository:
         if created_id is None:
             raise ArtifactCatalogConflict("artifact record conflicts with immutable catalog")
         _write_attempt(attempt_row, attempt.succeed(completed_at=record.recorded_at))
+        await self._audit_publication(record)
         return record
+
+    async def _audit_failed_attempt(self, attempt: ArtifactPublicationAttempt) -> None:
+        operation = await self._session.get(ScheduledOperationModel, attempt.operation_id)
+        if operation is None or attempt.completed_at is None or attempt.reason_code is None:
+            raise ArtifactCatalogIntegrityError(
+                "failed publication attempt lacks operation authority"
+            )
+        await self._observability.append_audit(
+            event_id=deterministic_audit_event_id(
+                "artifact.publication_failed",
+                attempt.id,
+            ),
+            source_role=AuditSourceRole.OPERATIONS,
+            actor_reference=pseudonymous_reference("service", operation.owner_boot_id),
+            session_reference=None,
+            event_code="artifact.publication_failed",
+            reason_code=bounded_reason_code(
+                attempt.reason_code,
+                fallback="artifact_publication_failed",
+            ),
+            evidence={
+                "attempt": attempt.attempt,
+                "attempt_id": str(attempt.id),
+                "operation_id": str(attempt.operation_id),
+            },
+            run_id=operation.run_id,
+            service_boot_id=operation.owner_boot_id,
+            occurred_at=attempt.completed_at,
+        )
+
+    async def _audit_publication(self, record: ArtifactRecord) -> None:
+        operation = await self._session.get(ScheduledOperationModel, record.operation_id)
+        if operation is None:
+            raise ArtifactCatalogIntegrityError("published artifact lacks operation authority")
+        evidence = {
+            "artifact_record_id": str(record.id),
+            "artifact_type": record.artifact_type.value,
+            "bundle_content_hash": record.bundle_content_hash,
+            "catalog_content_hash": record.catalog_content_hash,
+            "operation_id": str(record.operation_id),
+            "report_id": record.report_id,
+        }
+        actor_reference = pseudonymous_reference("service", operation.owner_boot_id)
+        await self._observability.append_audit(
+            event_id=deterministic_audit_event_id("artifact.published", record.id),
+            source_role=AuditSourceRole.OPERATIONS,
+            actor_reference=actor_reference,
+            session_reference=None,
+            event_code="artifact.published",
+            reason_code="dual_store_verified",
+            evidence=evidence,
+            run_id=record.run_id,
+            service_boot_id=operation.owner_boot_id,
+            occurred_at=record.recorded_at,
+        )
+        if record.artifact_type is ArtifactType.LOGICAL_BACKUP:
+            await self._observability.append_audit(
+                event_id=deterministic_audit_event_id("backup.succeeded", record.id),
+                source_role=AuditSourceRole.OPERATIONS,
+                actor_reference=actor_reference,
+                session_reference=None,
+                event_code="backup.succeeded",
+                reason_code="backup_published",
+                evidence=evidence,
+                run_id=record.run_id,
+                service_boot_id=operation.owner_boot_id,
+                occurred_at=record.recorded_at,
+            )
 
     async def list_stream(
         self,

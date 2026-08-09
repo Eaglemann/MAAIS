@@ -56,6 +56,7 @@ class UnitOfWork:
         async with self._session_factory() as session:
             async with session.begin():
                 events = EventRepository(session)
+                observability = ObservabilityRepository(session)
                 yield UnitOfWorkContext(
                     session=session,
                     events=events,
@@ -68,10 +69,13 @@ class UnitOfWork:
                     orchestration=OrchestrationRepository(session, events),
                     workers=WorkerLeaseRepository(session, events),
                     controls=TradingControlRepository(session, events),
-                    commands=OperatorCommandRepository(session, events),
-                    platform=PlatformRepository(session),
-                    artifacts=ArtifactRepository(session),
-                    scheduled_operations=ScheduledOperationRepository(session),
+                    commands=OperatorCommandRepository(session, events, observability),
+                    platform=PlatformRepository(session, observability),
+                    artifacts=ArtifactRepository(session, observability),
+                    scheduled_operations=ScheduledOperationRepository(
+                        session,
+                        observability,
+                    ),
                     sessions=OperatorSessionRepository(session),
-                    observability=ObservabilityRepository(session),
+                    observability=observability,
                 )

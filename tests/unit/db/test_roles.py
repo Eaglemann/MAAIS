@@ -133,6 +133,7 @@ def test_gateway_functions_are_fixed_search_path_and_caller_restricted() -> None
     assert "maais_enqueue_operator_command" in function_sql
     assert "maais_register_service_instance" in function_sql
     assert "maais_heartbeat_service_instance" in function_sql
+    assert "maais_stop_service_instance" in function_sql
     assert "maais_append_audit_event" in function_sql
     assert "REVOKE ALL" in function_sql
     assert "GRANT EXECUTE" in function_sql

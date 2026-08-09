@@ -30,6 +30,7 @@ _RUNTIME_SOURCE_BY_DATABASE_ROLE = {
     "maais_ops": AuditSourceRole.OPERATIONS,
     "maais_web": AuditSourceRole.WEB,
     "maais_worker": AuditSourceRole.WORKER,
+    "maais_verifier": AuditSourceRole.VERIFIER,
 }
 
 

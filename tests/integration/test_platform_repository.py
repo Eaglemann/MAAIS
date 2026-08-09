@@ -326,9 +326,16 @@ async def test_heartbeat_is_monotonic_and_terminal_stop_is_durable(
                 sequence=2,
                 heartbeat_at=NOW + timedelta(seconds=4),
             )
+        audit = await uow.observability.list_audit_events()
 
     assert heartbeat.heartbeat_sequence == 1
     assert stopped.terminal_reason == "clean_shutdown"
+    assert [event.event_code for event in audit] == [
+        "service.booted",
+        "service.stopped",
+    ]
+    assert audit[-1].reason_code == "clean_shutdown"
+    assert all(event.service_boot_id == WORKER_ONE for event in audit)
 
 
 async def test_run_invalidation_and_service_continuity_query_are_durable(
@@ -363,14 +370,61 @@ async def test_run_invalidation_and_service_continuity_query_are_durable(
     async with uow_factory.begin() as uow:
         restored = await uow.platform.get_run(RUN_ONE)
         services = await uow.platform.list_run_services(RUN_ONE)
+        audit = await uow.observability.list_audit_events()
         with pytest.raises(RunTransitionError, match="invalidated"):
-            await uow.platform.complete_run(RUN_ONE)
+            await uow.platform.complete_run(
+                RUN_ONE,
+                completed_at=NOW + timedelta(seconds=5),
+            )
 
     assert invalidated == restored
     assert restored.continuity_invalidated is True
     assert [service.identity.service_role for service in services] == [
         ServiceRole.WEB,
         ServiceRole.WORKER,
+    ]
+    assert [event.event_code for event in audit] == [
+        "operator.command.accepted",
+        "service.booted",
+        "service.booted",
+        "run.started",
+        "run.invalidated",
+    ]
+    assert audit[-1].reason_code == "worker_restarted"
+
+
+async def test_run_completion_has_one_idempotent_terminal_audit_event(
+    uow_factory: UnitOfWork,
+) -> None:
+    await _prepare_activatable_run(
+        uow_factory,
+        experiment_id=EXPERIMENT_ONE,
+        run_id=RUN_ONE,
+        command_id=COMMAND_ONE,
+        worker_boot_id=WORKER_ONE,
+    )
+    async with uow_factory.begin() as uow:
+        await uow.platform.activate_run(
+            RUN_ONE,
+            command_id=COMMAND_ONE,
+            worker_boot_id=WORKER_ONE,
+            started_at=NOW + timedelta(seconds=3),
+        )
+        completed = await uow.platform.complete_run(
+            RUN_ONE,
+            completed_at=NOW + timedelta(seconds=4),
+        )
+        repeated = await uow.platform.complete_run(
+            RUN_ONE,
+            completed_at=NOW + timedelta(seconds=4),
+        )
+        audit = await uow.observability.list_audit_events()
+
+    assert repeated == completed
+    assert completed.status is RunStatus.COMPLETED
+    assert [event.event_code for event in audit][-2:] == [
+        "run.started",
+        "run.completed",
     ]
 
 

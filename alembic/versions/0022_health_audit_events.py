@@ -19,7 +19,7 @@ depends_on: str | Sequence[str] | None = None
 _WEB_EVENTS = (
     "'auth.csrf.rejected','auth.login.locked','auth.login.rejected',"
     "'auth.login.succeeded','auth.logout','auth.session.expired',"
-    "'auth.session.revoked','operator.command.enqueued'"
+    "'auth.session.revoked','operator.command.enqueued','service.booted','service.stopped'"
 )
 _WORKER_EVENTS = (
     "'operator.command.accepted','operator.command.completed','operator.command.rejected',"
@@ -31,6 +31,7 @@ _OPERATIONS_EVENTS = (
     "'restore.failed','restore.succeeded','service.booted','service.stopped'"
 )
 _MIGRATOR_EVENTS = "'migration.completed','migration.started','service.booted','service.stopped'"
+_VERIFIER_EVENTS = "'service.booted','service.stopped'"
 _FORBIDDEN_EVIDENCE_KEY_PATTERN = (
     "_(access_key|account_equity|authorization|balance|body|client_secret|cookie|"
     "credentials|csrf|database_url|headers|local_storage|order_quantity|password|position|"
@@ -68,7 +69,7 @@ def upgrade() -> None:
             name="ck_audit_event_content_hash",
         ),
         sa.CheckConstraint(
-            "source_role IN ('web','worker','operations','migrator')",
+            "source_role IN ('web','worker','operations','migrator','verifier')",
             name="ck_audit_event_source_role",
         ),
         sa.CheckConstraint(
@@ -87,7 +88,8 @@ def upgrade() -> None:
             f"(source_role = 'web' AND event_code IN ({_WEB_EVENTS})) OR "
             f"(source_role = 'worker' AND event_code IN ({_WORKER_EVENTS})) OR "
             f"(source_role = 'operations' AND event_code IN ({_OPERATIONS_EVENTS})) OR "
-            f"(source_role = 'migrator' AND event_code IN ({_MIGRATOR_EVENTS}))",
+            f"(source_role = 'migrator' AND event_code IN ({_MIGRATOR_EVENTS})) OR "
+            f"(source_role = 'verifier' AND event_code IN ({_VERIFIER_EVENTS}))",
             name="ck_audit_event_role_code",
         ),
         sa.CheckConstraint(
@@ -375,6 +377,7 @@ BEGIN
         WHEN 'maais_web' THEN 'web'
         WHEN 'maais_worker' THEN 'worker'
         WHEN 'maais_ops' THEN 'operations'
+        WHEN 'maais_verifier' THEN 'verifier'
         ELSE NULL
     END;
     IF source_role IS NULL THEN
@@ -383,7 +386,8 @@ BEGIN
     IF (source_role = 'web' AND p_event_code NOT IN ({_WEB_EVENTS}))
         OR (source_role = 'worker' AND p_event_code NOT IN ({_WORKER_EVENTS}))
         OR (source_role = 'operations' AND p_event_code NOT IN ({_OPERATIONS_EVENTS}))
-        OR (source_role = 'migrator' AND p_event_code NOT IN ({_MIGRATOR_EVENTS})) THEN
+        OR (source_role = 'migrator' AND p_event_code NOT IN ({_MIGRATOR_EVENTS}))
+        OR (source_role = 'verifier' AND p_event_code NOT IN ({_VERIFIER_EVENTS})) THEN
         RAISE EXCEPTION 'audit event code is not approved for caller' USING ERRCODE = '42501';
     END IF;
     IF p_event_id IS NULL OR p_event_id = '00000000-0000-0000-0000-000000000000'::uuid
@@ -494,6 +498,9 @@ BEGIN
     IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'maais_verifier') THEN
         REVOKE ALL ON TABLE public.audit_events, public.health_evaluations FROM maais_verifier;
         GRANT SELECT ON TABLE public.audit_events, public.health_evaluations TO maais_verifier;
+        GRANT EXECUTE ON FUNCTION public.maais_append_audit_event(
+            uuid, text, text, text, text, jsonb, uuid, uuid, timestamp with time zone
+        ) TO maais_verifier;
     END IF;
 END
 $maais_audit_grants$;

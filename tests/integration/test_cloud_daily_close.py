@@ -203,6 +203,15 @@ async def test_cloud_daily_close_catalogs_exactly_one_report_and_backup_then_res
         ArtifactType.DAILY_REPORT,
         ArtifactType.LOGICAL_BACKUP,
     }
+    async with uow_factory.begin() as uow:
+        audit = await uow.observability.list_audit_events()
+    assert [event.event_code for event in audit if event.event_code != "service.booted"] == [
+        "artifact.published",
+        "artifact.published",
+        "backup.succeeded",
+        "daily_close.succeeded",
+    ]
+    assert audit[-1].evidence["operation_id"] == str(first.operation.id)
 
 
 async def test_cloud_daily_close_resumes_cataloged_report_after_backup_target_failure(
@@ -246,7 +255,13 @@ async def test_cloud_daily_close_resumes_cataloged_report_after_backup_target_fa
         assert failed_row is not None
         assert failed_row.status == ScheduledOperationStatus.FAILED.value
         records = await uow.artifacts.list_for_operation(failed_row.id)
+        failed_audit = await uow.observability.list_audit_events()
     assert [record.artifact_type for record in records] == [ArtifactType.DAILY_REPORT]
+    assert [event.event_code for event in failed_audit if event.event_code != "service.booted"] == [
+        "artifact.published",
+        "artifact.publication_failed",
+        "daily_close.failed",
+    ]
 
     async with uow_factory.begin() as uow:
         await uow.platform.stop_service_instance(

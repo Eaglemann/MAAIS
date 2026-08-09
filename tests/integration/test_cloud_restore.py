@@ -3,21 +3,25 @@ from __future__ import annotations
 import subprocess
 from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
 from maais.artifacts.models import ArtifactType
 from maais.artifacts.publisher import ArtifactPublisher, PublicationRequest
+from maais.config.cloud import ServiceRole
 from maais.db.unit_of_work import UnitOfWork
 from maais.operations.backups import (
     BackupMetadata,
     BackupProducerIdentity,
     create_database_backup,
 )
+from maais.operations.cloud_artifacts import _append_restore_audit
 from maais.operations.restores import (
     restore_canonical_backup_artifact,
     validate_cloud_restore_target_url,
 )
+from maais.platform.runtime import RuntimeIdentityEvidence
 from tests.integration.test_artifact_publisher import (
     MemoryArtifactStore,
     UUIDSequence,
@@ -26,11 +30,12 @@ from tests.integration.test_artifact_repository import (
     EXPERIMENT_ID,
     NOW,
     OPERATION_ID,
+    OWNER_ONE,
     RUN_ID,
     _acquire_operation,
     _prepare_authority,
 )
-from tests.integration.test_platform_repository import _descriptor
+from tests.integration.test_platform_repository import _descriptor, _service
 
 pytestmark = pytest.mark.integration
 
@@ -162,3 +167,49 @@ def test_cloud_restore_target_is_strictly_fresh_suffix_constrained() -> None:
             "maais",
             TARGET_URL.replace("maais_cloud_restore_test", "maais_copy"),
         )
+
+
+async def test_configured_restore_outcomes_append_privacy_safe_audit_events(
+    uow_factory: UnitOfWork,
+) -> None:
+    await _prepare_authority(uow_factory)
+    identity = _service(
+        run_id=RUN_ID,
+        boot_id=OWNER_ONE,
+        role=ServiceRole.OPERATIONS,
+        service_id="operations-1",
+    ).identity
+    evidence = RuntimeIdentityEvidence(
+        identity=identity,
+        schema_revision="0022",
+        database_system_identifier_sha256="b" * 64,
+    )
+    await _append_restore_audit(
+        uow_factory,
+        evidence=evidence,
+        artifact_record_id=UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        run_id=RUN_ID,
+        attempt_started_at=NOW + timedelta(minutes=4),
+        passed=True,
+        reason_code="restore_verified",
+    )
+    await _append_restore_audit(
+        uow_factory,
+        evidence=evidence,
+        artifact_record_id=UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        run_id=RUN_ID,
+        attempt_started_at=NOW + timedelta(minutes=5),
+        passed=False,
+        reason_code="restore_verification_failed",
+    )
+    async with uow_factory.begin() as uow:
+        audit = await uow.observability.list_audit_events()
+
+    assert [event.event_code for event in audit if event.event_code != "service.booted"] == [
+        "restore.succeeded",
+        "restore.failed",
+    ]
+    assert audit[-1].evidence == {
+        "artifact_record_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "passed": False,
+    }

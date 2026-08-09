@@ -15,8 +15,15 @@ from maais.artifacts.models import (
     ScheduledOperationType,
 )
 from maais.config.cloud import ServiceRole
-from maais.db.models.artifacts import ScheduledOperationModel
+from maais.db.models.artifacts import ArtifactRecordModel, ScheduledOperationModel
 from maais.db.models.platform import RunInstanceModel, ServiceInstanceModel
+from maais.db.repositories.observability import ObservabilityRepository
+from maais.observability.audit import (
+    AuditSourceRole,
+    bounded_reason_code,
+    deterministic_audit_event_id,
+    pseudonymous_reference,
+)
 
 
 class ScheduledOperationConflict(RuntimeError):
@@ -24,8 +31,13 @@ class ScheduledOperationConflict(RuntimeError):
 
 
 class ScheduledOperationRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        observability: ObservabilityRepository,
+    ) -> None:
         self._session = session
+        self._observability = observability
 
     async def acquire(self, candidate: ScheduledOperation) -> ScheduledOperation:
         if candidate.status is not ScheduledOperationStatus.RUNNING or candidate.attempt != 1:
@@ -103,10 +115,12 @@ class ScheduledOperationRepository:
             raise ScheduledOperationConflict("only the current owner can fail an operation")
         if current.status is ScheduledOperationStatus.FAILED:
             if current.reason_code == reason_code and current.completed_at == failed_at:
+                await self._audit_terminal(current)
                 return current
             raise ScheduledOperationConflict("failed operation terminal evidence is immutable")
         updated = current.fail(reason_code=reason_code, failed_at=failed_at)
         _write_operation(row, updated)
+        await self._audit_terminal(updated)
         return updated
 
     async def complete(
@@ -121,11 +135,30 @@ class ScheduledOperationRepository:
         current = _operation_from_row(row)
         if current.owner_boot_id != owner_boot_id:
             raise ScheduledOperationConflict("only the current owner can complete an operation")
+        records = tuple(
+            await self._session.scalars(
+                select(ArtifactRecordModel).where(ArtifactRecordModel.id.in_(result_artifact_ids))
+            )
+        )
+        if (
+            len(records) != len(result_artifact_ids)
+            or {record.id for record in records} != set(result_artifact_ids)
+            or any(
+                record.operation_id != current.id
+                or record.run_id != current.run_id
+                or record.experiment_id != current.experiment_id
+                for record in records
+            )
+        ):
+            raise ScheduledOperationConflict(
+                "operation results must be cataloged artifacts owned by the operation"
+            )
         if current.status is ScheduledOperationStatus.SUCCEEDED:
             if (
                 current.result_artifact_ids == result_artifact_ids
                 and current.completed_at == completed_at
             ):
+                await self._audit_terminal(current)
                 return current
             raise ScheduledOperationConflict("successful operation evidence is immutable")
         updated = current.succeed(
@@ -133,6 +166,7 @@ class ScheduledOperationRepository:
             completed_at=completed_at,
         )
         _write_operation(row, updated)
+        await self._audit_terminal(updated)
         return updated
 
     async def get(self, operation_id: UUID) -> ScheduledOperation:
@@ -180,6 +214,67 @@ class ScheduledOperationRepository:
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": key},
         )
+
+    async def _audit_terminal(self, operation: ScheduledOperation) -> None:
+        if operation.completed_at is None:
+            raise ScheduledOperationConflict("terminal operation lacks completion time")
+        event_code = _terminal_audit_event_code(operation)
+        if event_code is None:
+            return
+        if operation.status is ScheduledOperationStatus.SUCCEEDED:
+            reason_code = {
+                "daily_close.succeeded": "daily_close_completed",
+                "restore.succeeded": "restore_verified",
+                "readiness.verdict": "readiness_passed",
+            }.get(event_code, "operation_completed")
+        else:
+            reason_code = bounded_reason_code(
+                operation.reason_code or "operation_failed",
+                fallback="operation_failed",
+            )
+        await self._observability.append_audit(
+            event_id=deterministic_audit_event_id(
+                event_code,
+                f"{operation.id}:{operation.attempt}:{operation.status.value}",
+            ),
+            source_role=AuditSourceRole.OPERATIONS,
+            actor_reference=pseudonymous_reference("service", operation.owner_boot_id),
+            session_reference=None,
+            event_code=event_code,
+            reason_code=reason_code,
+            evidence={
+                "attempt": operation.attempt,
+                "berlin_date": operation.berlin_date.isoformat(),
+                "operation_id": str(operation.id),
+                "operation_type": operation.operation_type.value,
+                "result_artifact_ids": [
+                    str(artifact_id) for artifact_id in operation.result_artifact_ids
+                ],
+                "status": operation.status.value,
+            },
+            run_id=operation.run_id,
+            service_boot_id=operation.owner_boot_id,
+            occurred_at=operation.completed_at,
+        )
+
+
+def _terminal_audit_event_code(operation: ScheduledOperation) -> str | None:
+    succeeded = operation.status is ScheduledOperationStatus.SUCCEEDED
+    if operation.operation_type is ScheduledOperationType.DAILY_CLOSE:
+        return "daily_close.succeeded" if succeeded else "daily_close.failed"
+    if operation.operation_type is ScheduledOperationType.LOGICAL_BACKUP:
+        return None if succeeded else "backup.failed"
+    if operation.operation_type is ScheduledOperationType.RESTORE_DRILL:
+        return "restore.succeeded" if succeeded else "restore.failed"
+    if operation.operation_type in {
+        ScheduledOperationType.QUALIFICATION,
+        ScheduledOperationType.PREFLIGHT,
+        ScheduledOperationType.SOAK_VERDICT,
+    }:
+        return "readiness.verdict"
+    if operation.operation_type is ScheduledOperationType.ARTIFACT_PUBLICATION and not succeeded:
+        return "artifact.publication_failed"
+    return None
 
 
 def _operation_values(operation: ScheduledOperation) -> dict[str, object]:

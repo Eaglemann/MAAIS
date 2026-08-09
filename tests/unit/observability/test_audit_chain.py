@@ -11,6 +11,7 @@ from maais.observability.audit import (
     HealthEvaluation,
     HealthSeverity,
     HealthStatus,
+    bounded_reason_code,
     health_deduplication_key,
     pseudonymous_reference,
     verify_audit_chain,
@@ -120,6 +121,16 @@ def test_pseudonymous_references_are_stable_bounded_and_namespace_separated() ->
     assert "sole_operator" not in actor
     with pytest.raises(ValueError, match="namespace"):
         pseudonymous_reference("INVALID namespace", "value")
+
+
+def test_reason_codes_accept_only_stable_bounded_codes() -> None:
+    assert bounded_reason_code("worker_restarted", fallback="run_invalidated") == (
+        "worker_restarted"
+    )
+    assert bounded_reason_code("operator wrote free text", fallback="run_invalidated") == (
+        "run_invalidated"
+    )
+    assert bounded_reason_code("x" * 129, fallback="run_invalidated") == "run_invalidated"
 
 
 def test_health_evaluation_hashes_complete_snapshot_and_recovery_link() -> None:

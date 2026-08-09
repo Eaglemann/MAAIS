@@ -392,7 +392,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
 - [x] Implement audit append using `pg_advisory_xact_lock` and verification that recomputes the complete chain in sequence order.
 
-- [ ] Append audit events for login success/rejection/lockout, logout, session expiry/revocation, CSRF rejection, operator command enqueue, service boot/stop, run lifecycle, daily close, backup, restore, artifact publication, and readiness verdict. Store stable codes and pseudonymous actor/session references only.
+- [x] Append audit events for login success/rejection/lockout, logout, session expiry/revocation, CSRF rejection, operator command enqueue, service boot/stop, run lifecycle, daily close, backup, restore, artifact publication, and readiness verdict. Store stable codes and pseudonymous actor/session references only.
 
 - [x] Add fixed-search-path `SECURITY DEFINER` append functions for the web and worker event subsets, revoke `PUBLIC`, validate the original login role and allowed event codes, and reconcile grants after migration. Operations may append the approved operational subset; no runtime role receives direct update/delete authority on `audit_events`.
 
@@ -410,7 +410,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
   Expected: head is `0022`; all tests pass.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add alembic/versions/0022_health_audit_events.py maais/db/models/observability.py maais/observability/audit.py maais/db/repositories/observability.py maais/api/security.py maais/api/app.py maais/db/models/__init__.py maais/db/unit_of_work.py tests/integration/conftest.py tests/unit/observability/test_audit_chain.py tests/integration/test_health_audit_repository.py .github/workflows/ci.yml
