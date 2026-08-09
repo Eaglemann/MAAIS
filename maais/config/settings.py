@@ -84,11 +84,11 @@ class Settings(BaseSettings):
         default=0.0,
         validation_alias="SENTRY_PROFILES_SAMPLE_RATE",
     )
-    sentry_send_default_pii: Literal[False] = Field(
+    sentry_send_default_pii: bool = Field(
         default=False,
         validation_alias="SENTRY_SEND_DEFAULT_PII",
     )
-    sentry_session_replay_enabled: Literal[False] = Field(
+    sentry_session_replay_enabled: bool = Field(
         default=False,
         validation_alias="MAAIS_SENTRY_SESSION_REPLAY_ENABLED",
     )

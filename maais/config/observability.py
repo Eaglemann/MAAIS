@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Self
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
@@ -40,14 +40,16 @@ class ObservabilitySettings(BaseModel):
     browser_dsn: str = ""
     traces_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0, allow_inf_nan=False)
     profiles_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0, allow_inf_nan=False)
-    send_default_pii: Literal[False] = False
-    session_replay_enabled: Literal[False] = False
+    send_default_pii: bool = False
+    session_replay_enabled: bool = False
     daily_close_monitor_slug: str = ""
     backup_monitor_slug: str = ""
     evidence_monitor_slug: str = ""
 
     @model_validator(mode="after")
     def validate_observability_boundary(self) -> Self:
+        if self.send_default_pii or self.session_replay_enabled:
+            raise ValueError("Sentry PII and session replay must remain disabled")
         backend_dsn = self.backend_dsn.get_secret_value()
         dsn_values = (backend_dsn, self.browser_dsn)
         if any(dsn_values) and _GIT_RELEASE.fullmatch(self.release) is None:

@@ -367,6 +367,8 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
         "SENTRY_DSN": (
             "https://backend-public-key@o0.ingest.sentry.io/123"  # pragma: allowlist secret
         ),
+        "SENTRY_SEND_DEFAULT_PII": "false",
+        "MAAIS_SENTRY_SESSION_REPLAY_ENABLED": "false",
         "MAAIS_CANDIDATE_DESCRIPTOR_PATH": "/app/candidate.json",
         "VITE_SENTRY_DSN": (
             "https://browser-public-key@o0.ingest.sentry.io/456"  # pragma: allowlist secret
@@ -393,6 +395,22 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
     assert settings.cloud_run_id == UUID("11111111-1111-4111-8111-111111111111")
     assert settings.manifest_artifact_id == UUID("22222222-2222-4222-8222-222222222222")
     assert settings.port == 12_345
+    assert settings.sentry_send_default_pii is False
+    assert settings.sentry_session_replay_enabled is False
+
+
+@pytest.mark.parametrize(
+    "variable",
+    ("SENTRY_SEND_DEFAULT_PII", "MAAIS_SENTRY_SESSION_REPLAY_ENABLED"),
+)
+def test_railway_environment_rejects_enabling_pii_or_session_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+) -> None:
+    monkeypatch.setenv(variable, "true")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
 
 
 def test_railway_environment_is_qualification_or_production_json_runtime() -> None:
