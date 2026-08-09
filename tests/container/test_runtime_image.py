@@ -26,7 +26,6 @@ FORBIDDEN_PATH_PARTS = frozenset(
         ".ruff_cache",
         "__pycache__",
         "node_modules",
-        "test",
         "tests",
     }
 )
@@ -156,6 +155,37 @@ def test_application_permission_contract_rejects_writable_regular_entry() -> Non
 
     with pytest.raises(AssertionError, match=r"app/data.*0o644"):
         _assert_application_inventory_permissions(entries)
+
+
+def test_forbidden_inventory_allows_posix_test_binary_but_rejects_python_test_directory() -> None:
+    safe = ImageSnapshot(
+        config={},
+        files={
+            "usr/bin/test": ImageEntry(
+                path="usr/bin/test",
+                mode=0o755,
+                uid=0,
+                gid=0,
+                kind="file",
+            )
+        },
+    )
+    _assert_forbidden_inventory_absent(safe)
+
+    unsafe = ImageSnapshot(
+        config={},
+        files={
+            "opt/maais/.venv/lib/python3.12/site-packages/example/test": ImageEntry(
+                path="opt/maais/.venv/lib/python3.12/site-packages/example/test",
+                mode=0o555,
+                uid=0,
+                gid=0,
+                kind="dir",
+            )
+        },
+    )
+    with pytest.raises(AssertionError, match="example/test"):
+        _assert_forbidden_inventory_absent(unsafe)
 
 
 def test_oci_layout_reader_rejects_blob_bytes_that_do_not_match_descriptor(
@@ -344,6 +374,8 @@ def _assert_forbidden_inventory_absent(snapshot: ImageSnapshot) -> None:
     for path, entry in snapshot.files.items():
         parts = set(PurePosixPath(path).parts)
         assert not parts.intersection(FORBIDDEN_PATH_PARTS), path
+        if entry.kind == "dir" and PurePosixPath(path).name == "test":
+            assert not path.startswith(("app/", "opt/maais/", "usr/local/lib/python3.12/")), path
         assert not PurePosixPath(path).name.startswith(".env"), path
         assert not path.endswith((".map", ".pyc", ".pyo")), path
         assert "dist-sourcemaps" not in parts, path
