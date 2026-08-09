@@ -7,7 +7,7 @@ from types import TracebackType
 from uuid import UUID
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from maais.config.cloud import ServiceRole
@@ -261,12 +261,19 @@ async def test_database_health_reader_uses_one_read_only_snapshot_and_fails_miss
     uow_factory: UnitOfWork,
     db_engine: AsyncEngine,
 ) -> None:
+    async with db_engine.connect() as connection:
+        database_system_identifier = str(
+            await connection.scalar(
+                text("SELECT system_identifier::text FROM pg_catalog.pg_control_system()")
+            )
+        )
     await _prepare_activatable_run(
         uow_factory,
         experiment_id=EXPERIMENT_ONE,
         run_id=RUN_ONE,
         command_id=COMMAND_ONE,
         worker_boot_id=WORKER_ONE,
+        database_system_identifier=database_system_identifier,
     )
     operations = _service(
         run_id=RUN_ONE,
@@ -338,7 +345,9 @@ async def test_database_health_reader_uses_one_read_only_snapshot_and_fails_miss
     runtime = RuntimeIdentityEvidence(
         identity=operations.identity,
         schema_revision="0022",
-        database_system_identifier_sha256=hashlib.sha256(b"7669409277984608290").hexdigest(),
+        database_system_identifier_sha256=hashlib.sha256(
+            database_system_identifier.encode("ascii")
+        ).hexdigest(),
     )
     reader = DatabaseCloudHealthSnapshotReader(
         session_factory=async_sessionmaker(db_engine, expire_on_commit=False),

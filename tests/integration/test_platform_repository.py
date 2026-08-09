@@ -433,6 +433,7 @@ async def _prepare_run(
     *,
     experiment_id: UUID,
     run_id: UUID,
+    database_system_identifier: str = "7669409277984608290",
 ) -> PlatformRun:
     descriptor = _descriptor()
     manifest = _manifest(experiment_id=experiment_id, schema_revision="0022")
@@ -441,7 +442,7 @@ async def _prepare_run(
         experiment_id=experiment_id,
         candidate_hash=descriptor.descriptor_hash,
         manifest_hash=manifest.manifest_hash,
-        database_system_identifier="7669409277984608290",
+        database_system_identifier=database_system_identifier,
         railway_environment_id="environment-1",
         purpose=RunPurpose.SOAK,
         created_at=NOW,
@@ -473,8 +474,14 @@ async def _prepare_activatable_run(
     run_id: UUID,
     command_id: UUID,
     worker_boot_id: UUID,
+    database_system_identifier: str = "7669409277984608290",
 ) -> None:
-    await _prepare_run(uow_factory, experiment_id=experiment_id, run_id=run_id)
+    await _prepare_run(
+        uow_factory,
+        experiment_id=experiment_id,
+        run_id=run_id,
+        database_system_identifier=database_system_identifier,
+    )
     command = _start_command(experiment_id, run_id, command_id)
     async with uow_factory.begin() as uow:
         await uow.commands.enqueue(command)
