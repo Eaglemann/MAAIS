@@ -4,8 +4,8 @@ MAAIS is a local, auditable multi-agent research and paper-trading platform for
 USDT perpetual markets.
 
 > **Current status:** The local platform and Railway-ready paper runtime are implemented,
-> but deployment or a reachable website is **not readiness for the seven-day paper
-> experiment**. A fresh exact-commit 24-hour soak and immutable verdict must pass. The paper broker, authoritative event
+> but it is **not yet ready for the seven-day paper experiment**. Deployment or a reachable
+> website is not readiness. A fresh exact-commit 24-hour soak and immutable verdict must pass. The paper broker, authoritative event
 > ledger, live orchestrator, Mission Control dashboard, reporting, backup/restore,
 > and process drills are implemented. No live-money execution is in scope.
 

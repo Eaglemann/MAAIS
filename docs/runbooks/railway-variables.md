@@ -143,6 +143,22 @@ The migrator receives no run ID, manifest ID, web authentication secret, artifac
 credential, or Cron monitor. Its command is fixed to revision `0022` and its Railway
 restart policy is `NEVER`.
 
+The one-time role bootstrap receives the PostgreSQL administrator URL plus five independent
+sealed passwords. Enter them directly in the migrator Variables UI, run bootstrap once,
+then remove the administrator URL and all five bootstrap password variables before the
+ordinary migrator deployment:
+
+| Variable | Classification | Purpose |
+| --- | --- | --- |
+| `MAAIS_MIGRATOR_DATABASE_PASSWORD` | Sealed secret | Password for `maais_migrator` |
+| `MAAIS_WORKER_DATABASE_PASSWORD` | Sealed secret | Password for `maais_worker` |
+| `MAAIS_WEB_DATABASE_PASSWORD` | Sealed secret | Password for `maais_web` |
+| `MAAIS_OPERATIONS_DATABASE_PASSWORD` | Sealed secret | Password for `maais_ops` |
+| `MAAIS_VERIFIER_DATABASE_PASSWORD` | Sealed secret | Password for `maais_verifier` |
+
+Never share or reuse these values. Runtime services receive only their role-specific
+private connection URL, assembled as a Railway variable reference in the provider UI.
+
 ## Verifier service
 
 Only the verifier service may receive:
