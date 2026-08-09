@@ -11,10 +11,11 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v9
         with:
           enable-cache: true
+          version: "0.11.16"
       - run: uv sync --locked --dev
       - run: uv run ruff format --check .
       - run: uv run ruff check .
@@ -23,8 +24,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v9
+        with:
+          version: "0.11.16"
       - run: uv sync --locked --dev
       - run: uv run pytest -q
 
@@ -34,8 +37,8 @@ jobs:
       run:
         working-directory: dashboard
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -60,10 +63,10 @@ jobs:
       VITE_SENTRY_ENVIRONMENT: qualification
       VITE_SENTRY_RELEASE: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -100,7 +103,7 @@ jobs:
       - name: Verify map-free deployable inventory
         if: steps.sentry_secrets.outputs.configured == 'true'
         run: python3 scripts/verify_dashboard_assets.py dashboard/dist-sourcemaps
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.sentry_secrets.outputs.configured == 'true'
         with:
           name: mission-control-assets-${{ github.sha }}
@@ -111,8 +114,10 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v9
+        with:
+          version: "0.11.16"
       - run: uv sync --locked --dev
       - run: uv run pip-audit
       - run: >-
@@ -141,20 +146,25 @@ jobs:
       DATABASE_URL: postgresql+psycopg://maais:maais@localhost:5432/maais_test
       MAAIS_TEST_DATABASE_URL: postgresql+psycopg://maais:maais@localhost:5432/maais_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v9
         with:
           enable-cache: true
-      - uses: actions/setup-node@v4
+          version: "0.11.16"
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
       - run: uv sync --locked --dev
-      - run: uv run alembic upgrade head
+      - run: uv run alembic upgrade 0022
+      - run: uv run alembic downgrade 0018
+      - run: uv run alembic upgrade 0022
       - run: uv run alembic check
-      - run: uv run alembic downgrade -1
-      - run: uv run alembic upgrade head
+      - run: >-
+          uv run pytest -q
+          tests/integration/test_platform_schema.py
+          tests/integration/test_database_roles.py
       - run: >-
           uv run pytest -q
           --cov=maais.execution.paper
@@ -179,3 +189,93 @@ jobs:
       - run: >-
           PGPASSWORD=maais psql -h localhost -U maais -d maais_test -Atc
           'select version_num from alembic_version' | grep -Fx 0022
+
+  artifact-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v9
+        with:
+          version: "0.11.16"
+      - run: uv sync --locked --dev
+      - run: >-
+          uv run pytest -q
+          tests/contracts
+          tests/unit/artifacts
+          tests/unit/config/test_artifact_settings.py
+          tests/unit/operations/test_cloud_artifact_cron.py
+
+  redaction-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v9
+        with:
+          version: "0.11.16"
+      - run: uv sync --locked --dev
+      - run: >-
+          uv run pytest -q
+          tests/unit/observability/test_redaction.py
+          tests/unit/observability/test_structured_logging.py
+          tests/unit/observability/test_sentry.py
+          tests/unit/config/test_observability_settings.py
+
+  container-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v9
+        with:
+          version: "0.11.16"
+      - run: uv sync --locked --dev
+      - name: Create credential-free OCI candidate
+        run: |
+          docker buildx create --name maais-ci --driver docker-container --use
+          docker buildx inspect --bootstrap
+          image_archive="${RUNNER_TEMP}/maais-candidate.oci.tar"
+          docker buildx build \
+            --build-arg RAILWAY_GIT_COMMIT_SHA="${GITHUB_SHA}" \
+            --build-arg MAAIS_SOURCE_CLEAN=true \
+            --build-arg VITE_SENTRY_DSN=https://browser-public-key@o0.ingest.sentry.io/456 \
+            --build-arg VITE_SENTRY_ENVIRONMENT=qualification \
+            --output "type=oci,dest=${image_archive}" \
+            .
+          echo "MAAIS_TEST_IMAGE=${image_archive}" >> "${GITHUB_ENV}"
+      - run: uv run pytest -q tests/container
+      - name: Remove ephemeral OCI builder
+        if: always()
+        run: docker buildx rm maais-ci
+
+  release-candidate:
+    needs:
+      - quality
+      - test
+      - frontend
+      - security
+      - postgres-integration
+      - artifact-contract
+      - redaction-contract
+      - container-contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v9
+        with:
+          version: "0.11.16"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: uv sync --locked --dev
+      - run: npm ci
+        working-directory: dashboard
+      - run: npm run build
+        working-directory: dashboard
+        env:
+          VITE_SENTRY_DSN: https://browser-public-key@o0.ingest.sentry.io/456
+          VITE_SENTRY_ENVIRONMENT: qualification
+          VITE_SENTRY_RELEASE: ${{ github.sha }}
+      - run: ./scripts/verify-release-candidate.sh "${GITHUB_SHA}"

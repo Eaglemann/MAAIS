@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,37 @@ import pytest
 import yaml
 
 from scripts.verify_dashboard_assets import verify_dashboard_assets
+
+
+def test_inventory_can_require_one_exact_release(tmp_path: Path) -> None:
+    release = "a" * 40
+    content = b"safe"
+    (tmp_path / "index.js").write_bytes(content)
+    payload = {
+        "schema_version": 1,
+        "release": release,
+        "assets": [
+            {
+                "path": "index.js",
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+            }
+        ],
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    (tmp_path / "asset-manifest.json").write_text(
+        json.dumps(
+            {
+                **payload,
+                "manifest_hash": hashlib.sha256(canonical).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    verify_dashboard_assets(tmp_path, expected_release=release)
+    with pytest.raises(AssertionError, match="release does not match"):
+        verify_dashboard_assets(tmp_path, expected_release="b" * 40)
 
 
 def test_inventory_rejects_source_maps(tmp_path: Path) -> None:
@@ -67,7 +99,7 @@ def test_sentry_release_job_is_push_only_exact_release_and_secret_scoped() -> No
     serialized = json.dumps(release_job, sort_keys=True)
     assert "sentry-cli releases info" in serialized
     assert "scripts/verify_dashboard_assets.py dashboard/dist-sourcemaps" in serialized
-    assert "actions/upload-artifact@v4" in serialized
+    assert "actions/upload-artifact@v7" in serialized
 
     for name, job in jobs.items():
         if name != "frontend-sentry-release":

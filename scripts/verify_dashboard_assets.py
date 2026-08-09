@@ -9,7 +9,11 @@ import json
 from pathlib import Path, PurePosixPath
 
 
-def verify_dashboard_assets(directory: Path) -> dict[str, object]:
+def verify_dashboard_assets(
+    directory: Path,
+    *,
+    expected_release: str | None = None,
+) -> dict[str, object]:
     if not directory.is_dir():
         raise AssertionError(f"dashboard asset directory does not exist: {directory}")
     if directory.is_symlink():
@@ -48,6 +52,11 @@ def verify_dashboard_assets(directory: Path) -> dict[str, object]:
         )
     ):
         raise AssertionError("dashboard asset release must be a lowercase 40-character Git SHA")
+    if expected_release is not None:
+        if not (len(expected_release) == 40 and set(expected_release) <= set("0123456789abcdef")):
+            raise AssertionError("expected dashboard release must be one lowercase Git SHA")
+        if release != expected_release:
+            raise AssertionError("dashboard asset release does not match the expected Git SHA")
     assets = manifest["assets"]
     if not isinstance(assets, list) or not assets:
         raise AssertionError("dashboard asset inventory cannot be empty")
@@ -109,8 +118,12 @@ def verify_dashboard_assets(directory: Path) -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--expected-release")
     arguments = parser.parse_args()
-    manifest = verify_dashboard_assets(arguments.directory)
+    manifest = verify_dashboard_assets(
+        arguments.directory,
+        expected_release=arguments.expected_release,
+    )
     print(
         json.dumps(
             {

@@ -272,6 +272,9 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
 **Files:**
 
 - Modify: `.github/workflows/ci.yml`
+- Modify: `.secrets.baseline`
+- Modify: `scripts/verify_dashboard_assets.py`
+- Modify: `tests/container/test_dashboard_assets.py`
 - Create: `scripts/verify-release-candidate.sh`
 - Create: `tests/unit/platform/test_ci_contract.py`
 
@@ -279,23 +282,35 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
 
 **Produces:** Exact candidate CI gate, migration cycle, container proof, and current action runtimes.
 
-- [ ] Write workflow-structure tests requiring backend quality/test/security, frontend/browser, PostgreSQL integration/coverage, migration cycle, artifact conformance, redaction canaries, and container contract jobs. Require least-privilege permissions and forbid secrets in pull-request jobs.
+- [x] Write workflow-structure tests requiring backend quality/test/security, frontend/browser, PostgreSQL integration/coverage, migration cycle, artifact conformance, redaction canaries, and container contract jobs. Require least-privilege permissions and forbid secrets in pull-request jobs.
 
-- [ ] Write a test that fails on deprecated Node 20 action runtime majors observed by GitHub. During implementation, verify the latest official major release of `actions/checkout`, `actions/setup-node`, and `astral-sh/setup-uv`, then pin the compatible major and record the release URL in the commit notes, not the workflow.
+- [x] Write a test that fails on deprecated Node 20 action runtime majors observed by GitHub. During implementation, verify the latest official major release of `actions/checkout`, `actions/setup-node`, and `astral-sh/setup-uv`, then pin the compatible major and record the release URL in the commit notes, not the workflow.
 
-- [ ] Run the test and confirm the current action versions/coverage fail the new contract.
+  Verified on 2026-08-09 from the official release pages for
+  [`actions/checkout`](https://github.com/actions/checkout/releases),
+  [`actions/setup-node`](https://github.com/actions/setup-node/releases),
+  [`astral-sh/setup-uv`](https://github.com/astral-sh/setup-uv/releases), and
+  [`actions/upload-artifact`](https://github.com/actions/upload-artifact/releases).
+  The workflow uses majors `v6`, `v7`, `v9`, and `v7`, respectively, and every
+  `setup-uv` step installs the Dockerfile's exact `uv==0.11.16` tool version.
+
+- [x] Run the test and confirm the current action versions/coverage fail the new contract.
 
   ```bash
   uv run pytest -q tests/unit/platform/test_ci_contract.py
   ```
 
-- [ ] Add a PostgreSQL migration job that upgrades to `0022`, downgrades to `0018`, re-upgrades to `0022`, and runs schema parity/role tests against an isolated `_test` database.
+- [x] Add a PostgreSQL migration job that upgrades to `0022`, downgrades to `0018`, re-upgrades to `0022`, and runs schema parity/role tests against an isolated `_test` database.
 
-- [ ] Add artifact contract/redaction/security jobs and container static/runtime inspection. Never make the Sentry map upload token available to ordinary test/build steps.
+  The exact cycle runs at the start of the existing `postgres-integration` job so the
+  repository retains one isolated PostgreSQL service while still failing before coverage
+  or browser tests if migration parity or role tests fail.
 
-- [ ] Implement `verify-release-candidate.sh` as a read-only aggregator that checks exact commit, clean worktree, locks, schema head, descriptor inputs, and required CI job names; it does not deploy.
+- [x] Add artifact contract/redaction/security jobs and container static/runtime inspection. Never make the Sentry map upload token available to ordinary test/build steps.
 
-- [ ] Run local workflow-contract tests and all commands mirrored by CI.
+- [x] Implement `verify-release-candidate.sh` as a read-only aggregator that checks exact commit, clean worktree, locks, schema head, descriptor inputs, and required CI job names; it does not deploy.
+
+- [x] Run local workflow-contract tests and all commands mirrored by CI.
 
   ```bash
   uv run pytest -q tests/unit/platform/test_ci_contract.py tests/container
@@ -311,6 +326,13 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
   ```
 
   Expected: all commands exit `0`.
+
+  Local evidence: the exact 0022-to-0018-to-0022 cycle and 21 schema/role tests passed;
+  artifact and redaction suites passed 96 and 43 tests; frontend passed 42 tests,
+  typecheck, production build, asset verification, and an audit with zero vulnerabilities;
+  the final isolated-database suite passed 1,430 tests with one expected local skip. The
+  skipped OCI runtime assertion is purposefully supplied by the credential-free GitHub
+  Buildx job and must pass on the exact pushed commit before this task is complete.
 
 - [ ] Commit and push, then wait for exact-commit CI.
 
