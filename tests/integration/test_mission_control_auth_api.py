@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -75,7 +76,12 @@ async def _login(client: httpx.AsyncClient, password: str = PASSPHRASE) -> httpx
 
 async def _prepare_experiment(uow_factory: UnitOfWork) -> None:
     async with uow_factory.begin() as uow:
-        await uow.experiments.create(_manifest(experiment_id=EXPERIMENT_ID, schema_revision="0021"))
+        await uow.experiments.create(_manifest(experiment_id=EXPERIMENT_ID, schema_revision="0022"))
+
+
+async def _audit_events(uow_factory: UnitOfWork):
+    async with uow_factory.begin() as uow:
+        return await uow.observability.list_audit_events()
 
 
 async def test_cloud_login_sets_secure_cookie_and_exposes_secret_free_session_view(
@@ -108,6 +114,11 @@ async def test_cloud_login_sets_secure_cookie_and_exposes_secret_free_session_vi
         "expires_at": (NOW + timedelta(hours=12)).isoformat().replace("+00:00", "Z"),
     }
     assert session.headers["cache-control"] == "no-store"
+    audit = await _audit_events(uow_factory)
+    assert [event.event_code for event in audit] == ["auth.login.succeeded"]
+    assert audit[0].actor_reference.startswith("actor:")
+    assert audit[0].session_reference is not None
+    assert PASSPHRASE not in json.dumps(audit[0].to_json_data(), sort_keys=True)
 
 
 async def test_invalid_password_and_lockout_have_one_public_response_and_persist_count(
@@ -129,6 +140,15 @@ async def test_invalid_password_and_lockout_have_one_public_response_and_persist
         state = await uow.sessions.login_state(observed_at=NOW)
     assert state.failed_attempts == 5
     assert state.locked_until == NOW + timedelta(minutes=30)
+    audit = await _audit_events(uow_factory)
+    assert [event.event_code for event in audit] == [
+        "auth.login.rejected",
+        "auth.login.rejected",
+        "auth.login.rejected",
+        "auth.login.rejected",
+        "auth.login.locked",
+        "auth.login.locked",
+    ]
 
 
 async def test_login_payload_errors_never_echo_password() -> None:
@@ -180,6 +200,12 @@ async def test_csrf_bootstrap_requires_session_and_exact_origin_then_rotates_onl
     assert rotated.status_code == 200
     assert rotated.json()["csrf_token"] != first_csrf
     assert client.cookies.get("__Host-maais_session") == session_cookie
+    audit = await _audit_events(uow_factory)
+    assert [event.event_code for event in audit] == [
+        "auth.login.succeeded",
+        "auth.csrf.rejected",
+        "auth.csrf.rejected",
+    ]
 
 
 async def test_logout_requires_current_csrf_and_revokes_session(
@@ -210,6 +236,14 @@ async def test_logout_requires_current_csrf_and_revokes_session(
     assert logout.status_code == 204
     assert "Max-Age=0" in logout.headers["set-cookie"]
     assert session.json()["authenticated"] is False
+    audit = await _audit_events(uow_factory)
+    assert [event.event_code for event in audit] == [
+        "auth.login.succeeded",
+        "auth.csrf.rejected",
+        "auth.csrf.rejected",
+        "auth.session.revoked",
+        "auth.logout",
+    ]
 
 
 async def test_cloud_command_requires_session_origin_and_matching_csrf(
@@ -242,15 +276,29 @@ async def test_cloud_command_requires_session_origin_and_matching_csrf(
             json=body,
             headers=_origin_headers(csrf_token=csrf_token),
         )
+        repeated = await client.post(
+            path,
+            json=body,
+            headers=_origin_headers(csrf_token=csrf_token),
+        )
 
     assert missing.status_code == mismatch.status_code == 403
-    assert created.status_code == 202
+    assert created.status_code == repeated.status_code == 202
     assert created.json()["actor"] == "sole_operator"
+    assert repeated.json() == created.json()
     async with uow_factory.begin() as uow:
         command_count = await uow.session.scalar(
             select(func.count()).select_from(OperatorCommandModel)
         )
     assert command_count == 1
+    audit = await _audit_events(uow_factory)
+    assert [event.event_code for event in audit] == [
+        "auth.login.succeeded",
+        "auth.csrf.rejected",
+        "auth.csrf.rejected",
+        "operator.command.enqueued",
+    ]
+    assert audit[-1].evidence["command_id"] == created.json()["command_id"]
 
 
 async def test_idle_expiry_and_cloud_bearer_rejection_are_fail_closed(
@@ -274,6 +322,11 @@ async def test_idle_expiry_and_cloud_bearer_rejection_are_fail_closed(
     assert bearer.json() == {"detail": "session_authentication_required"}
     assert expired.status_code == 200
     assert expired.json()["authenticated"] is False
+    audit = await _audit_events(uow_factory)
+    assert [event.event_code for event in audit] == [
+        "auth.login.succeeded",
+        "auth.session.expired",
+    ]
 
 
 async def test_successful_login_revokes_every_prior_active_operator_session(
@@ -307,3 +360,9 @@ async def test_successful_login_revokes_every_prior_active_operator_session(
             .where(OperatorSessionModel.revoked_at.is_(None))
         )
     assert active_count == 1
+    audit = await _audit_events(uow_factory)
+    assert [event.event_code for event in audit] == [
+        "auth.login.succeeded",
+        "auth.session.revoked",
+        "auth.login.succeeded",
+    ]

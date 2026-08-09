@@ -31,6 +31,7 @@ from maais.db.models.execution import (
 )
 from maais.db.models.experiments import AgentVersionModel, ExperimentModel, StrategyVersionModel
 from maais.db.models.ledger import DomainEventModel, EventStreamModel, OutboxEventModel
+from maais.db.models.observability import AuditEventModel, HealthEvaluationModel
 from maais.db.models.operations import (
     DataQualityEvaluationModel,
     IncidentModel,
@@ -54,6 +55,7 @@ __all__ = [
     "AgentEvaluationModel",
     "ArtifactPublicationAttemptModel",
     "ArtifactRecordModel",
+    "AuditEventModel",
     "CounterfactualModel",
     "DecisionCycleModel",
     "DecisionSummaryModel",
@@ -66,6 +68,7 @@ __all__ = [
     "FillModel",
     "FundingEntryModel",
     "GateEvaluationModel",
+    "HealthEvaluationModel",
     "IncidentModel",
     "MarketFrameModel",
     "MarketCursorModel",

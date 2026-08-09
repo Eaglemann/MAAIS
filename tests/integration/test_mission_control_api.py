@@ -58,7 +58,7 @@ async def test_read_only_api_exposes_overview_feed_and_complete_decision(
 
     assert health.status_code == 200
     assert health.json()["database_transaction"] == "read only"
-    assert health.json()["schema_revision"] == "0021"
+    assert health.json()["schema_revision"] == "0022"
     assert health.headers["cache-control"] == "no-store"
     assert experiments.status_code == 200
     assert experiments.json()[0]["experiment"]["manifest_hash"] == manifest.manifest_hash

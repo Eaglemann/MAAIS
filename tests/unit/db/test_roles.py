@@ -9,6 +9,7 @@ from maais.config.cloud import DATABASE_ROLE_BY_SERVICE, ServiceRole
 from maais.db.roles import (
     AUTH_DML_TABLES,
     PUBLIC_DML_TABLES_BY_ROLE,
+    PUBLIC_INSERT_ONLY_TABLES_BY_ROLE,
     DatabaseRolePasswords,
     build_role_bootstrap_statements,
     load_database_role_passwords,
@@ -108,6 +109,8 @@ def test_runtime_roles_are_explicitly_unprivileged_and_web_has_no_public_dml() -
     ):
         assert forbidden not in rendered.replace(" NO" + forbidden[1:], "")
     assert PUBLIC_DML_TABLES_BY_ROLE[ServiceRole.WEB] == ()
+    assert "health_evaluations" not in PUBLIC_DML_TABLES_BY_ROLE[ServiceRole.OPERATIONS]
+    assert PUBLIC_INSERT_ONLY_TABLES_BY_ROLE[ServiceRole.OPERATIONS] == ("health_evaluations",)
     assert AUTH_DML_TABLES == (
         "operator_sessions",
         "operator_auth_state",
@@ -130,6 +133,7 @@ def test_gateway_functions_are_fixed_search_path_and_caller_restricted() -> None
     assert "maais_enqueue_operator_command" in function_sql
     assert "maais_register_service_instance" in function_sql
     assert "maais_heartbeat_service_instance" in function_sql
+    assert "maais_append_audit_event" in function_sql
     assert "REVOKE ALL" in function_sql
     assert "GRANT EXECUTE" in function_sql
     for role_name in ("maais_migrator", "maais_worker", "maais_web", "maais_ops", "maais_verifier"):

@@ -138,7 +138,7 @@ async def test_real_browser_proves_private_session_csrf_expiry_and_logout(
         pytest.fail("dashboard Playwright CLI dependency is required for browser security tests")
 
     async with uow_factory.begin() as uow:
-        await uow.experiments.create(_manifest(experiment_id=EXPERIMENT_ID, schema_revision="0021"))
+        await uow.experiments.create(_manifest(experiment_id=EXPERIMENT_ID, schema_revision="0022"))
 
     port = _available_port()
     base_url = f"https://127.0.0.1:{port}"

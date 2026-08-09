@@ -367,7 +367,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
 **Produces:** Append-only hash-chained audit events and immutable health evaluation snapshots.
 
-- [ ] Write failing tests for genesis/next hashes, deterministic canonicalization, sequence gaps, previous-hash mismatch, concurrent append serialization, immutable health checks, and full-chain verification.
+- [x] Write failing tests for genesis/next hashes, deterministic canonicalization, sequence gaps, previous-hash mismatch, concurrent append serialization, immutable health checks, and full-chain verification.
 
   ```python
   def test_audit_hash_binds_previous_hash_and_payload() -> None:
@@ -377,28 +377,28 @@ ALLOWED_COMMON_FIELDS = frozenset(
       assert second.content_hash != first.content_hash
   ```
 
-- [ ] Run tests and confirm missing migration/domain/repository failures.
+- [x] Run tests and confirm missing migration/domain/repository failures.
 
   ```bash
   uv run pytest -q tests/unit/observability/test_audit_chain.py tests/integration/test_health_audit_repository.py
   ```
 
-- [ ] Create `audit_events` with global monotonically increasing sequence, previous/content hash checks, bounded actor/event/reason fields, JSONB evidence, runtime/run references, and append-only privileges. Create `health_evaluations` with evaluation ID, run/boot identity, overall status, failed-check names, severity, deduplication key, incident link, recovery reference/time, component JSON, checked time, and content hash.
+- [x] Create `audit_events` with global monotonically increasing sequence, previous/content hash checks, bounded actor/event/reason fields, JSONB evidence, runtime/run references, and append-only privileges. Create `health_evaluations` with evaluation ID, run/boot identity, overall status, failed-check names, severity, deduplication key, incident link, recovery reference/time, component JSON, checked time, and content hash.
 
   ```python
   revision: str = "0022"
   down_revision: str | None = "0021"
   ```
 
-- [ ] Implement audit append using `pg_advisory_xact_lock` and verification that recomputes the complete chain in sequence order.
+- [x] Implement audit append using `pg_advisory_xact_lock` and verification that recomputes the complete chain in sequence order.
 
 - [ ] Append audit events for login success/rejection/lockout, logout, session expiry/revocation, CSRF rejection, operator command enqueue, service boot/stop, run lifecycle, daily close, backup, restore, artifact publication, and readiness verdict. Store stable codes and pseudonymous actor/session references only.
 
-- [ ] Add fixed-search-path `SECURITY DEFINER` append functions for the web and worker event subsets, revoke `PUBLIC`, validate `current_user` and allowed event codes, and reconcile grants after migration. Operations may append the approved operational subset; no runtime role receives direct update/delete authority on `audit_events`.
+- [x] Add fixed-search-path `SECURITY DEFINER` append functions for the web and worker event subsets, revoke `PUBLIC`, validate the original login role and allowed event codes, and reconcile grants after migration. Operations may append the approved operational subset; no runtime role receives direct update/delete authority on `audit_events`.
 
-- [ ] Add `observability: ObservabilityRepository` to `UnitOfWorkContext`, add tables to cleanup, and update CI head assertion to `0022`.
+- [x] Add `observability: ObservabilityRepository` to `UnitOfWorkContext`, add tables to cleanup, and update CI head assertion to `0022`.
 
-- [ ] Run migration cycle and tests.
+- [x] Run migration cycle and tests.
 
   ```bash
   uv run alembic upgrade head

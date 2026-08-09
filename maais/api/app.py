@@ -76,6 +76,11 @@ from maais.db.repositories.operator_commands import (
 )
 from maais.db.repositories.sessions import LoginAuthenticationError, OperatorSessionRepository
 from maais.db.unit_of_work import UnitOfWork
+from maais.observability.audit import (
+    AuditSourceRole,
+    deterministic_audit_event_id,
+    pseudonymous_reference,
+)
 from maais.observability.sentry import initialize_backend_sentry
 from maais.operations.operator_commands import CommandStatus, OperatorCommand
 from maais.operations.verification import establish_read_only_snapshot
@@ -317,10 +322,12 @@ def create_app(
         issued = None
         async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
             blocked = False
+            login_state = None
             try:
-                await uow.sessions.require_login_allowed(observed_at=observed_at)
+                login_state = await uow.sessions.require_login_allowed(observed_at=observed_at)
             except LoginAuthenticationError:
                 blocked = True
+                login_state = await uow.sessions.login_state(observed_at=observed_at)
             if not blocked:
                 verification = await asyncio.to_thread(
                     verify_operator_password,
@@ -328,10 +335,23 @@ def create_app(
                     context.settings.operator_password_hash_value,
                 )
                 if not verification.valid:
-                    await uow.sessions.record_login_failure(observed_at=observed_at)
+                    login_state = await uow.sessions.record_login_failure(observed_at=observed_at)
+                    locked = login_state.locked(observed_at)
+                    await uow.observability.append_audit(
+                        event_id=uuid4(),
+                        source_role=AuditSourceRole.WEB,
+                        actor_reference=pseudonymous_reference("actor", "sole_operator"),
+                        session_reference=None,
+                        event_code=("auth.login.locked" if locked else "auth.login.rejected"),
+                        reason_code=("login_lockout_started" if locked else "invalid_credentials"),
+                        evidence={"failed_attempts": login_state.failed_attempts},
+                        run_id=None,
+                        service_boot_id=None,
+                        occurred_at=observed_at,
+                    )
                 else:
                     await uow.sessions.record_login_success(observed_at=observed_at)
-                    await uow.sessions.revoke_all_active(revoked_at=observed_at)
+                    revoked_sessions = await uow.sessions.revoke_all_active(revoked_at=observed_at)
                     issued = issue_session_tokens(
                         actor="sole_operator",
                         observed_at=observed_at,
@@ -339,6 +359,50 @@ def create_app(
                         csrf_pepper=context.settings.csrf_pepper,
                     )
                     await uow.sessions.issue(issued.to_request())
+                    for revoked in revoked_sessions:
+                        await uow.observability.append_audit(
+                            event_id=deterministic_audit_event_id(
+                                "auth.session.revoked", revoked.id
+                            ),
+                            source_role=AuditSourceRole.WEB,
+                            actor_reference=pseudonymous_reference("actor", revoked.actor),
+                            session_reference=pseudonymous_reference("session", revoked.id),
+                            event_code="auth.session.revoked",
+                            reason_code="session_revoked",
+                            evidence={"terminal_state": "revoked"},
+                            run_id=None,
+                            service_boot_id=None,
+                            occurred_at=observed_at,
+                        )
+                    await uow.observability.append_audit(
+                        event_id=uuid4(),
+                        source_role=AuditSourceRole.WEB,
+                        actor_reference=pseudonymous_reference("actor", issued.session.actor),
+                        session_reference=pseudonymous_reference("session", issued.session.id),
+                        event_code="auth.login.succeeded",
+                        reason_code="valid_credentials",
+                        evidence={
+                            "authentication_method": "password",
+                            "revoked_prior_session_count": len(revoked_sessions),
+                        },
+                        run_id=None,
+                        service_boot_id=None,
+                        occurred_at=observed_at,
+                    )
+            else:
+                assert login_state is not None
+                await uow.observability.append_audit(
+                    event_id=uuid4(),
+                    source_role=AuditSourceRole.WEB,
+                    actor_reference=pseudonymous_reference("actor", "sole_operator"),
+                    session_reference=None,
+                    event_code="auth.login.locked",
+                    reason_code="login_lockout_active",
+                    evidence={"failed_attempts": login_state.failed_attempts},
+                    run_id=None,
+                    service_boot_id=None,
+                    occurred_at=observed_at,
+                )
         if issued is None:
             raise HTTPException(status_code=401, detail=INVALID_CREDENTIALS)
         set_session_cookie(
@@ -380,8 +444,28 @@ def create_app(
     ) -> CsrfTokenResponse:
         if principal.auth_mode is not AuthMode.OPERATOR_SESSION:
             raise HTTPException(status_code=404, detail="operator session CSRF is not enabled")
-        require_same_origin(http_request)
         context = security_context(http_request)
+        try:
+            require_same_origin(http_request)
+        except HTTPException:
+            async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
+                await uow.observability.append_audit(
+                    event_id=uuid4(),
+                    source_role=AuditSourceRole.WEB,
+                    actor_reference=pseudonymous_reference("actor", principal.actor),
+                    session_reference=(
+                        pseudonymous_reference("session", principal.session_id)
+                        if principal.session_id is not None
+                        else None
+                    ),
+                    event_code="auth.csrf.rejected",
+                    reason_code="origin_verification_failed",
+                    evidence={"request_path": http_request.url.path},
+                    run_id=None,
+                    service_boot_id=None,
+                    occurred_at=context.clock(),
+                )
+            raise
         current = http_request.state.operator_session
         issued = rotate_csrf_token(
             current,
@@ -402,9 +486,34 @@ def create_app(
             assert principal.session_id is not None
             context = security_context(http_request)
             async with UnitOfWork(security_session_factory(http_request)).begin() as uow:
-                await uow.sessions.revoke(
+                revoked = await uow.sessions.revoke(
                     principal.session_id,
                     revoked_at=context.clock(),
+                )
+                assert revoked.revoked_at is not None
+                await uow.observability.append_audit(
+                    event_id=deterministic_audit_event_id("auth.session.revoked", revoked.id),
+                    source_role=AuditSourceRole.WEB,
+                    actor_reference=pseudonymous_reference("actor", revoked.actor),
+                    session_reference=pseudonymous_reference("session", revoked.id),
+                    event_code="auth.session.revoked",
+                    reason_code="session_revoked",
+                    evidence={"terminal_state": "revoked"},
+                    run_id=None,
+                    service_boot_id=None,
+                    occurred_at=revoked.revoked_at,
+                )
+                await uow.observability.append_audit(
+                    event_id=uuid4(),
+                    source_role=AuditSourceRole.WEB,
+                    actor_reference=pseudonymous_reference("actor", revoked.actor),
+                    session_reference=pseudonymous_reference("session", revoked.id),
+                    event_code="auth.logout",
+                    reason_code="operator_logout",
+                    evidence={"session_terminal": True},
+                    run_id=None,
+                    service_boot_id=None,
+                    occurred_at=revoked.revoked_at,
                 )
             clear_session_cookie(response)
         return response
@@ -750,6 +859,33 @@ def create_app(
         async with UnitOfWork(factory).begin() as uow:
             await uow.experiments.get_status(experiment_id)
             recorded = await uow.commands.enqueue(command)
+            persisted_command = recorded.command
+            await uow.observability.append_audit(
+                event_id=deterministic_audit_event_id(
+                    "operator.command.enqueued", persisted_command.command_id
+                ),
+                source_role=AuditSourceRole.WEB,
+                actor_reference=pseudonymous_reference("actor", principal.actor),
+                session_reference=(
+                    pseudonymous_reference("session", principal.session_id)
+                    if principal.session_id is not None
+                    else None
+                ),
+                event_code="operator.command.enqueued",
+                reason_code=(
+                    "operator_confirmed"
+                    if persisted_command.operator_confirmed
+                    else "operator_acknowledged"
+                ),
+                evidence={
+                    "command_id": str(persisted_command.command_id),
+                    "command_type": persisted_command.command_type.value,
+                    "experiment_id": str(persisted_command.experiment_id),
+                },
+                run_id=None,
+                service_boot_id=None,
+                occurred_at=persisted_command.requested_at,
+            )
         return OperatorCommandView.model_validate(recorded.command.to_dict())
 
     @application.get(

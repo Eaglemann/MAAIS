@@ -69,7 +69,7 @@ def _settings(tmp_path: Path, descriptor: CandidateDescriptor, **overrides: obje
 def _database(**overrides: object) -> RuntimeDatabaseIdentity:
     values: dict[str, object] = {
         "current_user": "maais_worker",
-        "schema_revision": "0021",
+        "schema_revision": "0022",
         "system_identifier": SYSTEM_IDENTIFIER,
     }
     values.update(overrides)
@@ -112,7 +112,7 @@ def test_runtime_identity_evidence_is_exact_and_secret_free(tmp_path: Path) -> N
         "region": EU_WEST_RAILWAY_REGION,
         "replica_id": "replica-1",
         "role": "worker",
-        "schema_revision": "0021",
+        "schema_revision": "0022",
     }
     serialized = json.dumps(evidence.to_json_data(), sort_keys=True)
     assert "postgres" not in serialized
@@ -188,7 +188,7 @@ def test_cloud_identity_cli_prints_only_the_public_attestation(
             boot_id=BOOT_ID,
             started_at=NOW,
         ).identity,
-        schema_revision="0021",
+        schema_revision="0022",
         database_system_identifier_sha256="f" * 64,
     )
 

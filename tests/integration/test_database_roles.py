@@ -9,11 +9,13 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from maais.config.cloud import ServiceRole
 from maais.db.replay import verify_ledger_consistency
+from maais.db.repositories.operator_commands import OperatorCommandConflict
 from maais.db.unit_of_work import UnitOfWork
+from maais.observability.audit import pseudonymous_reference
 from maais.operations.migrations import (
     MIGRATION_LOCK_KEY,
     ActiveRunBlocksMaintenance,
@@ -42,6 +44,9 @@ pytestmark = pytest.mark.integration
 
 NOW = datetime(2026, 8, 8, 12, tzinfo=timezone.utc)
 WEB_BOOT = UUID("99999999-9999-4999-8999-999999999999")
+WEB_AUDIT = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1")
+WORKER_AUDIT = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2")
+OPERATIONS_AUDIT = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3")
 
 
 async def test_role_bootstrap_refuses_an_active_run(
@@ -74,7 +79,7 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
 ) -> None:
     await _assert_roles_absent(db_engine)
     descriptor = _descriptor()
-    manifest = _manifest(experiment_id=EXPERIMENT_ONE, schema_revision="0021")
+    manifest = _manifest(experiment_id=EXPERIMENT_ONE, schema_revision="0022")
     async with uow_factory.begin() as uow:
         await uow.experiments.create(manifest)
         await uow.platform.register_candidate(
@@ -82,11 +87,6 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
             creator_deployment_id="deployment-1",
             registered_at=NOW,
         )
-    async with db_engine.begin() as connection:
-        await connection.execute(
-            text("CREATE TABLE public.health_evaluations (id integer PRIMARY KEY)")
-        )
-
     engines: list[AsyncEngine] = []
     try:
         assert await bootstrap_roles_with_url(test_database_url, _passwords()) == (
@@ -195,6 +195,115 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
             assert await uow.commands.get(COMMAND_ONE) == command
             assert (await verify_ledger_consistency(uow.session)).ok
 
+        gateway_uow = UnitOfWork(async_sessionmaker(web, expire_on_commit=False))
+        gateway_command = OperatorCommand.request(
+            command_id=UUID("55555555-5555-4555-8555-555555555556"),
+            experiment_id=EXPERIMENT_ONE,
+            command_type=CommandType.PAUSE,
+            idempotency_key="web-repository-gateway-command",
+            actor="sole_operator",
+            reason="prove the web repository uses its fixed database gateway",
+            payload={},
+            confirmation="CONFIRM PAUSE",
+            requested_at=NOW + timedelta(microseconds=1),
+        )
+        async with gateway_uow.begin() as uow:
+            first_gateway_write = await uow.commands.enqueue(gateway_command)
+        gateway_retry = OperatorCommand.request(
+            command_id=UUID("55555555-5555-4555-8555-555555555557"),
+            experiment_id=EXPERIMENT_ONE,
+            command_type=CommandType.PAUSE,
+            idempotency_key=gateway_command.idempotency_key,
+            actor=gateway_command.actor,
+            reason=gateway_command.reason,
+            payload=gateway_command.payload,
+            confirmation="CONFIRM PAUSE",
+            requested_at=gateway_command.requested_at,
+        )
+        async with gateway_uow.begin() as uow:
+            repeated_gateway_write = await uow.commands.enqueue(gateway_retry)
+        assert first_gateway_write.created is True
+        assert repeated_gateway_write.created is False
+        assert repeated_gateway_write.command == gateway_command
+
+        gateway_conflict = OperatorCommand.request(
+            command_id=UUID("55555555-5555-4555-8555-555555555558"),
+            experiment_id=EXPERIMENT_ONE,
+            command_type=CommandType.PAUSE,
+            idempotency_key=gateway_command.idempotency_key,
+            actor=gateway_command.actor,
+            reason="a materially different request cannot reuse this key",
+            payload=gateway_command.payload,
+            confirmation="CONFIRM PAUSE",
+            requested_at=gateway_command.requested_at,
+        )
+        with pytest.raises(OperatorCommandConflict, match="idempotency key"):
+            async with gateway_uow.begin() as uow:
+                await uow.commands.enqueue(gateway_conflict)
+
+        async with web.begin() as connection:
+            audit_sequence = await connection.scalar(
+                text(
+                    "SELECT public.maais_append_audit_event("
+                    ":event_id, :actor_reference, NULL, 'auth.login.succeeded', "
+                    "'valid_credentials', '{\"authentication\":\"password\"}'::jsonb, "
+                    "NULL, NULL, :occurred_at)"
+                ),
+                {
+                    "event_id": WEB_AUDIT,
+                    "actor_reference": pseudonymous_reference("actor", "sole_operator"),
+                    "occurred_at": NOW,
+                },
+            )
+            assert audit_sequence == 1
+        await _expect_denied(
+            web,
+            "SELECT public.maais_append_audit_event("
+            ":event_id, :actor_reference, NULL, 'backup.succeeded', NULL, '{}'::jsonb, "
+            "NULL, NULL, :occurred_at)",
+            {
+                "event_id": UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4"),
+                "actor_reference": pseudonymous_reference("actor", "sole_operator"),
+                "occurred_at": NOW,
+            },
+        )
+        async with worker.begin() as connection:
+            assert (
+                await connection.scalar(
+                    text(
+                        "SELECT public.maais_append_audit_event("
+                        ":event_id, :actor_reference, NULL, 'service.booted', "
+                        "'runtime_registered', '{}'::jsonb, NULL, NULL, :occurred_at)"
+                    ),
+                    {
+                        "event_id": WORKER_AUDIT,
+                        "actor_reference": pseudonymous_reference("service", "worker-boot"),
+                        "occurred_at": NOW + timedelta(microseconds=1),
+                    },
+                )
+                == 2
+            )
+        async with operations.begin() as connection:
+            assert (
+                await connection.scalar(
+                    text(
+                        "SELECT public.maais_append_audit_event("
+                        ":event_id, :actor_reference, NULL, 'readiness.verdict', "
+                        "'qualification_pending', '{}'::jsonb, NULL, NULL, :occurred_at)"
+                    ),
+                    {
+                        "event_id": OPERATIONS_AUDIT,
+                        "actor_reference": pseudonymous_reference("service", "operations-boot"),
+                        "occurred_at": NOW + timedelta(microseconds=2),
+                    },
+                )
+                == 3
+            )
+        async with uow_factory.begin() as uow:
+            audit = await uow.observability.verify_audit_chain()
+            assert audit.ok is True
+            assert audit.event_count == 3
+
         identity = RailwayRuntimeIdentity(
             project_id="project-1",
             environment_id="environment-1",
@@ -265,8 +374,26 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
                     "SELECT has_table_privilege(current_user, 'public.artifact_records', 'INSERT')"
                 )
             )
-            await connection.execute(text("INSERT INTO public.health_evaluations VALUES (1)"))
+            assert await connection.scalar(
+                text(
+                    "SELECT has_table_privilege("
+                    "current_user, 'public.health_evaluations', 'INSERT')"
+                )
+            )
+            assert not await connection.scalar(
+                text(
+                    "SELECT has_table_privilege("
+                    "current_user, 'public.health_evaluations', 'UPDATE')"
+                )
+            )
+            assert not await connection.scalar(
+                text("SELECT has_table_privilege(current_user, 'public.audit_events', 'INSERT')")
+            )
         await _expect_denied(worker, "INSERT INTO public.artifact_records DEFAULT VALUES")
+        await _expect_denied(
+            worker,
+            "UPDATE public.audit_events SET reason_code = 'tampered' WHERE sequence = 1",
+        )
         await _expect_denied(worker, "ALTER TABLE public.experiments ADD COLUMN forbidden int")
         async with verifier.connect() as connection:
             assert await connection.scalar(text("SHOW default_transaction_read_only")) == "on"
@@ -274,7 +401,8 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
             await connection.rollback()
         await _expect_denied(
             verifier,
-            "INSERT INTO public.health_evaluations VALUES (2)",
+            "INSERT INTO public.health_evaluations (evaluation_id) "
+            "VALUES ('ffffffff-ffff-4fff-8fff-ffffffffffff')",
             force_read_write=True,
         )
 
@@ -306,10 +434,10 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
                     "maais_migrator",
                     _passwords().migrator,
                 ).render_as_string(hide_password=False),
-                expected_revision="0021",
+                expected_revision="0022",
                 repository_root=Path(__file__).resolve().parents[2],
             )
-            == "0021"
+            == "0022"
         )
     finally:
         for engine in engines:

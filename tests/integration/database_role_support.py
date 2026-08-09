@@ -37,12 +37,6 @@ async def cleanup_database_roles(db_engine: AsyncEngine) -> None:
                 "uuid, uuid, text, text, text, text, jsonb, boolean, timestamp with time zone)"
             )
         )
-        await connection.execute(
-            text("DROP FUNCTION IF EXISTS public._maais_canonical_jsonb(jsonb)")
-        )
-        await connection.execute(
-            text("DROP FUNCTION IF EXISTS public._maais_utc_iso(timestamp with time zone)")
-        )
         existing = set(
             await connection.scalars(
                 text(
@@ -53,7 +47,6 @@ async def cleanup_database_roles(db_engine: AsyncEngine) -> None:
         )
         if "maais_migrator" in existing:
             await connection.execute(text("REASSIGN OWNED BY maais_migrator TO maais"))
-        await connection.execute(text("DROP TABLE IF EXISTS public.health_evaluations"))
         for role_name in (
             "maais_worker",
             "maais_web",

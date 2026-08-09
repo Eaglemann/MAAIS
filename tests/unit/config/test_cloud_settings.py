@@ -31,7 +31,7 @@ def _railway_settings(**overrides: object) -> Settings:
         "railway_region": EU_WEST_RAILWAY_REGION,
         "expected_railway_region": EU_WEST_RAILWAY_REGION,
         "railway_git_commit_sha": "a" * 40,
-        "expected_schema_revision": "0021",
+        "expected_schema_revision": "0022",
         "database_role_name": "maais_worker",
         "artifact_store_mode": "dual_s3",
         "artifact_replica_endpoint_url": "https://storage.railway.example",
@@ -284,7 +284,7 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
         "RAILWAY_REPLICA_REGION": EU_WEST_RAILWAY_REGION,
         "MAAIS_EXPECTED_RAILWAY_REGION": EU_WEST_RAILWAY_REGION,
         "RAILWAY_GIT_COMMIT_SHA": "a" * 40,
-        "MAAIS_EXPECTED_SCHEMA_REVISION": "0021",
+        "MAAIS_EXPECTED_SCHEMA_REVISION": "0022",
         "MAAIS_DATABASE_ROLE_NAME": "maais_worker",
         "MAAIS_LOG_FORMAT": "json",
         "SENTRY_DSN": (
@@ -321,7 +321,7 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
     assert settings.cloud.railway_region == EU_WEST_RAILWAY_REGION
     assert settings.cloud.expected_railway_region == EU_WEST_RAILWAY_REGION
     assert settings.cloud.railway_git_commit_sha == "a" * 40
-    assert settings.cloud.expected_schema_revision == "0021"
+    assert settings.cloud.expected_schema_revision == "0022"
 
 
 def test_railway_environment_is_qualification_or_production_json_runtime() -> None:

@@ -193,14 +193,25 @@ _OPERATIONS_DML: Final[tuple[str, ...]] = (
     "artifact_publication_attempts",
     "artifact_records",
     "scheduled_operations",
-    "health_evaluations",
 )
+
+_OPERATIONS_INSERT_ONLY: Final[tuple[str, ...]] = ("health_evaluations",)
 
 PUBLIC_DML_TABLES_BY_ROLE: Final[Mapping[ServiceRole, tuple[str, ...]]] = MappingProxyType(
     {
         ServiceRole.WEB: (),
         ServiceRole.WORKER: _WORKER_DML,
         ServiceRole.OPERATIONS: _OPERATIONS_DML,
+        ServiceRole.VERIFIER: (),
+        ServiceRole.MIGRATOR: (),
+    }
+)
+
+PUBLIC_INSERT_ONLY_TABLES_BY_ROLE: Final[Mapping[ServiceRole, tuple[str, ...]]] = MappingProxyType(
+    {
+        ServiceRole.WEB: (),
+        ServiceRole.WORKER: (),
+        ServiceRole.OPERATIONS: _OPERATIONS_INSERT_ONLY,
         ServiceRole.VERIFIER: (),
         ServiceRole.MIGRATOR: (),
     }
@@ -274,6 +285,14 @@ def build_role_bootstrap_statements(passwords: DatabaseRolePasswords) -> tuple[B
                     {},
                 )
             )
+    for service_role, table_names in PUBLIC_INSERT_ONLY_TABLES_BY_ROLE.items():
+        if service_role in (ServiceRole.MIGRATOR, ServiceRole.WEB, ServiceRole.VERIFIER):
+            continue
+        role_name = DATABASE_ROLE_BY_SERVICE[service_role]
+        for table_name in table_names:
+            statements.append(
+                BoundSQL(_conditional_table_grant(table_name, "INSERT", role_name), {})
+            )
     for sequence_name in PUBLIC_SEQUENCES:
         for role_name in ("maais_worker", "maais_ops"):
             statements.append(
@@ -292,6 +311,7 @@ def build_role_bootstrap_statements(passwords: DatabaseRolePasswords) -> tuple[B
             BoundSQL(_REGISTER_SERVICE_GATEWAY_SQL, {}),
             BoundSQL(_HEARTBEAT_SERVICE_GATEWAY_SQL, {}),
             BoundSQL(_FUNCTION_OWNERS_AND_GRANTS_SQL, {}),
+            BoundSQL(_AUDIT_FUNCTION_GRANTS_SQL, {}),
             BoundSQL(
                 "ALTER ROLE maais_verifier SET default_transaction_read_only = on",
                 {},
@@ -850,4 +870,36 @@ GRANT EXECUTE ON FUNCTION public.maais_register_service_instance(
 GRANT EXECUTE ON FUNCTION public.maais_heartbeat_service_instance(
     uuid, integer, timestamp with time zone
 ) TO maais_migrator, maais_worker, maais_web, maais_ops, maais_verifier;
+""".strip()
+
+_AUDIT_FUNCTION_GRANTS_SQL = """
+DO $maais_audit_grants$
+BEGIN
+    IF pg_catalog.to_regprocedure(
+        'public.maais_append_audit_event(uuid,text,text,text,text,jsonb,uuid,uuid,timestamptz)'
+    ) IS NOT NULL THEN
+        ALTER FUNCTION public.maais_append_audit_event(
+            uuid, text, text, text, text, jsonb, uuid, uuid, timestamp with time zone
+        ) OWNER TO maais_migrator;
+        REVOKE ALL ON FUNCTION public.maais_append_audit_event(
+            uuid, text, text, text, text, jsonb, uuid, uuid, timestamp with time zone
+        ) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION public.maais_append_audit_event(
+            uuid, text, text, text, text, jsonb, uuid, uuid, timestamp with time zone
+        ) TO maais_migrator, maais_worker, maais_web, maais_ops;
+    END IF;
+    IF pg_catalog.to_regprocedure('public._maais_audit_evidence_safe(jsonb)') IS NOT NULL THEN
+        ALTER FUNCTION public._maais_audit_evidence_safe(jsonb) OWNER TO maais_migrator;
+        REVOKE ALL ON FUNCTION public._maais_audit_evidence_safe(jsonb) FROM PUBLIC;
+    END IF;
+    IF pg_catalog.to_regprocedure(
+        'public._maais_reject_immutable_evidence_mutation()'
+    ) IS NOT NULL THEN
+        ALTER FUNCTION public._maais_reject_immutable_evidence_mutation()
+            OWNER TO maais_migrator;
+        REVOKE ALL ON FUNCTION public._maais_reject_immutable_evidence_mutation()
+            FROM PUBLIC;
+    END IF;
+END
+$maais_audit_grants$;
 """.strip()

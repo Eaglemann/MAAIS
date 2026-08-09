@@ -26,8 +26,17 @@ INVALID_SESSION = "invalid_session"
 class SessionAuthenticationError(RuntimeError):
     public_error_code = INVALID_SESSION
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        reason_code: str = INVALID_SESSION,
+        session_id: UUID | None = None,
+        terminal_at: datetime | None = None,
+    ) -> None:
         super().__init__("session authentication failed")
+        self.reason_code = reason_code
+        self.session_id = session_id
+        self.terminal_at = terminal_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,13 +280,21 @@ def require_authenticatable_session(
     observed_at: datetime,
 ) -> OperatorSession:
     _require_utc(observed_at, "observed_at")
-    if (
-        session is None
-        or not session.active
-        or observed_at >= session.expires_at
-        or observed_at >= session.last_seen_at + SESSION_IDLE_TTL
-    ):
+    if session is None:
         raise SessionAuthenticationError
+    if not session.active:
+        raise SessionAuthenticationError(
+            reason_code="session_revoked",
+            session_id=session.id,
+            terminal_at=session.revoked_at,
+        )
+    terminal_at = min(session.expires_at, session.last_seen_at + SESSION_IDLE_TTL)
+    if observed_at >= terminal_at:
+        raise SessionAuthenticationError(
+            reason_code="session_expired",
+            session_id=session.id,
+            terminal_at=terminal_at,
+        )
     return session
 
 

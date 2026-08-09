@@ -15,6 +15,7 @@ from maais.db.repositories.execution import PaperExecutionRepository
 from maais.db.repositories.experiments import ExperimentRepository
 from maais.db.repositories.incidents import IncidentRepository
 from maais.db.repositories.market_data import MarketDataRepository
+from maais.db.repositories.observability import ObservabilityRepository
 from maais.db.repositories.operator_commands import OperatorCommandRepository
 from maais.db.repositories.orchestration import OrchestrationRepository
 from maais.db.repositories.platform import PlatformRepository
@@ -41,6 +42,7 @@ class UnitOfWorkContext:
     artifacts: ArtifactRepository
     scheduled_operations: ScheduledOperationRepository
     sessions: OperatorSessionRepository
+    observability: ObservabilityRepository
 
 
 class UnitOfWork:
@@ -71,4 +73,5 @@ class UnitOfWork:
                     artifacts=ArtifactRepository(session),
                     scheduled_operations=ScheduledOperationRepository(session),
                     sessions=OperatorSessionRepository(session),
+                    observability=ObservabilityRepository(session),
                 )

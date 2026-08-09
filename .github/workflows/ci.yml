@@ -178,4 +178,4 @@ jobs:
       - run: uv run pytest -q tests/e2e/test_mission_control_auth.py
       - run: >-
           PGPASSWORD=maais psql -h localhost -U maais -d maais_test -Atc
-          'select version_num from alembic_version' | grep -Fx 0021
+          'select version_num from alembic_version' | grep -Fx 0022

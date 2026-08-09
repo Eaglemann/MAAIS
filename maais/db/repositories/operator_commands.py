@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import case, select
+from sqlalchemy import case, select, text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from maais.db.models.operations import OperatorCommandModel
@@ -89,6 +91,8 @@ class OperatorCommandRepository:
     async def enqueue(self, command: OperatorCommand) -> OperatorCommandWriteResult:
         if command.status is not CommandStatus.REQUESTED:
             raise ValueError("only a requested operator command can enter the inbox")
+        if str(await self._session.scalar(text("SELECT current_user"))) == "maais_web":
+            return await self._enqueue_via_gateway(command)
         created_id = await self._session.scalar(
             insert(OperatorCommandModel)
             .values(
@@ -138,6 +142,69 @@ class OperatorCommandRepository:
             (_new_event(command, "operator_command.requested", command.requested_at),),
         )
         return OperatorCommandWriteResult(created=True, command=command)
+
+    async def _enqueue_via_gateway(
+        self,
+        command: OperatorCommand,
+    ) -> OperatorCommandWriteResult:
+        await self._session.execute(
+            text(
+                "SELECT pg_catalog.pg_advisory_xact_lock("
+                "pg_catalog.hashtextextended(CAST(:identity AS text), 19017))"
+            ),
+            {"identity": f"{command.experiment_id}:{command.idempotency_key}"},
+        )
+        existing = await self._session.scalar(
+            select(OperatorCommandModel).where(
+                OperatorCommandModel.experiment_id == command.experiment_id,
+                OperatorCommandModel.idempotency_key == command.idempotency_key,
+            )
+        )
+        if existing is not None:
+            restored = _verify(existing)
+            if restored.request_hash != command.request_hash:
+                raise OperatorCommandConflict(
+                    "idempotency key was already used for a different operator request"
+                )
+            return OperatorCommandWriteResult(created=False, command=restored)
+
+        payload = to_json_data(command.payload)
+        if not isinstance(payload, dict):  # pragma: no cover - command domain invariant
+            raise TypeError("operator command payload must be an object")
+        try:
+            created_id = await self._session.scalar(
+                text(
+                    "SELECT public.maais_enqueue_operator_command("
+                    ":command_id, :experiment_id, :command_type, :idempotency_key, "
+                    ":actor, :reason, CAST(:payload AS jsonb), :confirmed, :requested_at)"
+                ),
+                {
+                    "command_id": command.command_id,
+                    "experiment_id": command.experiment_id,
+                    "command_type": command.command_type.value,
+                    "idempotency_key": command.idempotency_key,
+                    "actor": command.actor,
+                    "reason": command.reason,
+                    "payload": json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    "confirmed": command.operator_confirmed,
+                    "requested_at": command.requested_at,
+                },
+            )
+        except DBAPIError as error:
+            if getattr(error.orig, "sqlstate", None) == "23505":
+                raise OperatorCommandConflict("operator command identity already exists") from error
+            raise
+        if created_id != command.command_id:
+            raise OperatorCommandConflict("operator command gateway returned another identity")
+        row = await self._session.get(OperatorCommandModel, command.command_id)
+        if row is None:
+            raise OperatorCommandConflict("operator command gateway did not persist the request")
+        restored = _verify(row)
+        if restored.request_hash != command.request_hash:
+            raise OperatorCommandConflict(
+                "idempotency key was already used for a different operator request"
+            )
+        return OperatorCommandWriteResult(created=True, command=restored)
 
     async def get(self, command_id: UUID) -> OperatorCommand:
         row = await self._session.get(OperatorCommandModel, command_id)

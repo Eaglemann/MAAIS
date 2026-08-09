@@ -162,7 +162,7 @@ def _descriptor() -> CandidateDescriptor:
         source_clean=True,
         uv_lock_sha256="b" * 64,
         dashboard_lock_sha256="c" * 64,
-        schema_revision="0021",
+        schema_revision="0022",
         agent_implementation_hashes={
             name: f"{index + 1:064x}" for index, name in enumerate(ALL_AGENTS)
         },
