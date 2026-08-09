@@ -32,7 +32,9 @@ only returned non-secret identities and hashes.
 In order:
 
 1. Provision isolated qualification PostgreSQL and artifact targets.
-2. Run `uv run maais cloud-bootstrap-roles` using the one-time admin connection.
+2. Run `uv run maais cloud-bootstrap-roles --expected-revision 0022` using the
+   one-time admin connection. The command creates principals first, migrates under
+   `maais_migrator`, then finalizes runtime grants before removing bootstrap secrets.
 3. Run `uv run maais cloud-migrate --expected-revision 0022` as `maais_migrator`.
 4. Deploy web, worker, operations, and verifier from the same commit in standby. Only web
    receives a public domain.

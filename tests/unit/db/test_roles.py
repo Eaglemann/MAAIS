@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import make_url
 
 from maais.cli import build_parser
 from maais.config.cloud import DATABASE_ROLE_BY_SERVICE, ServiceRole
@@ -12,14 +14,17 @@ from maais.db.roles import (
     PUBLIC_INSERT_ONLY_TABLES_BY_ROLE,
     DatabaseRolePasswords,
     build_role_bootstrap_statements,
+    build_role_principal_statements,
     load_database_role_passwords,
 )
 from maais.operations.migrations import (
     MIGRATION_LOCK_KEY,
     ActiveRunBlocksMaintenance,
     SchemaIdentityError,
+    _database_url_for_role,
     assert_expected_schema,
     ensure_no_active_runs,
+    initialize_database_with_url,
 )
 
 
@@ -62,6 +67,18 @@ def test_bootstrap_uses_only_fixed_role_identifiers_and_bound_passwords() -> Non
     )
 
 
+def test_pre_migration_principals_never_compile_table_dependent_gateways() -> None:
+    rendered = "\n".join(
+        statement.sql for statement in build_role_principal_statements(_passwords())
+    )
+
+    assert "CREATE ROLE maais_migrator" in rendered
+    assert "ALTER SCHEMA public OWNER TO maais_migrator" in rendered
+    assert "ALTER DEFAULT PRIVILEGES FOR ROLE maais_migrator" in rendered
+    assert "CREATE OR REPLACE FUNCTION" not in rendered
+    assert "public.service_instances%ROWTYPE" not in rendered
+
+
 def test_role_password_environment_is_complete_and_never_uses_cli_values() -> None:
     environment = {
         "MAAIS_MIGRATOR_DATABASE_PASSWORD": _passwords().migrator,
@@ -80,15 +97,97 @@ def test_role_password_environment_is_complete_and_never_uses_cli_values() -> No
 
 def test_cloud_maintenance_cli_never_accepts_password_arguments() -> None:
     parser = build_parser()
-    bootstrap = parser.parse_args(["cloud-bootstrap-roles"])
+    bootstrap = parser.parse_args(
+        ["cloud-bootstrap-roles", "--expected-revision", "0022", "--repository", "."]
+    )
     migrate = parser.parse_args(
         ["cloud-migrate", "--expected-revision", "0019", "--repository", "."]
     )
 
     assert bootstrap.command == "cloud-bootstrap-roles"
+    assert bootstrap.expected_revision == "0022"
     assert migrate.expected_revision == "0019"
     assert not any("password" in name for name in vars(bootstrap))
     assert not any("password" in name for name in vars(migrate))
+
+
+def test_database_role_url_uses_psycopg_and_replaces_administrator_identity() -> None:
+    role_url = make_url(
+        _database_url_for_role(
+            "postgresql://admin@postgres.railway.internal:5432/railway",
+            role_name="maais_migrator",
+            password=_passwords().migrator,
+        )
+    )
+
+    assert role_url.drivername == "postgresql+psycopg"
+    assert role_url.username == "maais_migrator"
+    assert role_url.password == _passwords().migrator
+    assert role_url.host == "postgres.railway.internal"
+    assert role_url.database == "railway"
+    assert "admin@" not in role_url.render_as_string(hide_password=False)
+
+
+@pytest.mark.asyncio
+async def test_database_initialization_orders_principals_migration_and_final_grants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def bootstrap_principals(url: str, passwords: DatabaseRolePasswords) -> None:
+        calls.append(("principals", (make_url(url).username, passwords)))
+
+    async def migrate(
+        url: str,
+        *,
+        expected_revision: str,
+        repository_root: Path,
+    ) -> str:
+        parsed = make_url(url)
+        calls.append(
+            (
+                "migration",
+                (
+                    parsed.drivername,
+                    parsed.username,
+                    parsed.password,
+                    expected_revision,
+                    repository_root,
+                ),
+            )
+        )
+        return expected_revision
+
+    async def bootstrap_roles(url: str, passwords: DatabaseRolePasswords) -> tuple[str, ...]:
+        calls.append(("final-grants", (make_url(url).username, passwords)))
+        return ("maais_migrator", "maais_worker")
+
+    monkeypatch.setattr(
+        "maais.operations.migrations._bootstrap_principals_with_url",
+        bootstrap_principals,
+    )
+    monkeypatch.setattr("maais.operations.migrations.migrate_with_url", migrate)
+    monkeypatch.setattr("maais.operations.migrations.bootstrap_roles_with_url", bootstrap_roles)
+    repository_root = Path("/workspace")
+
+    result = await initialize_database_with_url(
+        "postgresql://admin@postgres.railway.internal:5432/railway",
+        _passwords(),
+        expected_revision="0022",
+        repository_root=repository_root,
+    )
+
+    assert result == ("0022", ("maais_migrator", "maais_worker"))
+    assert [name for name, _ in calls] == ["principals", "migration", "final-grants"]
+    assert calls[0][1] == ("admin", _passwords())
+    assert calls[1][1] == (
+        "postgresql+psycopg",
+        "maais_migrator",
+        _passwords().migrator,
+        "0022",
+        repository_root,
+    )
+    assert calls[2][1] == ("admin", _passwords())
 
 
 def test_runtime_roles_are_explicitly_unprivileged_and_web_has_no_public_dml() -> None:

@@ -9,11 +9,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from alembic.config import Config
-from sqlalchemy import text
+from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
 from alembic import command
-from maais.db.roles import DatabaseRolePasswords, bootstrap_database_roles
+from maais.db.roles import (
+    DatabaseRolePasswords,
+    bootstrap_database_principals,
+    bootstrap_database_roles,
+)
 
 MIGRATION_LOCK_KEY = 5_321_109_104_001_922_019
 
@@ -106,6 +110,72 @@ async def bootstrap_roles_with_url(
         )
     finally:
         await engine.dispose()
+
+
+async def initialize_database_with_url(
+    administrator_database_url: str,
+    passwords: DatabaseRolePasswords,
+    *,
+    expected_revision: str,
+    repository_root: Path,
+) -> tuple[str, tuple[str, ...]]:
+    """Create principals, migrate as the migrator, then finalize runtime grants."""
+
+    await _bootstrap_principals_with_url(administrator_database_url, passwords)
+    migrator_database_url = _database_url_for_role(
+        administrator_database_url,
+        role_name="maais_migrator",
+        password=passwords.migrator,
+    )
+    revision = await migrate_with_url(
+        migrator_database_url,
+        expected_revision=expected_revision,
+        repository_root=repository_root,
+    )
+    roles = await bootstrap_roles_with_url(administrator_database_url, passwords)
+    return revision, roles
+
+
+async def _bootstrap_principals_with_url(
+    database_url: str,
+    passwords: DatabaseRolePasswords,
+) -> None:
+    engine = create_async_engine(database_url, pool_pre_ping=True, hide_parameters=True)
+    try:
+        async with engine.connect() as connection:
+            async with migration_advisory_lock(connection):
+                await ensure_no_active_runs(connection)
+                authorized = await connection.scalar(
+                    text(
+                        "SELECT rolsuper OR rolcreaterole FROM pg_roles "
+                        "WHERE rolname = current_user"
+                    )
+                )
+                if authorized is not True:
+                    raise DatabaseAuthorityError(
+                        "role bootstrap requires a PostgreSQL role administrator"
+                    )
+                await connection.commit()
+                async with connection.begin():
+                    await bootstrap_database_principals(connection, passwords)
+    finally:
+        await engine.dispose()
+
+
+def _database_url_for_role(
+    administrator_database_url: str,
+    *,
+    role_name: str,
+    password: str,
+) -> str:
+    url = make_url(administrator_database_url)
+    if url.get_backend_name() != "postgresql" or not url.database or not url.host:
+        raise ValueError("database initialization requires one PostgreSQL network URL")
+    return url.set(
+        drivername="postgresql+psycopg",
+        username=role_name,
+        password=password,
+    ).render_as_string(hide_password=False)
 
 
 async def migrate_with_url(

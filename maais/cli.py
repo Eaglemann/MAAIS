@@ -70,7 +70,7 @@ from maais.operations.incident_management import (
     IncidentAction,
     apply_configured_incident_action,
 )
-from maais.operations.migrations import bootstrap_roles_with_url, migrate_with_url
+from maais.operations.migrations import initialize_database_with_url, migrate_with_url
 from maais.operations.preflight import run_candidate_preflight
 from maais.operations.process_drills import freeze_process_drill_evidence
 from maais.operations.qualification import run_candidate_qualification
@@ -177,10 +177,12 @@ def build_parser() -> argparse.ArgumentParser:
     candidate.add_argument("--git-sha", required=True)
     candidate.add_argument("--source-clean", type=_clean_source_assertion, required=True)
     candidate.add_argument("--output", type=Path, required=True)
-    commands.add_parser(
+    cloud_bootstrap = commands.add_parser(
         "cloud-bootstrap-roles",
-        help="create and reconcile fixed least-privilege PostgreSQL service roles",
+        help="initialize schema and fixed least-privilege PostgreSQL service roles",
     )
+    cloud_bootstrap.add_argument("--expected-revision", type=_schema_revision, required=True)
+    cloud_bootstrap.add_argument("--repository", type=Path, default=Path.cwd())
     cloud_migrate = commands.add_parser(
         "cloud-migrate",
         help="run guarded Alembic migration under the purpose-bound migrator role",
@@ -502,13 +504,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0 if captured and flushed else 1
     if arguments.command == "cloud-bootstrap-roles":
-        roles = asyncio.run(
-            bootstrap_roles_with_url(
+        revision, roles = asyncio.run(
+            initialize_database_with_url(
                 settings.database_url_value,
                 load_database_role_passwords(os.environ),
+                expected_revision=arguments.expected_revision,
+                repository_root=arguments.repository,
             )
         )
-        print(json.dumps({"roles": roles, "live_money": False}, sort_keys=True))
+        print(
+            json.dumps(
+                {"roles": roles, "schema_revision": revision, "live_money": False},
+                sort_keys=True,
+            )
+        )
         return 0
     if arguments.command == "cloud-migrate":
         try:

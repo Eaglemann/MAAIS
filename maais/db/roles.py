@@ -240,7 +240,9 @@ _RUNTIME_ROLES: Final[tuple[str, ...]] = (
 )
 
 
-def build_role_bootstrap_statements(passwords: DatabaseRolePasswords) -> tuple[BoundSQL, ...]:
+def build_role_principal_statements(passwords: DatabaseRolePasswords) -> tuple[BoundSQL, ...]:
+    """Create login principals and migration-safe ownership before any tables exist."""
+
     statements: list[BoundSQL] = []
     for service_role, password in passwords.by_service().items():
         role_name = DATABASE_ROLE_BY_SERVICE[service_role]
@@ -267,8 +269,14 @@ def build_role_bootstrap_statements(passwords: DatabaseRolePasswords) -> tuple[B
             ),
             BoundSQL("GRANT CREATE, USAGE ON SCHEMA public TO maais_migrator", {}),
             BoundSQL(_REVOKE_RUNTIME_SQL, {}),
+            BoundSQL(_DEFAULT_PRIVILEGES_SQL, {}),
         )
     )
+    return tuple(statements)
+
+
+def build_role_bootstrap_statements(passwords: DatabaseRolePasswords) -> tuple[BoundSQL, ...]:
+    statements = list(build_role_principal_statements(passwords))
     for role_name in _RUNTIME_ROLES:
         for table_name in PUBLIC_TABLES:
             statements.append(
@@ -304,7 +312,6 @@ def build_role_bootstrap_statements(passwords: DatabaseRolePasswords) -> tuple[B
     statements.extend(
         (
             BoundSQL(_AUTH_GRANTS_SQL, {}),
-            BoundSQL(_DEFAULT_PRIVILEGES_SQL, {}),
             BoundSQL(_UTC_ISO_FUNCTION_SQL, {}),
             BoundSQL(_CANONICAL_JSON_FUNCTION_SQL, {}),
             BoundSQL(_COMMAND_GATEWAY_SQL, {}),
@@ -327,6 +334,14 @@ async def bootstrap_database_roles(
     passwords: DatabaseRolePasswords,
 ) -> None:
     for statement in build_role_bootstrap_statements(passwords):
+        await connection.execute(text(statement.sql), dict(statement.parameters))
+
+
+async def bootstrap_database_principals(
+    connection: AsyncConnection,
+    passwords: DatabaseRolePasswords,
+) -> None:
+    for statement in build_role_principal_statements(passwords):
         await connection.execute(text(statement.sql), dict(statement.parameters))
 
 
