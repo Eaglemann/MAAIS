@@ -137,6 +137,13 @@ async def test_database_roles_and_security_definer_gateways_enforce_least_privil
         verifier = role_engines[ServiceRole.VERIFIER]
         migrator = role_engines[ServiceRole.MIGRATOR]
 
+        async with migrator.begin() as connection:
+            await connection.execute(
+                text("CREATE SCHEMA maais_migration_probe AUTHORIZATION maais_migrator")
+            )
+            await connection.execute(text("DROP SCHEMA maais_migration_probe"))
+        await _expect_denied(worker, "CREATE SCHEMA maais_runtime_probe")
+
         async with web.connect() as connection:
             assert await connection.scalar(text("SELECT count(*) FROM public.experiments")) == 1
             await connection.rollback()

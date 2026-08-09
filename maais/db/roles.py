@@ -429,6 +429,15 @@ BEGIN
         'maais_web, maais_ops, maais_verifier',
         pg_catalog.current_database()
     );
+    EXECUTE pg_catalog.format(
+        'REVOKE CREATE ON DATABASE %I FROM PUBLIC, maais_worker, maais_web, ' ||
+        'maais_ops, maais_verifier',
+        pg_catalog.current_database()
+    );
+    EXECUTE pg_catalog.format(
+        'GRANT CREATE ON DATABASE %I TO maais_migrator',
+        pg_catalog.current_database()
+    );
 END
 $maais_database$;
 """.strip()

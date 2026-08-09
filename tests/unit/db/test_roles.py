@@ -74,6 +74,8 @@ def test_pre_migration_principals_never_compile_table_dependent_gateways() -> No
 
     assert "CREATE ROLE maais_migrator" in rendered
     assert "ALTER SCHEMA public OWNER TO maais_migrator" in rendered
+    assert "GRANT CREATE ON DATABASE %I TO maais_migrator" in rendered
+    assert "REVOKE CREATE ON DATABASE %I FROM PUBLIC" in rendered
     assert "ALTER DEFAULT PRIVILEGES FOR ROLE maais_migrator" in rendered
     assert "CREATE OR REPLACE FUNCTION" not in rendered
     assert "public.service_instances%ROWTYPE" not in rendered
