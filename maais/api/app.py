@@ -27,6 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from maais.api.auth import load_control_token
 from maais.api.headers import apply_browser_headers, requires_operator_session
+from maais.api.health import (
+    CloudEndpointReader,
+    InMemoryMonitorRateLimiter,
+    UnavailableCloudEndpointReader,
+    monitor_client_key,
+    monitor_token_matches,
+)
 from maais.api.queries import MissionControlQueryService
 from maais.api.schemas import (
     ApiHealth,
@@ -39,11 +46,14 @@ from maais.api.schemas import (
     ExperimentOverview,
     LoginRequest,
     LoginResponse,
+    MonitorHealth,
     OperatorCommandPage,
     OperatorCommandRequest,
     OperatorCommandView,
     OutboxCursorEvent,
     OutboxCursorPage,
+    PublicLiveness,
+    PublicReadiness,
     ResearchLabView,
     TradeListItem,
     TradePage,
@@ -66,6 +76,7 @@ from maais.api.security import (
 from maais.config.cloud import DeploymentTarget
 from maais.config.security import AuthMode, SecuritySettings
 from maais.config.settings import get_settings
+from maais.core.logging import get_logger
 from maais.db.connection import get_engine, get_session_factory
 from maais.db.models.experiments import ExperimentModel
 from maais.db.models.ledger import OutboxEventModel
@@ -93,6 +104,7 @@ from maais.security.sessions import (
 )
 
 SessionFactory = async_sessionmaker[AsyncSession]
+logger = get_logger(__name__)
 
 
 async def _close_websocket(websocket: WebSocket, *, code: int, reason: str) -> None:
@@ -194,6 +206,8 @@ def create_app(
     control_token_file: Path | None = None,
     security_settings: SecuritySettings | None = None,
     clock: Callable[[], datetime] | None = None,
+    cloud_health_reader: CloudEndpointReader | None = None,
+    monitor_rate_limiter: InMemoryMonitorRateLimiter | None = None,
 ) -> FastAPI:
     if control_token is not None and control_token_file is not None:
         raise ValueError("provide either a control token or token file, not both")
@@ -232,9 +246,11 @@ def create_app(
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         if application.state.session_factory is None:
             application.state.session_factory = get_session_factory()
-        yield
-        if owns_global_engine:
-            await get_engine().dispose()
+        try:
+            yield
+        finally:
+            if owns_global_engine:
+                await get_engine().dispose()
 
     application = FastAPI(
         title="MAAIS Mission Control",
@@ -247,6 +263,12 @@ def create_app(
     )
     application.state.session_factory = session_factory
     application.state.sentry_runtime = sentry_runtime
+    application.state.cloud_health_reader = (
+        cloud_health_reader if cloud_health_reader is not None else UnavailableCloudEndpointReader()
+    )
+    application.state.monitor_rate_limiter = (
+        monitor_rate_limiter if monitor_rate_limiter is not None else InMemoryMonitorRateLimiter()
+    )
     application.state.security = MissionControlSecurity(
         settings=resolved_security,
         control_token=resolved_control_token,
@@ -308,6 +330,60 @@ def create_app(
         error: OperatorCommandConflict,
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(error)})
+
+    @application.get("/healthz/live", response_model=PublicLiveness)
+    async def public_liveness() -> PublicLiveness:
+        return PublicLiveness()
+
+    @application.get("/healthz/ready", response_model=PublicReadiness)
+    async def public_readiness() -> JSONResponse:
+        reader: CloudEndpointReader = application.state.cloud_health_reader
+        try:
+            ready = await reader.readiness()
+        except Exception:
+            logger.warning(
+                "public_readiness_probe_failed",
+                error_code="public_readiness_dependency_failed",
+                outcome="degraded",
+                exc_info=True,
+            )
+            ready = False
+        body = PublicReadiness(status="ready" if ready else "not_ready")
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content=body.model_dump(mode="json"),
+        )
+
+    @application.get("/monitor/v1/health", response_model=MonitorHealth)
+    async def monitor_health(http_request: Request) -> JSONResponse:
+        limiter: InMemoryMonitorRateLimiter = application.state.monitor_rate_limiter
+        if not limiter.allow(monitor_client_key(http_request)):
+            return JSONResponse(status_code=429, content={"detail": "rate_limited"})
+        if not monitor_token_matches(
+            http_request,
+            resolved_security.monitor_token_value,
+        ):
+            return JSONResponse(status_code=404, content={"detail": "not_found"})
+        reader: CloudEndpointReader = application.state.cloud_health_reader
+        try:
+            snapshot = await reader.monitor()
+        except Exception:
+            logger.warning(
+                "public_monitor_probe_failed",
+                error_code="public_monitor_dependency_failed",
+                outcome="degraded",
+                exc_info=True,
+            )
+            snapshot = await UnavailableCloudEndpointReader().monitor()
+        healthy = all(snapshot.components.values())
+        body = MonitorHealth(
+            status="ok" if healthy else "degraded",
+            **snapshot.components,
+        )
+        return JSONResponse(
+            status_code=200 if healthy else 503,
+            content=body.model_dump(mode="json"),
+        )
 
     @application.post("/api/v1/auth/login", response_model=LoginResponse)
     async def login(http_request: Request, response: Response) -> LoginResponse:

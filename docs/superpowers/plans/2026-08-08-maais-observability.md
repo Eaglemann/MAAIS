@@ -338,7 +338,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
   Expected: all commands exit `0`; final public assets contain no `.map`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add dashboard/src/observability.ts dashboard/src/main.tsx dashboard/src/App.tsx dashboard/vite.config.ts dashboard/src/observability.test.ts dashboard/scripts/write-asset-manifest.mjs dashboard/package.json scripts/verify_dashboard_assets.py .github/workflows/ci.yml .secrets.baseline tests/container/test_dashboard_assets.py
@@ -500,7 +500,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
 **Produces:** `/healthz/live`, `/healthz/ready`, and `/monitor/v1/health` with strict disclosure boundaries.
 
-- [ ] Write failing response-schema snapshots. Liveness is process-only; readiness is dependency-aware but generic; monitor returns exactly the approved booleans.
+- [x] Write failing response-schema snapshots. Liveness is process-only; readiness is dependency-aware but generic; monitor returns exactly the approved booleans.
 
   ```python
   MONITOR_COMPONENTS = {
@@ -514,19 +514,19 @@ ALLOWED_COMMON_FIELDS = frozenset(
   }
   ```
 
-- [ ] Test missing/wrong monitor header with constant `404` or `401`, `Cache-Control: no-store`, rate limiting, no operator-session equivalence, and no secrets/identifiers across both healthy and failed responses.
+- [x] Test missing/wrong monitor header with constant `404` or `401`, `Cache-Control: no-store`, rate limiting, no operator-session equivalence, and no secrets/identifiers across both healthy and failed responses.
 
-- [ ] Run tests and confirm endpoints are absent.
+- [x] Run tests and confirm endpoints are absent.
 
   ```bash
   uv run pytest -q tests/unit/api/test_cloud_health_endpoints.py tests/integration/test_monitor_health_api.py
   ```
 
-- [ ] Implement constant-time comparison of `X-MAAIS-Monitor-Token`, an independent in-memory rate limit, generic stable response bodies, and HTTP `503` when any critical component is false.
+- [x] Implement constant-time comparison of `X-MAAIS-Monitor-Token`, an independent in-memory rate limit, generic stable response bodies, and HTTP `503` when any critical component is false.
 
-- [ ] Ensure `/healthz/ready` becomes false on schema/candidate mismatch or unavailable database and does not query/return trading state.
+- [x] Ensure `/healthz/ready` becomes false on schema/candidate mismatch or unavailable database and does not query/return trading state.
 
-- [ ] Run all API security and health tests.
+- [x] Run all API security and health tests.
 
   ```bash
   uv run pytest -q tests/unit/api tests/integration/test_monitor_health_api.py tests/integration/test_mission_control_surface_security.py

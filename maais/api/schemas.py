@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,6 +47,25 @@ class ApiHealth(ReadModel):
     database_transaction: str
     schema_revision: str
     checked_at: datetime
+
+
+class PublicLiveness(ReadModel):
+    status: Literal["live"] = "live"
+
+
+class PublicReadiness(ReadModel):
+    status: Literal["ready", "not_ready"]
+
+
+class MonitorHealth(ReadModel):
+    status: Literal["ok", "degraded"]
+    database: bool
+    worker: bool
+    ledger: bool
+    cursors: bool
+    operations: bool
+    evidence_replication: bool
+    daily_close: bool
 
 
 class PaperModelAssumptions(ReadModel):

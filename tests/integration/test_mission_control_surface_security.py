@@ -27,6 +27,9 @@ NOW = datetime(2026, 8, 9, 12, tzinfo=timezone.utc)
 IDENTIFIER = "11111111-1111-4111-8111-111111111111"
 
 PUBLIC_REGISTERED_HTTP = {
+    ("GET", "/healthz/live"),
+    ("GET", "/healthz/ready"),
+    ("GET", "/monitor/v1/health"),
     ("POST", "/api/v1/auth/login"),
     ("GET", "/api/v1/auth/session"),
 }
