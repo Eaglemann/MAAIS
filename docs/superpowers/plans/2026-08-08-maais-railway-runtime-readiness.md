@@ -132,7 +132,7 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
 
 **Produces:** One digest-pinned, non-root, minimal image with `/app/candidate.json` and `/app/dashboard`.
 
-- [ ] Write static tests first: every `FROM` includes `@sha256:`, `uv sync` uses `--locked`, dashboard uses `npm ci`, final `USER` is numeric non-zero, final `ENTRYPOINT` is fixed, and Docker ignore excludes every forbidden path.
+- [x] Write static tests first: every `FROM` includes `@sha256:`, `uv sync` uses `--locked`, dashboard uses `npm ci`, final `USER` is numeric non-zero, final `ENTRYPOINT` is fixed, and Docker ignore excludes every forbidden path.
 
   ```python
   def test_every_base_image_is_digest_pinned() -> None:
@@ -141,15 +141,15 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
               assert "@sha256:" in line
   ```
 
-- [ ] Write runtime-image contract tests that accept an image archive/OCI layout path through `MAAIS_TEST_IMAGE`, inspect files/config without registry access, and assert descriptor hash, UID/GID, labels, entrypoint, absent maps/secrets/tests, and no writable application files.
+- [x] Write runtime-image contract tests that accept an image archive/OCI layout path through `MAAIS_TEST_IMAGE`, inspect files/config without registry access, and assert descriptor hash, UID/GID, labels, entrypoint, absent maps/secrets/tests, and no writable application files.
 
-- [ ] Run static tests and confirm Dockerfile is missing.
+- [x] Run static tests and confirm Dockerfile is missing.
 
   ```bash
   uv run pytest -q tests/container/test_dockerfile_contract.py
   ```
 
-- [ ] Implement `resolve-base-image-digests.py` against anonymous OCI Registry HTTP APIs for the exact Python 3.12 slim and Node 22 bookworm manifests. It prints immutable references and never invokes Docker, reads Keychain, or requests registry credentials.
+- [x] Implement `resolve-base-image-digests.py` against anonymous OCI Registry HTTP APIs for the exact Python 3.12 slim and Node 22 bookworm manifests. It prints immutable references and never invokes Docker, reads Keychain, or requests registry credentials.
 
   ```bash
   uv run python scripts/resolve-base-image-digests.py
@@ -157,7 +157,7 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
 
   Expected: two repository references containing 64-character `sha256` digests; record those exact values in `Dockerfile` in the same commit.
 
-- [ ] Implement builders and final stage. The final stage copies the prebuilt virtual environment, package, dashboard assets, migrations, and descriptor; it does not run a package manager.
+- [x] Implement builders and final stage. The final stage copies the prebuilt virtual environment, package, dashboard assets, migrations, and descriptor; it does not run a package manager.
 
   ```dockerfile
   ARG RAILWAY_GIT_COMMIT_SHA
@@ -171,11 +171,15 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
       --output /build/candidate.json
   ```
 
-- [ ] Make descriptor generation fail when `RAILWAY_GIT_COMMIT_SHA` is not 40 lowercase hexadecimal characters or `MAAIS_SOURCE_CLEAN` is not exactly `true`. Static tests require both `ARG` declarations; the Railway variable contract freezes the clean-source assertion only for Git-provided build contexts, and local builders must prove `git status --porcelain` is empty before passing it.
+- [x] Make descriptor generation fail when `RAILWAY_GIT_COMMIT_SHA` is not 40 lowercase hexadecimal characters or `MAAIS_SOURCE_CLEAN` is not exactly `true`. Static tests require both `ARG` declarations; the Railway variable contract freezes the clean-source assertion only for Git-provided build contexts, and local builders must prove `git status --porcelain` is empty before passing it.
 
-- [ ] Add OCI labels for Git SHA, candidate descriptor schema, and paper-only safety; labels contain no provider/project/account identifiers.
+- [x] Add OCI labels for Git SHA, candidate descriptor schema, and paper-only safety; labels contain no provider/project/account identifiers.
 
 - [ ] Run static tests. Build execution occurs only through an approved credential-free builder, then run runtime-image tests against its exported OCI archive.
+
+  Static contracts, locked dependency builds, OCI parsing, whiteout handling, blob
+  verification, and traversal rejection pass locally. The real archive assertion remains
+  open until Task 4 supplies the credential-free CI builder and `MAAIS_TEST_IMAGE`.
 
   ```bash
   uv run pytest -q tests/container/test_dockerfile_contract.py tests/container/test_runtime_image.py
@@ -183,7 +187,7 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
 
   Expected: all tests pass; no Docker credential helper is invoked by the tests.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add Dockerfile .dockerignore scripts/resolve-base-image-digests.py tests/container/test_dockerfile_contract.py tests/container/test_runtime_image.py
