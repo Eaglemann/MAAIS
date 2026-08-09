@@ -290,7 +290,11 @@ ALLOWED_COMMON_FIELDS = frozenset(
 - Modify: `dashboard/src/main.tsx`
 - Modify: `dashboard/src/App.tsx`
 - Modify: `dashboard/vite.config.ts`
+- Modify: `dashboard/package.json`
 - Modify: `.github/workflows/ci.yml`
+- Modify: `.secrets.baseline`
+- Create: `dashboard/scripts/write-asset-manifest.mjs`
+- Create: `scripts/verify_dashboard_assets.py`
 - Test: `dashboard/src/observability.test.ts`
 - Test: `tests/container/test_dashboard_assets.py`
 
@@ -298,22 +302,22 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
 **Produces:** Redacted frontend errors, release source maps uploaded once by CI, and source-map-free deployable assets.
 
-- [ ] Write frontend tests that send canaries through exceptions, breadcrumbs, request data, tags, and component metadata; assert no PII, session replay, local/session storage, cookies, auth headers, query strings, or raw response bodies leave the browser.
+- [x] Write frontend tests that send canaries through exceptions, breadcrumbs, request data, tags, and component metadata; assert no PII, session replay, local/session storage, cookies, auth headers, query strings, or raw response bodies leave the browser.
 
-- [ ] Add an error-boundary test that renders an operator-safe correlation code while capturing the redacted exception.
+- [x] Add an error-boundary test that renders an operator-safe correlation code while capturing the redacted exception.
 
-- [ ] Write an asset-inventory test that fails when any `.map` file exists in the final deployable dashboard directory.
+- [x] Write an asset-inventory test that fails when any `.map` file exists in the final deployable dashboard directory.
 
-- [ ] Run tests and confirm missing frontend observability and current source-map behavior.
+- [x] Run tests and confirm missing frontend observability and current source-map behavior.
 
   ```bash
   npm --prefix dashboard test -- observability.test.ts
   uv run pytest -q tests/container/test_dashboard_assets.py
   ```
 
-- [ ] Initialize `@sentry/react` only when DSN/release/environment are present, with `sendDefaultPii: false`, no Replay integration, zero traces by default, `beforeSend`, and `beforeBreadcrumb`.
+- [x] Initialize `@sentry/react` only when DSN/release/environment are present, with `sendDefaultPii: false`, no Replay integration, zero traces by default, `beforeSend`, and `beforeBreadcrumb`.
 
-- [ ] Keep Vite source maps in a CI-only staging directory. Add a single release job that runs only on pushed non-fork commits with `SENTRY_AUTH_TOKEN`, uploads maps to `maais-mission-control`, verifies the release, deletes all maps, and writes a hashed asset manifest consumed by the image build.
+- [x] Keep Vite source maps in a CI-only staging directory. Add a single release job that runs only on pushed non-fork commits with `SENTRY_AUTH_TOKEN`, uploads maps to `maais-mission-control`, verifies the release, deletes all maps, and writes a hashed asset manifest for the image build to verify in Task 8.
 
   ```yaml
   env:
@@ -321,9 +325,9 @@ ALLOWED_COMMON_FIELDS = frozenset(
   if: github.event_name == 'push' && env.SENTRY_AUTH_TOKEN != ''
   ```
 
-- [ ] Ensure Railway build receives the already map-free asset inventory or independently builds with source map output disabled; the upload token is never defined in Railway.
+- [x] Ensure Railway build receives the already map-free asset inventory or independently builds with source map output disabled; the upload token is never defined in Railway.
 
-- [ ] Run frontend tests/typecheck/build and inventory test.
+- [x] Run frontend tests/typecheck/build and inventory test.
 
   ```bash
   npm --prefix dashboard test
@@ -337,7 +341,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 - [ ] Commit.
 
   ```bash
-  git add dashboard/src/observability.ts dashboard/src/main.tsx dashboard/src/App.tsx dashboard/vite.config.ts dashboard/src/observability.test.ts .github/workflows/ci.yml tests/container/test_dashboard_assets.py
+  git add dashboard/src/observability.ts dashboard/src/main.tsx dashboard/src/App.tsx dashboard/vite.config.ts dashboard/src/observability.test.ts dashboard/scripts/write-asset-manifest.mjs dashboard/package.json scripts/verify_dashboard_assets.py .github/workflows/ci.yml .secrets.baseline tests/container/test_dashboard_assets.py
   git commit -m "feat: add mission control error telemetry"
   git push origin feat/paper-platform-baseline
   ```

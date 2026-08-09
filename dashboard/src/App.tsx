@@ -51,6 +51,7 @@ import {
 import { Login } from "./Login";
 import { OperatorConsole } from "./OperatorConsole";
 import { ResearchLab } from "./ResearchLab";
+import { BrowserErrorBoundary } from "./observability";
 
 export { OperatorConsole, ResearchLab };
 
@@ -1157,5 +1158,13 @@ export default function App() {
         <DecisionDrawer detail={selectedDecision} loading={detailLoading} error={detailError} onClose={() => setDrawerOpen(false)} />
       )}
     </div>
+  );
+}
+
+export function MissionControlApp() {
+  return (
+    <BrowserErrorBoundary>
+      <App />
+    </BrowserErrorBoundary>
   );
 }
