@@ -248,6 +248,31 @@ async def test_database_rejects_a_second_active_run_in_one_environment(
     assert active.status is RunStatus.ACTIVE
 
 
+async def test_active_run_lookup_is_environment_scoped_and_read_only(
+    uow_factory: UnitOfWork,
+) -> None:
+    await _prepare_activatable_run(
+        uow_factory,
+        experiment_id=EXPERIMENT_ONE,
+        run_id=RUN_ONE,
+        command_id=COMMAND_ONE,
+        worker_boot_id=WORKER_ONE,
+    )
+    async with uow_factory.begin() as uow:
+        activated = await uow.platform.activate_run(
+            RUN_ONE,
+            command_id=COMMAND_ONE,
+            worker_boot_id=WORKER_ONE,
+            started_at=NOW + timedelta(seconds=3),
+        )
+    async with uow_factory.begin() as uow:
+        found = await uow.platform.get_active_run("environment-1")
+        absent = await uow.platform.get_active_run("environment-2")
+
+    assert found == activated
+    assert absent is None
+
+
 async def test_service_registration_is_idempotent_but_boot_identity_is_immutable(
     uow_factory: UnitOfWork,
 ) -> None:

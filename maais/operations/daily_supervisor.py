@@ -100,9 +100,7 @@ def supervise_daily_closes(
     observed_now = now or (lambda: datetime.now(UTC))
     logger.info(
         "daily_supervisor_started",
-        state_path=str(state_path.resolve()),
-        close_script=str(resolved_script),
-        poll_seconds=poll_seconds,
+        outcome="running",
     )
     while True:
         state = _load_state(state_path)
@@ -123,18 +121,19 @@ def supervise_daily_closes(
         command = (str(resolved_script), experiment_id, report_date.isoformat())
         logger.info(
             "daily_close_started",
-            experiment_id=experiment_id,
-            report_date=report_date.isoformat(),
+            experiment_ref=experiment_id,
+            operation_id=f"daily_close:{report_date.isoformat()}",
+            outcome="running",
         )
         result = runner(command)
         if result.returncode != 0:
             logger.error(
                 "daily_close_failed",
-                experiment_id=experiment_id,
-                report_date=report_date.isoformat(),
-                exit_code=result.returncode,
-                stdout=result.stdout[-4000:],
-                stderr=result.stderr[-4000:],
+                experiment_ref=experiment_id,
+                operation_id=f"daily_close:{report_date.isoformat()}",
+                error_code="daily_close_nonzero_exit",
+                outcome="failed",
+                reason_code=f"exit_code_{result.returncode}",
             )
             raise RuntimeError(
                 f"daily close failed for {report_date.isoformat()} with exit code "
@@ -142,7 +141,7 @@ def supervise_daily_closes(
             )
         logger.info(
             "daily_close_completed",
-            experiment_id=experiment_id,
-            report_date=report_date.isoformat(),
-            stdout=result.stdout[-4000:],
+            experiment_ref=experiment_id,
+            operation_id=f"daily_close:{report_date.isoformat()}",
+            outcome="completed",
         )

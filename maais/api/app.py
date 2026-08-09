@@ -76,6 +76,7 @@ from maais.db.repositories.operator_commands import (
 )
 from maais.db.repositories.sessions import LoginAuthenticationError, OperatorSessionRepository
 from maais.db.unit_of_work import UnitOfWork
+from maais.observability.sentry import initialize_backend_sentry
 from maais.operations.operator_commands import CommandStatus, OperatorCommand
 from maais.operations.verification import establish_read_only_snapshot
 from maais.security.passwords import INVALID_CREDENTIALS, verify_operator_password
@@ -200,6 +201,11 @@ def create_app(
     if resolved_security is None:
         global_settings = get_settings()
         resolved_security = global_settings.security
+    sentry_runtime = (
+        initialize_backend_sentry(global_settings.observability)
+        if global_settings is not None
+        else None
+    )
     if resolved_security.auth_mode is AuthMode.OPERATOR_SESSION and (
         control_token is not None or control_token_file is not None
     ):
@@ -234,6 +240,7 @@ def create_app(
         openapi_url=None if production_security else "/openapi.json",
     )
     application.state.session_factory = session_factory
+    application.state.sentry_runtime = sentry_runtime
     application.state.security = MissionControlSecurity(
         settings=resolved_security,
         control_token=resolved_control_token,

@@ -15,13 +15,22 @@ from pathlib import Path
 from uuid import UUID
 
 from maais.config.artifacts import ArtifactType
+from maais.config.cloud import DeploymentTarget
 from maais.config.settings import get_settings
-from maais.core.logging import configure_logging
+from maais.core.logging import configure_logging, get_logger
+from maais.db.connection import get_session_factory
+from maais.db.repositories.platform import PlatformRepository
 from maais.db.roles import load_database_role_passwords
 from maais.live import (
+    PaperLiveConfigurationError,
     load_manifest_file,
     prepare_live_manifest_file,
     run_live_paper_manifest,
+)
+from maais.observability.sentry import (
+    capture_terminal_exception,
+    flush_backend_sentry,
+    initialize_backend_sentry,
 )
 from maais.operations.backups import backup_configured_database
 from maais.operations.cloud_artifacts import (
@@ -55,10 +64,13 @@ from maais.operations.soak_readiness import (
     build_configured_soak_readiness,
     write_soak_readiness_bundle,
 )
-from maais.operations.verification import verify_configured_ledger
+from maais.operations.verification import establish_read_only_snapshot, verify_configured_ledger
+from maais.orchestration.supervisor import PaperWorkerHalt
 from maais.platform.candidate import build_candidate_descriptor, write_candidate_descriptor
 from maais.platform.runtime import verify_configured_runtime_identity
 from maais.security.passwords import hash_operator_password
+
+logger = get_logger(__name__)
 
 
 def _localhost_port(value: str) -> int:
@@ -203,6 +215,15 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "verify-ledger",
         help="read-only verification of event, projection, and account consistency",
+    )
+    sentry_test = commands.add_parser(
+        "sentry-test-event",
+        help="emit one non-sensitive backend Sentry qualification event",
+    )
+    sentry_test.add_argument(
+        "--state",
+        type=Path,
+        default=Path("artifacts/run-state/current.json"),
     )
     report = commands.add_parser(
         "daily-report",
@@ -360,6 +381,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     settings = get_settings()
     configure_logging(settings.log_level, settings.is_production)
+    sentry_runtime = initialize_backend_sentry(settings.observability)
+    if sentry_runtime.initialization_error is not None:
+        logger.error(
+            "sentry_initialization_failed",
+            error_code="sentry_initialization_failed",
+            outcome="disabled",
+        )
+    if arguments.command == "sentry-test-event":
+        try:
+            active = _active_local_timed_run(arguments.state)
+            if settings.deployment_target is DeploymentTarget.RAILWAY:
+                active = active or asyncio.run(
+                    _active_cloud_timed_run(settings.railway_environment_id)
+                )
+        except Exception:
+            logger.exception(
+                "sentry_test_event_refused",
+                error_code="timed_run_state_invalid",
+                outcome="refused",
+            )
+            return 1
+        if active:
+            logger.warning(
+                "sentry_test_event_refused",
+                reason_code="active_timed_run",
+                outcome="refused",
+            )
+            return 1
+        captured = sentry_runtime.capture_message(
+            "maais_backend_sentry_test_event",
+            event="sentry_test_event",
+            outcome="qualification",
+        )
+        flushed = sentry_runtime.flush(timeout=5.0) if captured else False
+        logger.info(
+            "sentry_test_event_completed" if captured and flushed else "sentry_test_event_failed",
+            error_code=("" if captured and flushed else "sentry_delivery_unconfirmed"),
+            outcome=("confirmed" if captured and flushed else "unconfirmed"),
+        )
+        return 0 if captured and flushed else 1
     if arguments.command == "cloud-bootstrap-roles":
         roles = asyncio.run(
             bootstrap_roles_with_url(
@@ -461,12 +522,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "mission-control":
         import uvicorn
 
-        uvicorn.run(
-            "maais.api.app:app",
-            host="127.0.0.1",
-            port=arguments.port,
-            log_config=None,
-        )
+        try:
+            uvicorn.run(
+                "maais.api.app:app",
+                host="127.0.0.1",
+                port=arguments.port,
+                log_config=None,
+            )
+        except Exception as exc:
+            logger.exception(
+                "mission_control_failed",
+                error_code="mission_control_unhandled_exception",
+                outcome="terminated",
+            )
+            _capture_exception_without_suppressing_exit(
+                exc,
+                event="mission_control_terminal_failure",
+                error_code="mission_control_unhandled_exception",
+                outcome="terminated",
+            )
+            return 1
         return 0
     if arguments.command == "verify-ledger":
         result = asyncio.run(verify_configured_ledger())
@@ -526,6 +601,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         except KeyboardInterrupt:
             pass
+        except Exception as exc:
+            logger.exception(
+                "daily_supervisor_failed",
+                error_code="daily_supervisor_unhandled_exception",
+                outcome="terminated",
+            )
+            _capture_exception_without_suppressing_exit(
+                exc,
+                event="daily_supervisor_terminal_failure",
+                error_code="daily_supervisor_unhandled_exception",
+                outcome="terminated",
+            )
+            return 1
         return 0
     if arguments.command == "final-report":
         report = build_final_report_from_bundles(
@@ -702,27 +790,115 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, sort_keys=True))
         return 0
-    manifest = load_manifest_file(arguments.manifest)
     try:
-        asyncio.run(run_live_paper_manifest(manifest, settings=settings))
-    except Exception as exc:
-        error = (str(exc).strip().replace("\x00", "") or "no detail")[:2000]
-        print(
-            json.dumps(
-                {
-                    "event": "paper_live_failed",
-                    "level": "error",
-                    "experiment_id": str(manifest.experiment_id),
-                    "error_type": type(exc).__name__,
-                    "error": error,
-                    "live_money": False,
-                },
-                sort_keys=True,
-            ),
-            flush=True,
+        manifest = load_manifest_file(arguments.manifest)
+    except (OSError, TypeError, ValueError):
+        logger.error(
+            "paper_live_refused",
+            error_code="paper_manifest_invalid",
+            outcome="refused",
         )
         return 1
+    try:
+        asyncio.run(run_live_paper_manifest(manifest, settings=settings))
+    except PaperLiveConfigurationError:
+        logger.error(
+            "paper_live_refused",
+            experiment_ref=str(manifest.experiment_id),
+            error_code="worker_configuration_invalid",
+            outcome="refused",
+        )
+        return 1
+    except Exception as exc:
+        outcome = (
+            exc.halt_persistence_outcome
+            if isinstance(exc, PaperWorkerHalt)
+            else "halt_persistence_unknown"
+        )
+        logger.exception(
+            "paper_live_failed",
+            experiment_ref=str(manifest.experiment_id),
+            error_code="worker_unhandled_exception",
+            outcome=outcome,
+        )
+        _capture_worker_failure_without_suppressing_exit(exc, outcome=outcome)
+        return 1
     return 0
+
+
+def _active_local_timed_run(state_path: Path) -> bool:
+    if not state_path.exists():
+        return False
+    value = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise TypeError("timed run state must be a JSON object")
+    run_purpose = value.get("run_purpose")
+    if run_purpose not in {"process_drill", "soak", "seven_day"}:
+        raise ValueError("current run state has an invalid run purpose")
+    if value.get("stopped_at") is not None:
+        return False
+    if not isinstance(value.get("experiment_id"), str) or not value["experiment_id"]:
+        raise ValueError("current run state requires an experiment ID")
+    if not isinstance(value.get("started_at"), str) or not value["started_at"]:
+        raise ValueError("current run state requires a start time")
+    return True
+
+
+async def _active_cloud_timed_run(railway_environment_id: str) -> bool:
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        async with session.begin():
+            await establish_read_only_snapshot(session)
+            active = await PlatformRepository(session).get_active_run(railway_environment_id)
+    return active is not None
+
+
+def _capture_worker_failure_without_suppressing_exit(
+    exception: BaseException,
+    *,
+    outcome: str,
+) -> None:
+    original = exception
+    persistence_error: BaseException | None = None
+    if isinstance(exception, PaperWorkerHalt):
+        original = exception.original_exception or exception
+        persistence_error = exception.persistence_error
+    _capture_exception_without_suppressing_exit(
+        original,
+        event="worker_terminal_failure",
+        error_code="worker_unhandled_exception",
+        outcome=outcome,
+        tags={"phase": "primary"},
+    )
+    if persistence_error is not None:
+        _capture_exception_without_suppressing_exit(
+            persistence_error,
+            event="worker_terminal_failure",
+            error_code="worker_halt_persistence_failed",
+            outcome=outcome,
+            tags={"phase": "halt_persistence"},
+        )
+
+
+def _capture_exception_without_suppressing_exit(
+    exception: BaseException,
+    *,
+    event: str,
+    error_code: str,
+    outcome: str,
+    tags: dict[str, object] | None = None,
+) -> None:
+    try:
+        capture_terminal_exception(
+            exception,
+            event=event,
+            error_code=error_code,
+            outcome=outcome,
+            tags=tags,
+        )
+        flush_backend_sentry(timeout=5.0)
+    except Exception:
+        return
 
 
 def operator_password_hash_command(

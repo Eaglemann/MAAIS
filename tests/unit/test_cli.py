@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from pydantic import SecretStr
 
 from maais.cli import build_parser, main
 from maais.config.modes import RunMode
@@ -651,7 +652,7 @@ def test_manifest_file_loader_preserves_exact_identity(tmp_path: Path) -> None:
     assert restored.manifest_hash == manifest.manifest_hash
 
 
-def test_paper_live_cli_serializes_a_terminal_failure_without_a_plain_traceback(
+def test_paper_live_cli_logs_a_terminal_failure_without_a_plain_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -660,7 +661,10 @@ def test_paper_live_cli_serializes_a_terminal_failure_without_a_plain_traceback(
     async def fail_worker(*_: object, **__: object) -> None:
         raise RuntimeError("public source retries exhausted")
 
-    monkeypatch.setattr("maais.cli.get_settings", lambda: Settings(run_mode=RunMode.PAPER_LIVE))
+    monkeypatch.setattr(
+        "maais.cli.get_settings",
+        lambda: Settings(environment="production", run_mode=RunMode.PAPER_LIVE),
+    )
     monkeypatch.setattr("maais.cli.load_manifest_file", lambda _: manifest)
     monkeypatch.setattr("maais.cli.run_live_paper_manifest", fail_worker)
 
@@ -668,14 +672,12 @@ def test_paper_live_cli_serializes_a_terminal_failure_without_a_plain_traceback(
     output = capsys.readouterr()
     payload = json.loads(output.out)
     assert output.err == ""
-    assert payload == {
-        "error": "public source retries exhausted",
-        "error_type": "RuntimeError",
-        "event": "paper_live_failed",
-        "experiment_id": str(manifest.experiment_id),
-        "level": "error",
-        "live_money": False,
-    }
+    assert payload["event"] == "paper_live_failed"
+    assert payload["error_code"] == "worker_unhandled_exception"
+    assert payload["experiment_ref"] == str(manifest.experiment_id)
+    assert payload["outcome"] == "halt_persistence_unknown"
+    assert payload["exception"]["type"] == "RuntimeError"
+    assert payload["exception"]["message"] == "public source retries exhausted"
 
 
 async def test_paper_live_refuses_nonpaper_environment_before_database_access() -> None:
@@ -690,7 +692,7 @@ async def test_paper_live_refuses_even_demo_credentials() -> None:
     manifest = _live_manifest(schema_revision="0015")
     settings = Settings(
         run_mode=RunMode.PAPER_LIVE,
-        binance_demo_api_key="configured",  # pragma: allowlist secret
+        binance_demo_api_key=SecretStr("configured"),  # pragma: allowlist secret
     )
 
     with pytest.raises(ValueError, match="refuses configured exchange credentials"):

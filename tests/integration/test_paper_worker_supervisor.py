@@ -279,6 +279,10 @@ async def test_supervisor_persists_halt_and_releases_lease_on_dispatch_failure(
     assert order == ["observe:failed-event", "dispatch:failed-event"]
     assert public.stopped
     assert supervisor.state is PaperWorkerSupervisorState.HALTED
+    assert supervisor.failure is not None
+    assert supervisor.failure.halt_persistence_outcome == "halt_persistence_succeeded"
+    assert isinstance(supervisor.failure.original_exception, ArithmeticError)
+    assert supervisor.failure.persistence_error is None
     assert lease.status is WorkerLeaseStatus.RELEASED
     assert checkpoint.status is WorkerStatus.HALTED
     assert checkpoint.events[-1].event_type == "worker_checkpoint.halted"

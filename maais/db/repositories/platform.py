@@ -328,6 +328,17 @@ class PlatformRepository:
             raise LookupError("platform run does not exist")
         return _run_from_row(row)
 
+    async def get_active_run(self, railway_environment_id: str) -> PlatformRun | None:
+        if not railway_environment_id or railway_environment_id != railway_environment_id.strip():
+            raise ValueError("Railway environment ID must be nonempty and trimmed")
+        row = await self._session.scalar(
+            select(RunInstanceModel).where(
+                RunInstanceModel.railway_environment_id == railway_environment_id,
+                RunInstanceModel.status == RunStatus.ACTIVE.value,
+            )
+        )
+        return _run_from_row(row) if row is not None else None
+
     async def list_run_services(self, run_id: UUID) -> tuple[ServiceInstance, ...]:
         rows = (
             await self._session.scalars(

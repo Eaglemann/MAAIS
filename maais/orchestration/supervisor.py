@@ -63,7 +63,55 @@ class PaperWorkerSupervisorState(StrEnum):
 
 
 class PaperWorkerHalt(RuntimeError):
-    pass
+    """Terminal worker failure with explicit halt-persistence evidence."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        original_exception: BaseException | None = None,
+        persistence_error: BaseException | None = None,
+        halt_persistence_outcome: str = "unknown",
+    ) -> None:
+        super().__init__(message)
+        self.original_exception = original_exception
+        self.persistence_error = persistence_error
+        self.halt_persistence_outcome = halt_persistence_outcome
+
+    @classmethod
+    def from_terminal_failure(
+        cls,
+        original_exception: BaseException,
+        *,
+        persistence_error: BaseException | None = None,
+        persistence_succeeded: bool | None = None,
+    ) -> PaperWorkerHalt:
+        detail = _failure_detail(original_exception)
+        message = f"paper worker halted: {detail}"
+        if persistence_error is not None:
+            message = f"{message}; halt persistence failed: {_failure_detail(persistence_error)}"
+            outcome = "halt_persistence_failed"
+        elif persistence_succeeded is True:
+            outcome = "halt_persistence_succeeded"
+        elif persistence_succeeded is False:
+            outcome = "halt_persistence_unavailable"
+        else:
+            outcome = "halt_persistence_not_attempted"
+        failure = cls(
+            message,
+            original_exception=original_exception,
+            persistence_error=persistence_error,
+            halt_persistence_outcome=outcome,
+        )
+        failure.__cause__ = (
+            BaseExceptionGroup(
+                "paper worker terminal and halt-persistence failures",
+                (original_exception, persistence_error),
+            )
+            if persistence_error is not None
+            else original_exception
+        )
+        return failure
 
 
 class _DispatchStop:
@@ -175,7 +223,7 @@ class PaperWorkerSupervisor:
         except Exception as exc:
             await self._halt(exc)
             assert self._failure is not None
-            raise self._failure from exc
+            raise self._failure
 
         self._state = (
             PaperWorkerSupervisorState.RUNNING
@@ -244,7 +292,7 @@ class PaperWorkerSupervisor:
         except Exception as exc:
             await self._halt(exc)
             assert self._failure is not None
-            raise self._failure from exc
+            raise self._failure
 
         await self._cancel_heartbeat()
         if self._monitor_task is not None:
@@ -471,13 +519,17 @@ class PaperWorkerSupervisor:
         self._stopping = True
         self._state = PaperWorkerSupervisorState.HALTED
         detail = _failure_detail(exc)
-        self._failure = PaperWorkerHalt(f"paper worker halted: {detail}")
+        self._failure = PaperWorkerHalt.from_terminal_failure(exc)
         try:
             await self._public_data.stop()
         except Exception:
             pass
         await self._cancel_background_tasks()
         if self._checkpoint is None:
+            self._failure = PaperWorkerHalt.from_terminal_failure(
+                exc,
+                persistence_succeeded=False,
+            )
             return
         halted_at = self._observed_now()
         checkpoint = self._checkpoint.transition(
@@ -507,12 +559,16 @@ class PaperWorkerSupervisor:
                     released_at=halted_at,
                 )
         except Exception as persistence_error:
-            self._failure = PaperWorkerHalt(
-                f"paper worker halted: {detail}; "
-                f"halt persistence failed: {_failure_detail(persistence_error)}"
+            self._failure = PaperWorkerHalt.from_terminal_failure(
+                exc,
+                persistence_error=persistence_error,
             )
             return
         self._checkpoint = checkpoint
+        self._failure = PaperWorkerHalt.from_terminal_failure(
+            exc,
+            persistence_succeeded=True,
+        )
 
     async def _cancel_background_tasks(self) -> None:
         current = asyncio.current_task()

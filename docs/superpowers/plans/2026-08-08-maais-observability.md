@@ -215,18 +215,21 @@ ALLOWED_COMMON_FIELDS = frozenset(
 - Create: `maais/observability/sentry.py`
 - Modify: `maais/api/app.py`
 - Modify: `maais/cli.py`
+- Modify: `maais/live.py`
+- Modify: `maais/db/repositories/platform.py`
 - Modify: `maais/orchestration/supervisor.py`
 - Modify: `maais/operations/daily_supervisor.py`
 - Test: `tests/unit/observability/test_sentry.py`
 - Test: `tests/unit/orchestration/test_terminal_failures.py`
+- Test: `tests/integration/test_platform_repository.py`
 
 **Consumes:** Redaction pipeline, exact release/runtime context, top-level service boundaries.
 
 **Produces:** Privacy-safe backend Sentry events, full terminal exception evidence, and non-zero exits.
 
-- [ ] Write a captured-transport test that sends each seeded canary through request headers/body, tags, breadcrumbs, exception values, contexts, and user data; assert removal from the complete serialized envelope.
+- [x] Write a captured-transport test that sends each seeded canary through request headers/body, tags, breadcrumbs, exception values, contexts, and user data; assert removal from the complete serialized envelope.
 
-- [ ] Write terminal-boundary tests proving worker failure attempts the existing halt persistence, reports persistence success/failure, captures original and secondary exceptions, and exits non-zero even when Sentry transport fails.
+- [x] Write terminal-boundary tests proving worker failure attempts the existing halt persistence, reports persistence success/failure, captures original and secondary exceptions, and exits non-zero even when Sentry transport fails.
 
   ```python
   def test_worker_terminal_error_preserves_original_when_halt_persistence_fails() -> None:
@@ -236,13 +239,13 @@ ALLOWED_COMMON_FIELDS = frozenset(
       assert captured_event("worker_terminal_failure")["error_code"] == "worker_unhandled_exception"
   ```
 
-- [ ] Run tests and confirm missing Sentry boundary behavior.
+- [x] Run tests and confirm missing Sentry boundary behavior.
 
   ```bash
   uv run pytest -q tests/unit/observability/test_sentry.py tests/unit/orchestration/test_terminal_failures.py
   ```
 
-- [ ] Initialize Sentry once per process with `send_default_pii=False`, exact release/environment, zero default traces/profiles, request-body suppression, sensitive-header stripping, and `before_send`/`before_breadcrumb` redaction.
+- [x] Initialize Sentry once per process with `send_default_pii=False`, exact release/environment, zero default traces/profiles, request-body suppression, sensitive-header stripping, and `before_send`/`before_breadcrumb` redaction.
 
   ```python
   sentry_sdk.init(
@@ -257,11 +260,11 @@ ALLOWED_COMMON_FIELDS = frozenset(
   )
   ```
 
-- [ ] Replace top-level truncated error printing with `logger.exception` plus explicit Sentry capture; keep existing fail-closed database persistence before exit.
+- [x] Replace top-level truncated error printing with `logger.exception` plus explicit Sentry capture; keep existing fail-closed database persistence before exit.
 
-- [ ] Add a purpose-bound `sentry-test-event` command that emits one stable, non-sensitive event and returns non-zero when capture/flush cannot be confirmed. It is disallowed during an active timed run.
+- [x] Add a purpose-bound `sentry-test-event` command that emits one stable, non-sensitive event and returns non-zero when capture/flush cannot be confirmed. It is disallowed during an active timed run.
 
-- [ ] Run focused tests plus CLI/supervisor regressions.
+- [x] Run focused tests plus CLI/supervisor regressions.
 
   ```bash
   uv run pytest -q tests/unit/observability/test_sentry.py tests/unit/orchestration/test_terminal_failures.py tests/unit/orchestration tests/unit/operations/test_daily_supervisor.py
@@ -271,10 +274,10 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
-  git add maais/observability/sentry.py maais/api/app.py maais/cli.py maais/orchestration/supervisor.py maais/operations/daily_supervisor.py tests/unit/observability/test_sentry.py tests/unit/orchestration/test_terminal_failures.py
+  git add maais/observability/sentry.py maais/api/app.py maais/cli.py maais/live.py maais/db/repositories/platform.py maais/orchestration/supervisor.py maais/operations/daily_supervisor.py tests/unit/observability/test_sentry.py tests/unit/orchestration/test_terminal_failures.py tests/integration/test_platform_repository.py
   git commit -m "feat: capture terminal service failures"
   git push origin feat/paper-platform-baseline
   ```

@@ -88,6 +88,10 @@ async def test_database_outage_halts_before_more_work_and_expired_lease_restarts
 
     assert first.state is PaperWorkerSupervisorState.HALTED
     assert first_public.stopped
+    assert first.failure is not None
+    assert first.failure.halt_persistence_outcome == "halt_persistence_failed"
+    assert isinstance(first.failure.original_exception, ConnectionError)
+    assert isinstance(first.failure.persistence_error, ConnectionError)
 
     outage_uow.unavailable = False
     second_public = _PublicData()
