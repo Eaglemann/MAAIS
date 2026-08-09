@@ -34,7 +34,7 @@ RUN uv sync --locked --no-dev --no-editable
 RUN test "$MAAIS_SOURCE_CLEAN" = "true" \
     && printf '%s' "$RAILWAY_GIT_COMMIT_SHA" | grep -Eq '^[0-9a-f]{40}$'
 RUN mkdir -p /build \
-    && uv run maais candidate-descriptor \
+    && uv run --no-dev --no-sync maais candidate-descriptor \
         --repository /src \
         --dashboard-dir /src/dashboard/dist \
         --git-sha "$RAILWAY_GIT_COMMIT_SHA" \
@@ -68,7 +68,7 @@ RUN rm -rf /usr/local/lib/python3.12/ensurepip \
         -type d \( -name __pycache__ -o -name test -o -name tests \) \
         -prune -exec rm -rf '{}' + \
     && find /usr/local/lib/python3.12 /opt/maais /app \
-        -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete \
+        -type f \( -name '*.map' -o -name '*.pyc' -o -name '*.pyo' \) -delete \
     && chmod -R a-w /app /opt/maais
 USER 10001:10001
 ENTRYPOINT ["/opt/maais/.venv/bin/maais"]

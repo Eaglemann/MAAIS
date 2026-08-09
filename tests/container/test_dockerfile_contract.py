@@ -73,7 +73,7 @@ def test_locked_builds_generate_the_candidate_from_exact_source_inputs() -> None
     assert "ARG MAAIS_SOURCE_CLEAN" in instructions
     assert 'test "$MAAIS_SOURCE_CLEAN" = "true"' in joined
     assert "^[0-9a-f]{40}$" in joined
-    assert "uv run maais candidate-descriptor" in joined
+    assert "uv run --no-dev --no-sync maais candidate-descriptor" in joined
     assert '--git-sha "$RAILWAY_GIT_COMMIT_SHA"' in joined
     assert '--source-clean "$MAAIS_SOURCE_CLEAN"' in joined
     assert "--output /build/candidate.json" in joined
@@ -110,7 +110,7 @@ def test_final_stage_is_fixed_non_root_minimal_and_paper_only() -> None:
     assert "find /usr/local/lib/python3.12 /opt/maais /app" in joined
     assert "-name __pycache__ -o -name test -o -name tests" in joined
     assert "-prune -exec rm -rf '{}' +" in joined
-    assert "-type f \\( -name '*.pyc' -o -name '*.pyo' \\) -delete" in joined
+    assert "-type f \\( -name '*.map' -o -name '*.pyc' -o -name '*.pyo' \\) -delete" in joined
     assert "SENTRY_AUTH_TOKEN" not in joined
     assert "DATABASE_URL" not in joined
     assert "BINANCE_DEMO_API" not in joined
