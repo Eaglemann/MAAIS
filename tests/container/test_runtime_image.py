@@ -94,9 +94,7 @@ def test_runtime_image_contract(tmp_path: Path) -> None:
         or path == "opt/maais"
         or path.startswith("opt/maais/")
     )
-    assert application_entries
-    assert all(entry.uid == 0 and entry.gid == 0 for entry in application_entries)
-    assert all(entry.mode & 0o222 == 0 for entry in application_entries)
+    _assert_application_inventory_permissions(application_entries)
     _assert_forbidden_inventory_absent(snapshot)
 
 
@@ -130,6 +128,33 @@ def test_oci_layout_reader_rejects_layer_path_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(AssertionError, match="unsafe image layer path"):
         load_image_snapshot(layout)
+
+
+def test_application_permission_contract_ignores_link_mode_bits() -> None:
+    entries = (
+        ImageEntry(path="app", mode=0o555, uid=0, gid=0, kind="dir"),
+        ImageEntry(path="app/data", mode=0o444, uid=0, gid=0, kind="file"),
+        ImageEntry(
+            path="opt/maais/.venv/bin/python",
+            mode=0o777,
+            uid=0,
+            gid=0,
+            kind="symlink",
+            linkname="/usr/local/bin/python3.12",
+        ),
+    )
+
+    _assert_application_inventory_permissions(entries)
+
+
+def test_application_permission_contract_rejects_writable_regular_entry() -> None:
+    entries = (
+        ImageEntry(path="app", mode=0o555, uid=0, gid=0, kind="dir"),
+        ImageEntry(path="app/data", mode=0o644, uid=0, gid=0, kind="file"),
+    )
+
+    with pytest.raises(AssertionError, match=r"app/data.*0o644"):
+        _assert_application_inventory_permissions(entries)
 
 
 def test_oci_layout_reader_rejects_blob_bytes_that_do_not_match_descriptor(
@@ -331,6 +356,22 @@ def _assert_forbidden_inventory_absent(snapshot: ImageSnapshot) -> None:
     assert not any(
         path.startswith("usr/local/lib/python3.12/site-packages/pip") for path in snapshot.files
     )
+
+
+def _assert_application_inventory_permissions(entries: tuple[ImageEntry, ...]) -> None:
+    assert entries
+    non_root = tuple(entry.path for entry in entries if entry.uid != 0 or entry.gid != 0)
+    assert not non_root, f"application entries must be root-owned: {non_root!r}"
+
+    # Linux does not consult permission bits on symbolic links, and tar hard-link
+    # headers do not define the target inode's effective mode. Regular files and
+    # directories are the entries whose write bits make the packaged tree mutable.
+    writable = tuple(
+        f"{entry.path} ({oct(entry.mode)})"
+        for entry in entries
+        if entry.kind in {"file", "dir"} and entry.mode & 0o222
+    )
+    assert not writable, f"application entries must be non-writable: {writable!r}"
 
 
 def _materialize_dashboard(files: dict[str, ImageEntry], target: Path) -> Path:
