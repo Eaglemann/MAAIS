@@ -114,3 +114,11 @@ def test_vite_upload_build_deletes_maps_and_normal_build_disables_them() -> None
     assert 'sourcemap: sourceMapUpload ? "hidden" : false' in config
     assert "SENTRY_AUTH_TOKEN" in config
     assert "VITE_SENTRY_AUTH_TOKEN" not in config
+
+
+def test_asset_manifest_writer_uses_locale_independent_path_order() -> None:
+    writer = Path("dashboard/scripts/write-asset-manifest.mjs").read_text(encoding="utf-8")
+
+    assert ".localeCompare(" not in writer
+    assert "left.path < right.path" in writer
+    assert "left.path > right.path" in writer

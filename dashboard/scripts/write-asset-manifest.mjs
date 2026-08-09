@@ -39,7 +39,9 @@ for (const path of paths) {
     size: content.length,
   });
 }
-assets.sort((left, right) => left.path.localeCompare(right.path));
+assets.sort((left, right) => (
+  left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+));
 if (assets.length === 0) throw new Error("dashboard asset inventory cannot be empty");
 
 const payload = {
