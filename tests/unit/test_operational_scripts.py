@@ -116,3 +116,13 @@ def test_browser_security_smoke_refuses_non_test_invocation() -> None:
     assert result.returncode == 64
     assert result.stdout == ""
     assert result.stderr == "browser security smoke is test-only\n"
+
+
+def test_browser_security_smoke_fills_the_passphrase_without_a_focus_handoff() -> None:
+    browser_script = (REPOSITORY_ROOT / "scripts" / "browser-smoke.sh").read_text()
+
+    assert (
+        "run_cli_command fill '[aria-label=\"Operator passphrase\"]' "
+        '"${MAAIS_BROWSER_SMOKE_PASSPHRASE}"' in browser_script
+    )
+    assert 'getByLabel("Operator passphrase").focus()' not in browser_script

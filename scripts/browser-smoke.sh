@@ -122,8 +122,7 @@ run_browser_code 'await page.getByRole("heading", { name: "Sign in to Mission Co
 
 login() {
   current_stage="enter operator passphrase"
-  run_browser_code 'await page.getByLabel("Operator passphrase").focus()'
-  run_cli_command type "${MAAIS_BROWSER_SMOKE_PASSPHRASE}"
+  run_cli_command fill '[aria-label="Operator passphrase"]' "${MAAIS_BROWSER_SMOKE_PASSPHRASE}"
   current_stage="submit operator login"
   run_browser_code 'await page.getByRole("button", { name: "Sign in" }).click(); await page.getByRole("heading", { name: "Mission Control", exact: true }).waitFor({ timeout: 15000 })'
 }
