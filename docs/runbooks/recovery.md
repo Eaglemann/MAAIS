@@ -1,5 +1,9 @@
 # Recovery and restore
 
+This file covers the local supervised runtime. Railway failure evidence and authorization
+boundaries are in [railway-recovery.md](railway-recovery.md) and
+[railway-incidents.md](railway-incidents.md).
+
 ## Worker or machine restart
 
 For the intentional pre-soak worker and API kill tests, use

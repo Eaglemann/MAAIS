@@ -1,5 +1,10 @@
 # Paper-week operations
 
+Local operations are documented below. For Railway standby, qualification, preflight, and
+the separately authorized cloud soak, use [railway-qualification.md](railway-qualification.md),
+[railway-production-preflight.md](railway-production-preflight.md), and
+[railway-soak.md](railway-soak.md).
+
 ## Start
 
 ### Disposable recovery drills
