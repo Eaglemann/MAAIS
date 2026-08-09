@@ -434,7 +434,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
 **Produces:** Immutable minute evaluations, deduplicated incident transitions, Sentry check-ins, and the `cloud-operations` loop.
 
-- [ ] Write failing table-driven tests for every critical and warning condition, healthy recovery, incident deduplication, Sentry outage fallback, monotonic evaluation times, and no trading/control mutation.
+- [x] Write failing table-driven tests for every critical and warning condition, healthy recovery, incident deduplication, Sentry outage fallback, monotonic evaluation times, and no trading/control mutation.
 
   ```python
   CRITICAL_COMPONENTS = {
@@ -454,21 +454,21 @@ ALLOWED_COMMON_FIELDS = frozenset(
   }
   ```
 
-- [ ] Run tests and confirm cloud health behavior is absent.
+- [x] Run tests and confirm cloud health behavior is absent.
 
   ```bash
   uv run pytest -q tests/unit/operations/test_cloud_health.py tests/integration/test_health_supervisor.py
   ```
 
-- [ ] Implement `CloudHealthEvaluator.evaluate(run_id, checked_at)` as a read-only snapshot followed by a separate operational transaction that inserts the immutable result and opens/updates/recovery-marks deduplicated incidents.
+- [x] Implement `CloudHealthEvaluator.evaluate(run_id, checked_at)` as a read-only snapshot followed by a separate operational transaction that inserts the immutable result and opens/updates/recovery-marks deduplicated incidents.
 
-- [ ] Implement the supervisor with a monotonic one-minute cadence, advisory ownership lock, graceful SIGTERM, terminal exception boundary, and no catch-up burst after a long scheduling gap.
+- [x] Implement the supervisor with a monotonic one-minute cadence, advisory ownership lock, graceful SIGTERM, terminal exception boundary, and no catch-up burst after a long scheduling gap.
 
-- [ ] Add Sentry Cron check-ins around daily close, backup, and evidence replication; check-in failure degrades readiness but cannot suppress the operation's local/database result.
+- [x] Add Sentry Cron check-ins around daily close, backup, and evidence replication; check-in failure degrades readiness but cannot suppress the operation's local/database result.
 
-- [ ] Add `cloud-operations` CLI command and refuse startup unless runtime identity, role, schema, audit chain, and artifact settings validate.
+- [x] Add `cloud-operations` CLI command and refuse startup unless runtime identity, role, schema, audit chain, and artifact settings validate.
 
-- [ ] Run health tests plus existing health/incident/worker safety regressions.
+- [x] Run health tests plus existing health/incident/worker safety regressions.
 
   ```bash
   uv run pytest -q tests/unit/operations/test_cloud_health.py tests/integration/test_health_supervisor.py tests/unit/operations/test_health.py tests/integration/test_operational_state_repository.py tests/test_execution_safety.py
@@ -478,7 +478,7 @@ ALLOWED_COMMON_FIELDS = frozenset(
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/operations/cloud_health.py maais/operations/health_supervisor.py maais/operations/health.py maais/monitoring/alerting.py maais/cli.py tests/unit/operations/test_cloud_health.py tests/integration/test_health_supervisor.py

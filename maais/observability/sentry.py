@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
 import sentry_sdk
+from sentry_sdk.crons.api import capture_checkin
+from sentry_sdk.crons.consts import MonitorStatus
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.transport import HttpTransport, Transport
@@ -25,6 +28,9 @@ _FORBIDDEN_EVENT_FIELDS = frozenset(
     }
 )
 _current_runtime: SentryRuntime | None = None
+_MONITOR_SLUG = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+_CHECK_IN_ID = re.compile(r"[0-9a-f]{32}")
+_MONITOR_STATUSES = frozenset({MonitorStatus.IN_PROGRESS, MonitorStatus.OK, MonitorStatus.ERROR})
 
 
 @dataclass(slots=True)
@@ -97,6 +103,34 @@ class SentryRuntime:
             return False
         self._last_event_id = event_id
         return bool(event_id)
+
+    def capture_check_in(
+        self,
+        *,
+        monitor_slug: str,
+        status: str,
+        check_in_id: str | None = None,
+        duration: float | None = None,
+    ) -> str | None:
+        if (
+            not self.enabled
+            or _MONITOR_SLUG.fullmatch(monitor_slug) is None
+            or status not in _MONITOR_STATUSES
+            or (check_in_id is not None and _CHECK_IN_ID.fullmatch(check_in_id) is None)
+            or (duration is not None and duration < 0)
+        ):
+            return None
+        try:
+            captured_id = capture_checkin(
+                monitor_slug=monitor_slug,
+                check_in_id=check_in_id,
+                status=status,
+                duration=duration,
+            )
+        except Exception:
+            return None
+        self._last_event_id = captured_id
+        return captured_id
 
     def flush(self, *, timeout: float = 5.0) -> bool:
         if not self.enabled:
@@ -333,8 +367,24 @@ class _ConfirmingHttpTransport(HttpTransport):
             return self._delivery_results.get(event_id, False)
 
     def _record_delivery(self, envelope: Any, *, delivered: bool) -> None:
-        event = envelope.get_event() if envelope is not None else None
-        event_id = event.get("event_id") if isinstance(event, dict) else None
-        if isinstance(event_id, str):
+        delivery_id = _delivery_identity(envelope)
+        if delivery_id is not None:
             with self._delivery_lock:
-                self._delivery_results[event_id] = delivered
+                self._delivery_results[delivery_id] = delivered
+
+
+def _delivery_identity(envelope: Any) -> str | None:
+    if envelope is None:
+        return None
+    event = envelope.get_event()
+    event_id = event.get("event_id") if isinstance(event, dict) else None
+    if isinstance(event_id, str):
+        return event_id
+    for item in envelope:
+        if getattr(item, "type", None) != "check_in":
+            continue
+        payload = getattr(getattr(item, "payload", None), "json", None)
+        check_in_id = payload.get("check_in_id") if isinstance(payload, dict) else None
+        if isinstance(check_in_id, str):
+            return check_in_id
+    return None

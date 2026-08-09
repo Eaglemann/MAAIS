@@ -14,21 +14,26 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
-from maais.config.artifacts import ArtifactType
-from maais.config.cloud import DeploymentTarget
-from maais.config.settings import get_settings
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from maais.config.artifacts import ArtifactStoreMode, ArtifactType
+from maais.config.cloud import DeploymentTarget, ServiceRole
+from maais.config.settings import Settings, get_settings
 from maais.core.logging import configure_logging, get_logger
 from maais.db.connection import get_session_factory
 from maais.db.repositories.observability import ObservabilityRepository
 from maais.db.repositories.platform import PlatformRepository
 from maais.db.roles import load_database_role_passwords
+from maais.db.unit_of_work import UnitOfWork
 from maais.live import (
     PaperLiveConfigurationError,
     load_manifest_file,
     prepare_live_manifest_file,
     run_live_paper_manifest,
 )
+from maais.monitoring.alerting import SentryCronReporter
 from maais.observability.sentry import (
+    SentryRuntime,
     capture_terminal_exception,
     flush_backend_sentry,
     initialize_backend_sentry,
@@ -40,6 +45,10 @@ from maais.operations.cloud_artifacts import (
     publish_configured_cloud_bundle,
     restore_configured_cloud_backup,
 )
+from maais.operations.cloud_health import (
+    CloudHealthEvaluator,
+    DatabaseCloudHealthSnapshotReader,
+)
 from maais.operations.daily_supervisor import supervise_daily_closes
 from maais.operations.database_identity import collect_configured_database_identity
 from maais.operations.final_reporting import (
@@ -48,6 +57,7 @@ from maais.operations.final_reporting import (
     write_final_report_bundle,
 )
 from maais.operations.health import collect_configured_experiment_health
+from maais.operations.health_supervisor import HealthSupervisor, PostgresHealthOwnership
 from maais.operations.incident_management import (
     IncidentAction,
     apply_configured_incident_action,
@@ -68,7 +78,7 @@ from maais.operations.soak_readiness import (
 from maais.operations.verification import establish_read_only_snapshot, verify_configured_ledger
 from maais.orchestration.supervisor import PaperWorkerHalt
 from maais.platform.candidate import build_candidate_descriptor, write_candidate_descriptor
-from maais.platform.runtime import verify_configured_runtime_identity
+from maais.platform.runtime import stop_registered_runtime, verify_configured_runtime_identity
 from maais.security.passwords import hash_operator_password
 
 logger = get_logger(__name__)
@@ -191,6 +201,11 @@ def build_parser() -> argparse.ArgumentParser:
     cloud_daily_close.add_argument("--experiment", type=UUID, required=True)
     cloud_daily_close.add_argument("--date", dest="report_date", type=_date, required=True)
     cloud_daily_close.add_argument("--temporary-parent", type=Path, required=True)
+    cloud_operations = commands.add_parser(
+        "cloud-operations",
+        help="run the single-owner immutable one-minute cloud health supervisor",
+    )
+    cloud_operations.add_argument("--run", type=UUID, required=True)
     prepare = commands.add_parser(
         "prepare-paper-live",
         help="preflight public venues and write an immutable paper manifest",
@@ -449,6 +464,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "cloud-identity":
         evidence = asyncio.run(verify_configured_runtime_identity(settings=settings))
         print(json.dumps(evidence.to_json_data(), sort_keys=True))
+        return 0
+    if arguments.command == "cloud-operations":
+        try:
+            asyncio.run(
+                run_cloud_operations(
+                    settings=settings,
+                    run_id=arguments.run,
+                    sentry_runtime=sentry_runtime,
+                )
+            )
+        except Exception as exc:
+            logger.exception(
+                "cloud_operations_failed",
+                error_code="cloud_operations_unhandled_exception",
+                outcome="terminated",
+            )
+            _capture_exception_without_suppressing_exit(
+                exc,
+                event="cloud_operations_terminal_failure",
+                error_code="cloud_operations_unhandled_exception",
+                outcome="terminated",
+            )
+            return 1
+        print(json.dumps({"live_money": False, "status": "stopped"}, sort_keys=True))
         return 0
     if arguments.command == "cloud-publish":
         result = asyncio.run(
@@ -843,6 +882,101 @@ def _active_local_timed_run(state_path: Path) -> bool:
     if not isinstance(value.get("started_at"), str) or not value["started_at"]:
         raise ValueError("current run state requires a start time")
     return True
+
+
+async def run_cloud_operations(
+    *,
+    settings: Settings,
+    run_id: UUID,
+    sentry_runtime: SentryRuntime,
+) -> None:
+    _validate_cloud_operations_settings(settings)
+    evidence = await verify_configured_runtime_identity(settings=settings, run_id=run_id)
+    engine = create_async_engine(
+        settings.database_url_value,
+        pool_pre_ping=True,
+        hide_parameters=True,
+    )
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    terminal_failure: BaseException | None = None
+    try:
+        async with session_factory() as session:
+            async with session.begin():
+                await establish_read_only_snapshot(session)
+                audit = await ObservabilityRepository(session).verify_audit_chain()
+        if not audit.ok:
+            raise RuntimeError("cloud operations startup audit chain is invalid")
+
+        reporter = SentryCronReporter(
+            runtime=sentry_runtime,
+            monitor_slugs=settings.observability.cron_monitor_slugs,
+        )
+        reader = DatabaseCloudHealthSnapshotReader(
+            session_factory=session_factory,
+            runtime_evidence=evidence,
+            environment=settings.environment,
+            sentry_delivery_confirmed=lambda: reporter.last_delivery_confirmed,
+        )
+        evaluator = CloudHealthEvaluator(
+            uow_factory=UnitOfWork(session_factory),
+            snapshot_reader=reader,
+            service_boot_id=evidence.identity.boot_id,
+        )
+        supervisor = HealthSupervisor(
+            evaluator=evaluator,
+            run_id=run_id,
+            ownership=PostgresHealthOwnership(engine, run_id=run_id),
+        )
+        remove_signal_handlers = supervisor.install_signal_handlers()
+        try:
+            await supervisor.run()
+        finally:
+            remove_signal_handlers()
+    except BaseException as error:
+        terminal_failure = error
+        raise
+    finally:
+        try:
+            await stop_registered_runtime(
+                session_factory=session_factory,
+                identity=evidence.identity,
+                reason_code=(
+                    "cloud_operations_failed"
+                    if terminal_failure is not None
+                    else "cloud_operations_stopped"
+                ),
+                stopped_at=datetime.now(timezone.utc),
+            )
+        except Exception:
+            logger.exception(
+                "cloud_operations_stop_registration_failed",
+                error_code="cloud_operations_stop_registration_failed",
+                outcome="unconfirmed",
+            )
+            if terminal_failure is None:
+                raise
+        finally:
+            await engine.dispose()
+
+
+def _validate_cloud_operations_settings(settings: Settings) -> None:
+    artifacts = settings.artifacts
+    observability = settings.observability
+    if settings.deployment_target is not DeploymentTarget.RAILWAY:
+        raise ValueError("cloud operations requires a Railway deployment")
+    if settings.service_role is not ServiceRole.OPERATIONS:
+        raise ValueError("cloud operations requires the operations service role")
+    if (
+        artifacts.mode is not ArtifactStoreMode.DUAL_S3
+        or not artifacts.replica_configured
+        or not artifacts.canonical_configured
+        or artifacts.canonical_object_lock_required is not True
+    ):
+        raise ValueError("cloud operations requires complete dual-store WORM settings")
+    if set(observability.cron_monitor_slugs) != {"daily_close", "backup", "evidence"}:
+        raise ValueError("cloud operations requires all Sentry Cron monitors")
+    if not observability.backend_dsn_value:
+        raise ValueError("cloud operations requires backend Sentry")
 
 
 async def _active_cloud_timed_run(railway_environment_id: str) -> bool:

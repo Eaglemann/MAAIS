@@ -203,6 +203,55 @@ def test_confirming_transport_records_http_acknowledgement_and_network_failure(
     assert transport.delivery_confirmed("a" * 32) is False
 
 
+def test_confirming_transport_records_cron_check_in_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = object.__new__(_ConfirmingHttpTransport)
+    transport._delivery_results = {}
+    transport._delivery_lock = threading.Lock()
+    envelope = Envelope()
+    envelope.add_checkin(
+        {
+            "type": "check_in",
+            "monitor_slug": "maais-qualification-daily-close",
+            "check_in_id": "b" * 32,
+            "status": "ok",
+        }
+    )
+    monkeypatch.setattr(HttpTransport, "_handle_response", lambda *args: None)
+
+    transport._handle_response(SimpleNamespace(status=202), envelope)
+
+    assert transport.delivery_confirmed("b" * 32)
+
+
+def test_runtime_captures_privacy_safe_cron_check_ins() -> None:
+    transport = _CaptureTransport()
+    runtime = initialize_backend_sentry(_settings(), transport=transport)
+
+    check_in_id = runtime.capture_check_in(
+        monitor_slug="maais-qualification-daily-close",
+        status="in_progress",
+    )
+    completed_id = runtime.capture_check_in(
+        monitor_slug="maais-qualification-daily-close",
+        status="ok",
+        check_in_id=check_in_id,
+        duration=1.25,
+    )
+
+    assert check_in_id is not None
+    assert completed_id == check_in_id
+    assert runtime.flush(timeout=1.0)
+    serialized = b"\n".join(
+        envelope.serialize()  # type: ignore[union-attr]
+        for envelope in transport.envelopes
+    ).decode("utf-8")
+    assert "maais-qualification-daily-close" in serialized
+    assert '"status":"in_progress"' in serialized
+    assert '"status":"ok"' in serialized
+
+
 def test_sentry_transport_failure_never_escapes_terminal_capture() -> None:
     initialize_backend_sentry(_settings(), transport=_FailingTransport())
 

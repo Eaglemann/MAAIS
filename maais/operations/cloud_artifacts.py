@@ -9,6 +9,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from maais.artifacts.configured import build_configured_artifact_runtime
 from maais.artifacts.models import (
     ArtifactRecord,
@@ -21,11 +23,13 @@ from maais.artifacts.publisher import ArtifactPublicationError
 from maais.config.cloud import ServiceRole
 from maais.config.settings import Settings
 from maais.db.unit_of_work import UnitOfWork
+from maais.monitoring.alerting import SentryCronReporter
 from maais.observability.audit import (
     AuditSourceRole,
     deterministic_audit_event_id,
     pseudonymous_reference,
 )
+from maais.observability.sentry import initialize_backend_sentry
 from maais.operations.artifact_publication import (
     CloudArtifactIdentity,
     CloudDailyCloseAuthority,
@@ -40,6 +44,7 @@ from maais.operations.backups import (
     collect_backup_metadata,
     create_database_backup,
 )
+from maais.operations.cloud_health import reconcile_sentry_delivery_incident
 from maais.operations.restores import restore_canonical_backup_artifact
 from maais.platform.runtime import RuntimeIdentityEvidence, verify_configured_runtime_identity
 
@@ -74,8 +79,46 @@ async def publish_configured_cloud_bundle(
     artifact_type: ArtifactType,
     report_id: str,
     bundle_directory: Path,
+    cron_reporter: SentryCronReporter | None = None,
 ) -> CloudOperationResult:
-    evidence = await _operations_evidence(settings, run_id)
+    reporter = cron_reporter or _configured_cron_reporter(settings)
+    operations = ("evidence",)
+    runtime_evidence: RuntimeIdentityEvidence | None = None
+    try:
+        async with reporter.monitor(*operations):
+            runtime_evidence = await _operations_evidence(settings, run_id)
+            return await _publish_configured_cloud_bundle_impl(
+                settings=settings,
+                run_id=run_id,
+                experiment_id=experiment_id,
+                report_date=report_date,
+                artifact_type=artifact_type,
+                report_id=report_id,
+                bundle_directory=bundle_directory,
+                runtime_evidence=runtime_evidence,
+            )
+    finally:
+        if runtime_evidence is not None:
+            await _reconcile_cron_delivery_best_effort(
+                settings=settings,
+                experiment_id=experiment_id,
+                operations=operations,
+                reporter=reporter,
+            )
+
+
+async def _publish_configured_cloud_bundle_impl(
+    *,
+    settings: Settings,
+    run_id: UUID,
+    experiment_id: UUID,
+    report_date: date,
+    artifact_type: ArtifactType,
+    report_id: str,
+    bundle_directory: Path,
+    runtime_evidence: RuntimeIdentityEvidence,
+) -> CloudOperationResult:
+    evidence = runtime_evidence
     runtime = build_configured_artifact_runtime(settings)
     operation: ScheduledOperation | None = None
     try:
@@ -122,8 +165,42 @@ async def backup_configured_cloud_database(
     experiment_id: UUID,
     report_date: date,
     temporary_parent: Path,
+    cron_reporter: SentryCronReporter | None = None,
 ) -> CloudOperationResult:
-    evidence = await _operations_evidence(settings, run_id)
+    reporter = cron_reporter or _configured_cron_reporter(settings)
+    operations = ("backup", "evidence")
+    runtime_evidence: RuntimeIdentityEvidence | None = None
+    try:
+        async with reporter.monitor(*operations):
+            runtime_evidence = await _operations_evidence(settings, run_id)
+            return await _backup_configured_cloud_database_impl(
+                settings=settings,
+                run_id=run_id,
+                experiment_id=experiment_id,
+                report_date=report_date,
+                temporary_parent=temporary_parent,
+                runtime_evidence=runtime_evidence,
+            )
+    finally:
+        if runtime_evidence is not None:
+            await _reconcile_cron_delivery_best_effort(
+                settings=settings,
+                experiment_id=experiment_id,
+                operations=operations,
+                reporter=reporter,
+            )
+
+
+async def _backup_configured_cloud_database_impl(
+    *,
+    settings: Settings,
+    run_id: UUID,
+    experiment_id: UUID,
+    report_date: date,
+    temporary_parent: Path,
+    runtime_evidence: RuntimeIdentityEvidence,
+) -> CloudOperationResult:
+    evidence = runtime_evidence
     runtime = build_configured_artifact_runtime(settings)
     operation: ScheduledOperation | None = None
     try:
@@ -208,8 +285,42 @@ async def close_configured_cloud_day(
     experiment_id: UUID,
     report_date: date,
     temporary_parent: Path,
+    cron_reporter: SentryCronReporter | None = None,
 ) -> CloudDailyCloseResult:
-    evidence = await _operations_evidence(settings, run_id)
+    reporter = cron_reporter or _configured_cron_reporter(settings)
+    operations = ("daily_close", "backup", "evidence")
+    runtime_evidence: RuntimeIdentityEvidence | None = None
+    try:
+        async with reporter.monitor(*operations):
+            runtime_evidence = await _operations_evidence(settings, run_id)
+            return await _close_configured_cloud_day_impl(
+                settings=settings,
+                run_id=run_id,
+                experiment_id=experiment_id,
+                report_date=report_date,
+                temporary_parent=temporary_parent,
+                runtime_evidence=runtime_evidence,
+            )
+    finally:
+        if runtime_evidence is not None:
+            await _reconcile_cron_delivery_best_effort(
+                settings=settings,
+                experiment_id=experiment_id,
+                operations=operations,
+                reporter=reporter,
+            )
+
+
+async def _close_configured_cloud_day_impl(
+    *,
+    settings: Settings,
+    run_id: UUID,
+    experiment_id: UUID,
+    report_date: date,
+    temporary_parent: Path,
+    runtime_evidence: RuntimeIdentityEvidence,
+) -> CloudDailyCloseResult:
+    evidence = runtime_evidence
     runtime = build_configured_artifact_runtime(settings)
     try:
         return await run_cloud_daily_close(
@@ -353,6 +464,50 @@ async def _append_restore_audit(
 async def _operations_evidence(settings: Settings, run_id: UUID) -> RuntimeIdentityEvidence:
     _require_operations_role(settings)
     return await verify_configured_runtime_identity(settings=settings, run_id=run_id)
+
+
+def _configured_cron_reporter(settings: Settings) -> SentryCronReporter:
+    return SentryCronReporter(
+        runtime=initialize_backend_sentry(settings.observability),
+        monitor_slugs=settings.observability.cron_monitor_slugs,
+    )
+
+
+async def _reconcile_cron_delivery_best_effort(
+    *,
+    settings: Settings,
+    experiment_id: UUID,
+    operations: tuple[str, ...],
+    reporter: SentryCronReporter,
+) -> None:
+    engine = None
+    try:
+        engine = create_async_engine(
+            settings.database_url_value,
+            pool_pre_ping=True,
+            hide_parameters=True,
+        )
+        await reconcile_sentry_delivery_incident(
+            UnitOfWork(async_sessionmaker(engine, expire_on_commit=False)),
+            experiment_id=experiment_id,
+            operations=operations,
+            delivery_confirmed=reporter.last_delivery_confirmed,
+            observed_at=datetime.now(UTC),
+        )
+    except Exception as error:
+        LOGGER.error(
+            "sentry_cron_delivery_persistence_failed",
+            extra={
+                "delivery_confirmed": reporter.last_delivery_confirmed,
+                "error_code": "sentry_delivery_persistence_failed",
+                "exception_type": type(error).__name__,
+                "operations": operations,
+            },
+            exc_info=(type(error), error, error.__traceback__),
+        )
+    finally:
+        if engine is not None:
+            await engine.dispose()
 
 
 def _require_operations_role(settings: Settings) -> None:
