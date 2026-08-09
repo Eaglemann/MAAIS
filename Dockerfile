@@ -64,6 +64,10 @@ RUN rm -rf /usr/local/lib/python3.12/ensurepip \
         /usr/local/bin/pip \
         /usr/local/bin/pip3 \
         /usr/local/bin/pip3.12 \
+    && find /usr/local/lib/python3.12 /opt/maais /app \
+        -type d -name __pycache__ -prune -exec rm -rf '{}' + \
+    && find /usr/local/lib/python3.12 /opt/maais /app \
+        -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete \
     && chmod -R a-w /app /opt/maais
 USER 10001:10001
 ENTRYPOINT ["/opt/maais/.venv/bin/maais"]

@@ -107,6 +107,9 @@ def test_final_stage_is_fixed_non_root_minimal_and_paper_only() -> None:
     assert "uv sync" not in joined
     assert "npm ci" not in joined
     assert "rm -rf /usr/local/lib/python3.12/ensurepip" in joined
+    assert "find /usr/local/lib/python3.12 /opt/maais /app" in joined
+    assert "-type d -name __pycache__ -prune -exec rm -rf '{}' +" in joined
+    assert "-type f \\( -name '*.pyc' -o -name '*.pyo' \\) -delete" in joined
     assert "SENTRY_AUTH_TOKEN" not in joined
     assert "DATABASE_URL" not in joined
     assert "BINANCE_DEMO_API" not in joined
