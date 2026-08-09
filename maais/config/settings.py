@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 from typing import Literal, Self
+from uuid import UUID
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -151,6 +152,20 @@ class Settings(BaseSettings):
     database_role_name: str = Field(
         default="",
         validation_alias="MAAIS_DATABASE_ROLE_NAME",
+    )
+    cloud_run_id: UUID | None = Field(
+        default=None,
+        validation_alias="MAAIS_RUN_ID",
+    )
+    manifest_artifact_id: UUID | None = Field(
+        default=None,
+        validation_alias="MAAIS_MANIFEST_ARTIFACT_ID",
+    )
+    port: int = Field(
+        default=8000,
+        validation_alias="PORT",
+        ge=1,
+        le=65_535,
     )
     artifact_store_mode: ArtifactStoreMode = Field(
         default=ArtifactStoreMode.FILESYSTEM,
@@ -321,6 +336,10 @@ class Settings(BaseSettings):
             self.binance_demo_api_key_value or self.binance_demo_api_secret_value
         ):
             raise ValueError("Railway paper runtime forbids all authenticated exchange credentials")
+        if self.cloud_run_id is not None and self.cloud_run_id.int == 0:
+            raise ValueError("Railway run identifier must be a non-nil UUID")
+        if self.manifest_artifact_id is not None and self.manifest_artifact_id.int == 0:
+            raise ValueError("Railway manifest artifact identifier must be a non-nil UUID")
         assert self.service_role is not None
         expected_role = DATABASE_ROLE_BY_SERVICE[self.service_role]
         if self.database_role_name != expected_role:
@@ -460,6 +479,11 @@ class Settings(BaseSettings):
             "railway_git_commit_sha": self.railway_git_commit_sha,
             "expected_schema_revision": self.expected_schema_revision,
             "database_role_name": self.database_role_name,
+            "cloud_run_id": str(self.cloud_run_id) if self.cloud_run_id is not None else None,
+            "manifest_artifact_id": (
+                str(self.manifest_artifact_id) if self.manifest_artifact_id is not None else None
+            ),
+            "port": self.port,
             "artifact_store_mode": self.artifact_store_mode.value,
             "artifact_replica_configured": self.artifacts.replica_configured,
             "artifact_canonical_configured": self.artifacts.canonical_configured,

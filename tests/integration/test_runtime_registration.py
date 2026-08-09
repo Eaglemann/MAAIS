@@ -16,6 +16,7 @@ from maais.db.models.platform import ServiceInstanceModel
 from maais.operations.migrations import bootstrap_roles_with_url
 from maais.platform.runtime import (
     RuntimeIdentityError,
+    heartbeat_registered_runtime,
     stop_registered_runtime,
     verify_and_register_runtime_evidence,
 )
@@ -142,11 +143,17 @@ async def test_runtime_registration_uses_real_database_identity_and_freezes_boot
             registered[role] = evidence.identity
 
         for role, role_engine in role_engines.items():
+            await heartbeat_registered_runtime(
+                session_factory=async_sessionmaker(role_engine, expire_on_commit=False),
+                identity=registered[role],
+                sequence=1,
+                heartbeat_at=NOW + timedelta(seconds=1),
+            )
             await stop_registered_runtime(
                 session_factory=async_sessionmaker(role_engine, expire_on_commit=False),
                 identity=registered[role],
                 reason_code="clean_shutdown",
-                stopped_at=NOW + timedelta(seconds=1),
+                stopped_at=NOW + timedelta(seconds=2),
             )
         await stop_registered_runtime(
             session_factory=async_sessionmaker(
@@ -155,17 +162,25 @@ async def test_runtime_registration_uses_real_database_identity_and_freezes_boot
             ),
             identity=registered[ServiceRole.WORKER],
             reason_code="clean_shutdown",
-            stopped_at=NOW + timedelta(seconds=1),
+            stopped_at=NOW + timedelta(seconds=2),
         )
 
         async with db_engine.connect() as connection:
             rows = tuple(
-                await connection.scalars(
-                    select(ServiceInstanceModel.boot_id).order_by(ServiceInstanceModel.boot_id)
-                )
+                (
+                    await connection.execute(
+                        select(
+                            ServiceInstanceModel.boot_id,
+                            ServiceInstanceModel.heartbeat_sequence,
+                            ServiceInstanceModel.last_heartbeat_at,
+                        ).order_by(ServiceInstanceModel.boot_id)
+                    )
+                ).all()
             )
             await connection.rollback()
-        assert set(rows) == set(ROLE_BOOT_IDS.values())
+        assert {row.boot_id for row in rows} == set(ROLE_BOOT_IDS.values())
+        assert all(row.heartbeat_sequence == 1 for row in rows)
+        assert all(row.last_heartbeat_at == NOW + timedelta(seconds=1) for row in rows)
         async with uow_factory.begin() as uow:
             audit = await uow.observability.list_audit_events()
         assert [event.event_code for event in audit] == [

@@ -3,6 +3,8 @@ from uuid import UUID
 
 import pytest
 
+from maais.config.cloud import ServiceRole
+from maais.config.constants import ALL_AGENTS
 from maais.db.replay import verify_ledger_consistency
 from maais.db.unit_of_work import UnitOfWork
 from maais.domain.enums import ExperimentStatus
@@ -12,6 +14,14 @@ from maais.orchestration.operator_control import (
     FlattenPlan,
     FlattenPlanningError,
     OperatorCommandExecutor,
+)
+from maais.platform.identity import CandidateDescriptor, RailwayRuntimeIdentity
+from maais.platform.registry import (
+    CandidateStatus,
+    PlatformRun,
+    RunPurpose,
+    RunStatus,
+    ServiceInstance,
 )
 from tests.unit.experiments.test_runtime_policy import _live_manifest
 
@@ -540,6 +550,99 @@ async def test_start_command_transitions_prepared_experiment_and_requests_activa
     }
     assert status is ExperimentStatus.RUNNING
     assert not control.kill_switch_active
+
+
+async def test_cloud_start_command_atomically_activates_the_exact_registered_run(
+    uow_factory: UnitOfWork,
+) -> None:
+    run_id = UUID("77777777-7777-4777-8777-777777777777")
+    descriptor = CandidateDescriptor.build(
+        git_sha="a" * 40,
+        source_clean=True,
+        uv_lock_sha256="b" * 64,
+        dashboard_lock_sha256="c" * 64,
+        schema_revision="0022",
+        agent_implementation_hashes={
+            name: f"{index + 1:064x}" for index, name in enumerate(ALL_AGENTS)
+        },
+        dashboard_asset_manifest_sha256="d" * 64,
+        build_definition_sha256="e" * 64,
+    )
+    manifest = _live_manifest(experiment_id=EXPERIMENT_ID, schema_revision="0022")
+    run = PlatformRun.create(
+        run_id=run_id,
+        experiment_id=EXPERIMENT_ID,
+        candidate_hash=descriptor.descriptor_hash,
+        manifest_hash=manifest.manifest_hash,
+        database_system_identifier="7669409277984608290",
+        railway_environment_id="environment-1",
+        purpose=RunPurpose.SOAK,
+        created_at=NOW,
+    )
+    worker = ServiceInstance.register(
+        RailwayRuntimeIdentity(
+            project_id="project-1",
+            environment_id="environment-1",
+            service_id="worker-service",
+            deployment_id="deployment-1",
+            snapshot_id="snapshot-1",
+            replica_id="replica-1",
+            region="europe-west4-drams3a",
+            service_role=ServiceRole.WORKER,
+            boot_id=WORKER_ID,
+            candidate_hash=descriptor.descriptor_hash,
+            started_at=NOW,
+        ),
+        run_id=run_id,
+        first_seen_at=NOW,
+    )
+    requested = _request(CommandType.START, payload={"run_id": str(run_id)})
+    async with uow_factory.begin() as uow:
+        await uow.experiments.create(manifest)
+        candidate = await uow.platform.register_candidate(
+            descriptor,
+            creator_deployment_id="deployment-1",
+            registered_at=NOW,
+        )
+        assert candidate.status is CandidateStatus.REGISTERED
+        await uow.platform.begin_candidate_qualification(
+            descriptor.descriptor_hash,
+            qualifying_at=NOW + timedelta(microseconds=1),
+        )
+        await uow.platform.qualify_candidate(
+            descriptor.descriptor_hash,
+            evidence_hash="f" * 64,
+            qualified_at=NOW + timedelta(microseconds=2),
+        )
+        await uow.platform.create_run(run)
+        await uow.platform.register_service_instance(worker)
+        await uow.controls.initialize(
+            EXPERIMENT_ID,
+            initialized_at=NOW,
+            actor=f"paper_worker:{WORKER_ID}",
+        )
+        await uow.commands.enqueue(requested)
+
+    execution = await OperatorCommandExecutor(
+        uow=uow_factory,
+        manifest=manifest,
+        worker_id=WORKER_ID,
+        platform_run_id=run_id,
+        now=_Clock(),
+    ).execute_next()
+
+    async with uow_factory.begin() as uow:
+        stored_run = await uow.platform.get_run(run_id)
+        stored_command = await uow.commands.get(COMMAND_ID)
+        audit = await uow.observability.list_audit_events()
+
+    assert execution is not None and execution.activate_worker
+    assert stored_command.status is CommandStatus.COMPLETED
+    assert stored_run.status is RunStatus.ACTIVE
+    assert stored_run.requested_operator_command_id == COMMAND_ID
+    assert stored_run.activating_worker_boot_id == WORKER_ID
+    assert stored_run.started_at == NOW + timedelta(seconds=1)
+    assert [event.event_code for event in audit].count("run.started") == 1
 
 
 async def test_flatten_first_phase_durably_pauses_before_waiting_for_liquidity(

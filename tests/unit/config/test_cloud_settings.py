@@ -1,4 +1,5 @@
 import json
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -154,6 +155,12 @@ def test_railway_candidate_descriptor_path_must_be_absolute() -> None:
         _railway_settings(candidate_descriptor_path="candidate.json")
 
 
+@pytest.mark.parametrize("field", ("cloud_run_id", "manifest_artifact_id"))
+def test_railway_runtime_rejects_nil_catalog_identifiers(field: str) -> None:
+    with pytest.raises(ValidationError, match="non-nil UUID"):
+        _railway_settings(**{field: UUID(int=0)})
+
+
 def test_redacted_summary_is_an_explicit_non_secret_allowlist() -> None:
     settings = Settings(
         database_url=(
@@ -185,6 +192,9 @@ def test_redacted_summary_is_an_explicit_non_secret_allowlist() -> None:
         "railway_git_commit_sha": "",
         "expected_schema_revision": "",
         "database_role_name": "",
+        "cloud_run_id": None,
+        "manifest_artifact_id": None,
+        "port": 8000,
         "artifact_store_mode": "filesystem",
         "artifact_replica_configured": False,
         "artifact_canonical_configured": False,
@@ -286,6 +296,9 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
         "RAILWAY_GIT_COMMIT_SHA": "a" * 40,
         "MAAIS_EXPECTED_SCHEMA_REVISION": "0022",
         "MAAIS_DATABASE_ROLE_NAME": "maais_worker",
+        "MAAIS_RUN_ID": "11111111-1111-4111-8111-111111111111",
+        "MAAIS_MANIFEST_ARTIFACT_ID": "22222222-2222-4222-8222-222222222222",
+        "PORT": "12345",
         "MAAIS_LOG_FORMAT": "json",
         "SENTRY_DSN": (
             "https://backend-public-key@o0.ingest.sentry.io/123"  # pragma: allowlist secret
@@ -322,6 +335,9 @@ def test_railway_builtin_and_maais_environment_names_populate_cloud_settings(
     assert settings.cloud.expected_railway_region == EU_WEST_RAILWAY_REGION
     assert settings.cloud.railway_git_commit_sha == "a" * 40
     assert settings.cloud.expected_schema_revision == "0022"
+    assert settings.cloud_run_id == UUID("11111111-1111-4111-8111-111111111111")
+    assert settings.manifest_artifact_id == UUID("22222222-2222-4222-8222-222222222222")
+    assert settings.port == 12_345
 
 
 def test_railway_environment_is_qualification_or_production_json_runtime() -> None:

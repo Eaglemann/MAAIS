@@ -135,6 +135,7 @@ async def assemble_live_paper_application(
     uow: UnitOfWork,
     snapshot: LivePaperRuntimeSnapshot,
     worker_id: UUID,
+    platform_run_id: UUID | None = None,
     futures_rest: FuturesRuntimePort,
     public_data: PublicDataPort,
     signing_key: bytes,
@@ -224,6 +225,7 @@ async def assemble_live_paper_application(
         uow=uow,
         manifest=snapshot.manifest,
         worker_id=worker_id,
+        platform_run_id=platform_run_id,
         now=observed_now,
         flatten_planner=LivePaperFlattenPlanner(
             manifest=snapshot.manifest,

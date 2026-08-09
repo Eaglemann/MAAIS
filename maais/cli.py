@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import getpass
 import json
+import logging
 import os
 import secrets
 import sys
@@ -13,8 +14,6 @@ from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
-
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from maais.config.artifacts import ArtifactStoreMode, ArtifactType
 from maais.config.cloud import DeploymentTarget, ServiceRole
@@ -24,14 +23,12 @@ from maais.db.connection import get_session_factory
 from maais.db.repositories.observability import ObservabilityRepository
 from maais.db.repositories.platform import PlatformRepository
 from maais.db.roles import load_database_role_passwords
-from maais.db.unit_of_work import UnitOfWork
 from maais.live import (
     PaperLiveConfigurationError,
     load_manifest_file,
     prepare_live_manifest_file,
     run_live_paper_manifest,
 )
-from maais.monitoring.alerting import SentryCronReporter
 from maais.observability.sentry import (
     SentryRuntime,
     capture_terminal_exception,
@@ -45,10 +42,6 @@ from maais.operations.cloud_artifacts import (
     publish_configured_cloud_bundle,
     restore_configured_cloud_backup,
 )
-from maais.operations.cloud_health import (
-    CloudHealthEvaluator,
-    DatabaseCloudHealthSnapshotReader,
-)
 from maais.operations.daily_supervisor import supervise_daily_closes
 from maais.operations.database_identity import collect_configured_database_identity
 from maais.operations.final_reporting import (
@@ -57,7 +50,6 @@ from maais.operations.final_reporting import (
     write_final_report_bundle,
 )
 from maais.operations.health import collect_configured_experiment_health
-from maais.operations.health_supervisor import HealthSupervisor, PostgresHealthOwnership
 from maais.operations.incident_management import (
     IncidentAction,
     apply_configured_incident_action,
@@ -78,7 +70,15 @@ from maais.operations.soak_readiness import (
 from maais.operations.verification import establish_read_only_snapshot, verify_configured_ledger
 from maais.orchestration.supervisor import PaperWorkerHalt
 from maais.platform.candidate import build_candidate_descriptor, write_candidate_descriptor
-from maais.platform.runtime import stop_registered_runtime, verify_configured_runtime_identity
+from maais.platform.lifecycle import require_service_role
+from maais.platform.runtime import verify_configured_runtime_identity
+from maais.platform.services import (
+    attest_cloud_migrator_service,
+    run_cloud_operations_service,
+    run_cloud_verifier_service,
+    run_cloud_web_service,
+    run_cloud_worker_service,
+)
 from maais.security.passwords import hash_operator_password
 
 logger = get_logger(__name__)
@@ -159,6 +159,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cloud_migrate.add_argument("--expected-revision", type=_schema_revision, required=True)
     cloud_migrate.add_argument("--repository", type=Path, default=Path.cwd())
+    commands.add_parser(
+        "cloud-web",
+        help="serve authenticated Mission Control under the verified web service role",
+    )
+    commands.add_parser(
+        "cloud-worker",
+        help="run the artifact-backed paper worker under the verified worker service role",
+    )
+    cloud_verifier = commands.add_parser(
+        "cloud-verifier",
+        help="verify the read-only cloud runtime identity for one exact run",
+    )
+    cloud_verifier.add_argument("--run-id", type=UUID, required=True)
     cloud_identity = commands.add_parser(
         "cloud-identity",
         help="verify and register the current secret-free Railway runtime identity",
@@ -205,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
         "cloud-operations",
         help="run the single-owner immutable one-minute cloud health supervisor",
     )
-    cloud_operations.add_argument("--run", type=UUID, required=True)
+    cloud_operations.add_argument("--run", type=UUID)
     prepare = commands.add_parser(
         "prepare-paper-live",
         help="preflight public venues and write an immutable paper manifest",
@@ -447,19 +460,51 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"roles": roles, "live_money": False}, sort_keys=True))
         return 0
     if arguments.command == "cloud-migrate":
-        revision = asyncio.run(
-            migrate_with_url(
-                settings.database_url_value,
-                expected_revision=arguments.expected_revision,
-                repository_root=arguments.repository,
+        try:
+            require_service_role(settings, ServiceRole.MIGRATOR)
+            if arguments.expected_revision != settings.expected_schema_revision:
+                raise ValueError("cloud migration revision differs from candidate identity")
+            revision = asyncio.run(
+                migrate_with_url(
+                    settings.database_url_value,
+                    expected_revision=arguments.expected_revision,
+                    repository_root=arguments.repository,
+                )
             )
-        )
+            asyncio.run(attest_cloud_migrator_service(settings))
+        except Exception as exc:
+            return _cloud_terminal_failure("cloud_migrate", exc)
         print(
             json.dumps(
                 {"schema_revision": revision, "live_money": False},
                 sort_keys=True,
             )
         )
+        _flush_cloud_service_shutdown("cloud_migrate", sentry_runtime)
+        return 0
+    if arguments.command == "cloud-web":
+        try:
+            asyncio.run(run_cloud_web_service(settings))
+        except Exception as exc:
+            return _cloud_terminal_failure("cloud_web", exc)
+        print(json.dumps({"live_money": False, "status": "stopped"}, sort_keys=True))
+        _flush_cloud_service_shutdown("cloud_web", sentry_runtime)
+        return 0
+    if arguments.command == "cloud-worker":
+        try:
+            asyncio.run(run_cloud_worker_service(settings))
+        except Exception as exc:
+            return _cloud_terminal_failure("cloud_worker", exc)
+        print(json.dumps({"live_money": False, "status": "stopped"}, sort_keys=True))
+        _flush_cloud_service_shutdown("cloud_worker", sentry_runtime)
+        return 0
+    if arguments.command == "cloud-verifier":
+        try:
+            evidence = asyncio.run(run_cloud_verifier_service(settings, run_id=arguments.run_id))
+        except Exception as exc:
+            return _cloud_terminal_failure("cloud_verifier", exc)
+        print(json.dumps(evidence.to_json_data(), sort_keys=True))
+        _flush_cloud_service_shutdown("cloud_verifier", sentry_runtime)
         return 0
     if arguments.command == "cloud-identity":
         evidence = asyncio.run(verify_configured_runtime_identity(settings=settings))
@@ -467,27 +512,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "cloud-operations":
         try:
+            run_id = arguments.run or settings.cloud_run_id
+            if run_id is None:
+                raise ValueError("cloud operations requires MAAIS_RUN_ID")
             asyncio.run(
                 run_cloud_operations(
                     settings=settings,
-                    run_id=arguments.run,
+                    run_id=run_id,
                     sentry_runtime=sentry_runtime,
                 )
             )
         except Exception as exc:
-            logger.exception(
-                "cloud_operations_failed",
-                error_code="cloud_operations_unhandled_exception",
-                outcome="terminated",
-            )
-            _capture_exception_without_suppressing_exit(
-                exc,
-                event="cloud_operations_terminal_failure",
-                error_code="cloud_operations_unhandled_exception",
-                outcome="terminated",
-            )
-            return 1
+            return _cloud_terminal_failure("cloud_operations", exc)
         print(json.dumps({"live_money": False, "status": "stopped"}, sort_keys=True))
+        _flush_cloud_service_shutdown("cloud_operations", sentry_runtime)
         return 0
     if arguments.command == "cloud-publish":
         result = asyncio.run(
@@ -891,72 +929,10 @@ async def run_cloud_operations(
     sentry_runtime: SentryRuntime,
 ) -> None:
     _validate_cloud_operations_settings(settings)
-    evidence = await verify_configured_runtime_identity(settings=settings, run_id=run_id)
-    engine = create_async_engine(
-        settings.database_url_value,
-        pool_pre_ping=True,
-        hide_parameters=True,
+    await run_cloud_operations_service(
+        settings.model_copy(update={"cloud_run_id": run_id}),
+        sentry_runtime=sentry_runtime,
     )
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    terminal_failure: BaseException | None = None
-    try:
-        async with session_factory() as session:
-            async with session.begin():
-                await establish_read_only_snapshot(session)
-                audit = await ObservabilityRepository(session).verify_audit_chain()
-        if not audit.ok:
-            raise RuntimeError("cloud operations startup audit chain is invalid")
-
-        reporter = SentryCronReporter(
-            runtime=sentry_runtime,
-            monitor_slugs=settings.observability.cron_monitor_slugs,
-        )
-        reader = DatabaseCloudHealthSnapshotReader(
-            session_factory=session_factory,
-            runtime_evidence=evidence,
-            environment=settings.environment,
-            sentry_delivery_confirmed=lambda: reporter.last_delivery_confirmed,
-        )
-        evaluator = CloudHealthEvaluator(
-            uow_factory=UnitOfWork(session_factory),
-            snapshot_reader=reader,
-            service_boot_id=evidence.identity.boot_id,
-        )
-        supervisor = HealthSupervisor(
-            evaluator=evaluator,
-            run_id=run_id,
-            ownership=PostgresHealthOwnership(engine, run_id=run_id),
-        )
-        remove_signal_handlers = supervisor.install_signal_handlers()
-        try:
-            await supervisor.run()
-        finally:
-            remove_signal_handlers()
-    except BaseException as error:
-        terminal_failure = error
-        raise
-    finally:
-        try:
-            await stop_registered_runtime(
-                session_factory=session_factory,
-                identity=evidence.identity,
-                reason_code=(
-                    "cloud_operations_failed"
-                    if terminal_failure is not None
-                    else "cloud_operations_stopped"
-                ),
-                stopped_at=datetime.now(timezone.utc),
-            )
-        except Exception:
-            logger.exception(
-                "cloud_operations_stop_registration_failed",
-                error_code="cloud_operations_stop_registration_failed",
-                outcome="unconfirmed",
-            )
-            if terminal_failure is None:
-                raise
-        finally:
-            await engine.dispose()
 
 
 def _validate_cloud_operations_settings(settings: Settings) -> None:
@@ -977,6 +953,42 @@ def _validate_cloud_operations_settings(settings: Settings) -> None:
         raise ValueError("cloud operations requires all Sentry Cron monitors")
     if not observability.backend_dsn_value:
         raise ValueError("cloud operations requires backend Sentry")
+
+
+def _cloud_terminal_failure(command: str, exception: BaseException) -> int:
+    error_code = f"{command}_unhandled_exception"
+    logger.exception(
+        f"{command}_failed",
+        error_code=error_code,
+        outcome="terminated",
+    )
+    _capture_exception_without_suppressing_exit(
+        exception,
+        event=f"{command}_terminal_failure",
+        error_code=error_code,
+        outcome="terminated",
+    )
+    return 1
+
+
+def _flush_cloud_service_shutdown(command: str, sentry_runtime: SentryRuntime) -> None:
+    """Best-effort bounded telemetry drain after durable service stop evidence."""
+
+    logger.info(
+        f"{command}_stopped",
+        outcome="stopped",
+    )
+    if sentry_runtime.enabled and not sentry_runtime.flush(timeout=5.0):
+        logger.error(
+            f"{command}_sentry_flush_unconfirmed",
+            error_code="sentry_flush_unconfirmed",
+            outcome="unconfirmed",
+        )
+    for handler in logging.getLogger().handlers:
+        try:
+            handler.flush()
+        except Exception:
+            continue
 
 
 async def _active_cloud_timed_run(railway_environment_id: str) -> bool:

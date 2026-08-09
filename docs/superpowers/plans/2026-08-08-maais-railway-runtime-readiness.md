@@ -56,7 +56,7 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
 
 **Produces:** Strict role entrypoints with readiness state, heartbeat, graceful stop, and terminal non-zero boundaries.
 
-- [ ] Write failing tests proving each command rejects every other configured role, verifies identity/schema/database role before work, registers one boot, heartbeats monotonically, marks clean stop, and leaves terminal failure unmasked.
+- [x] Write failing tests proving each command rejects every other configured role, verifies identity/schema/database role before work, registers one boot, heartbeats monotonically, marks clean stop, and leaves terminal failure unmasked.
 
   ```python
   @pytest.mark.parametrize(
@@ -74,15 +74,15 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
           invoke_cloud_command(command, configured_role=ServiceRole.WEB if required_role is not ServiceRole.WEB else ServiceRole.WORKER)
   ```
 
-- [ ] Write worker tests proving manifest retrieval verifies artifact/catalog/content/candidate hash before experiment creation, exchange credentials remain absent, the worker remains `standby` until it consumes the persisted audited start command, and only the worker connection can create trading state.
+- [x] Write worker tests proving manifest retrieval verifies artifact/catalog/content/candidate hash before experiment creation, exchange credentials remain absent, the worker remains `standby` until it consumes the persisted audited start command, and only the worker connection can create trading state.
 
-- [ ] Run tests and confirm entrypoints are absent.
+- [x] Run tests and confirm entrypoints are absent.
 
   ```bash
   uv run pytest -q tests/unit/platform/test_service_entrypoints.py tests/unit/platform/test_service_lifecycle.py
   ```
 
-- [ ] Implement a lifecycle context manager that generates a boot ID, binds telemetry, verifies/registers identity, starts a heartbeat task, flips readiness only after role startup checks, and records stop in `finally`.
+- [x] Implement a lifecycle context manager that generates a boot ID, binds telemetry, verifies/registers identity, starts a heartbeat task, flips readiness only after role startup checks, and records stop in `finally`.
 
   ```python
   @asynccontextmanager
@@ -96,11 +96,11 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
       raise NotImplementedError
   ```
 
-- [ ] Use Uvicorn's programmatic server for `cloud-web`, bind `host="::"` and integer `PORT`, disable proxy trust except Railway's documented boundary, and drive liveness/readiness from lifecycle state.
+- [x] Use Uvicorn's programmatic server for `cloud-web`, bind `host="::"` and integer `PORT`, disable proxy trust except Railway's documented boundary, and drive liveness/readiness from lifecycle state.
 
-- [ ] Ensure SIGTERM allows bounded shutdown, releases worker lease through existing logic, records stop, flushes structured logs/Sentry, and exits before Railway's termination deadline. A clean Railway process start never activates a standby run by itself.
+- [x] Ensure SIGTERM allows bounded shutdown, releases worker lease through existing logic, records stop, flushes structured logs/Sentry, and exits before Railway's termination deadline. A clean Railway process start never activates a standby run by itself.
 
-- [ ] Run entrypoint tests plus local CLI/worker regressions.
+- [x] Run entrypoint tests plus local CLI/worker regressions.
 
   ```bash
   uv run pytest -q tests/unit/platform/test_service_entrypoints.py tests/unit/platform/test_service_lifecycle.py tests/unit/orchestration tests/unit/api
@@ -110,7 +110,7 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
 
   Expected: all commands exit `0`.
 
-- [ ] Commit.
+- [x] Commit.
 
   ```bash
   git add maais/platform/services.py maais/platform/lifecycle.py maais/cli.py maais/api/app.py tests/unit/platform/test_service_entrypoints.py tests/unit/platform/test_service_lifecycle.py

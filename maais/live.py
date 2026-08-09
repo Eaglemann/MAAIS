@@ -11,7 +11,7 @@ from contextlib import AsyncExitStack
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -82,6 +82,8 @@ async def run_live_paper_manifest(
     settings: Settings,
     stop_event: asyncio.Event | None = None,
     status_writer: StatusWriter | None = None,
+    worker_id: UUID | None = None,
+    platform_run_id: UUID | None = None,
 ) -> None:
     if manifest.mode is not RunMode.PAPER_LIVE or settings.run_mode is not RunMode.PAPER_LIVE:
         raise PaperLiveConfigurationError(
@@ -90,6 +92,11 @@ async def run_live_paper_manifest(
     if settings.binance_demo_api_key_value or settings.binance_demo_api_secret_value:
         raise PaperLiveConfigurationError("paper-live refuses configured exchange credentials")
     writer = status_writer or _print_status
+    resolved_worker_id = worker_id or uuid4()
+    if resolved_worker_id.int == 0:
+        raise PaperLiveConfigurationError("paper-live worker identity cannot be nil")
+    if platform_run_id is not None and platform_run_id.int == 0:
+        raise PaperLiveConfigurationError("paper-live platform run identity cannot be nil")
     engine = create_async_engine(
         settings.database_url_value,
         pool_size=5,
@@ -124,7 +131,8 @@ async def run_live_paper_manifest(
             application = await assemble_live_paper_application(
                 uow=uow,
                 snapshot=snapshot,
-                worker_id=uuid4(),
+                worker_id=resolved_worker_id,
+                platform_run_id=platform_run_id,
                 futures_rest=futures,
                 public_data=public_data,
                 signing_key=secrets.token_bytes(32),

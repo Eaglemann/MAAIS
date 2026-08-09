@@ -288,7 +288,43 @@ async def stop_registered_runtime(
         raise RuntimeIdentityError("service stop registration failed") from exc
 
 
-def _load_embedded_descriptor(settings: Settings) -> CandidateDescriptor:
+async def heartbeat_registered_runtime(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    identity: RailwayRuntimeIdentity,
+    sequence: int,
+    heartbeat_at: datetime,
+) -> None:
+    if type(sequence) is not int or sequence <= 0:
+        raise RuntimeIdentityError("service heartbeat sequence must be positive")
+    if heartbeat_at.tzinfo is None or heartbeat_at.utcoffset() != timezone.utc.utcoffset(None):
+        raise RuntimeIdentityError("service heartbeat time must be UTC-aware")
+    try:
+        async with session_factory() as session:
+            async with session.begin():
+                await session.execute(text("SET TRANSACTION READ WRITE"))
+                heartbeat = await session.scalar(
+                    text(
+                        "SELECT public.maais_heartbeat_service_instance("
+                        ":boot_id, :sequence, :heartbeat_at)"
+                    ),
+                    {
+                        "boot_id": identity.boot_id,
+                        "sequence": sequence,
+                        "heartbeat_at": heartbeat_at,
+                    },
+                )
+                if heartbeat != identity.boot_id:
+                    raise RuntimeIdentityError("service heartbeat returned wrong identity")
+    except DBAPIError as exc:
+        raise RuntimeIdentityError("service heartbeat registration failed") from exc
+    except SQLAlchemyError as exc:
+        raise RuntimeIdentityError("service heartbeat registration failed") from exc
+
+
+def load_embedded_candidate_descriptor(settings: Settings) -> CandidateDescriptor:
+    """Load the regular, non-writable descriptor embedded in the candidate image."""
+
     path = settings.candidate_descriptor_path
     try:
         metadata = path.lstat()
@@ -302,6 +338,10 @@ def _load_embedded_descriptor(settings: Settings) -> CandidateDescriptor:
         return CandidateDescriptor.from_path(path)
     except ValueError as exc:
         raise RuntimeIdentityError("embedded candidate descriptor is invalid") from exc
+
+
+def _load_embedded_descriptor(settings: Settings) -> CandidateDescriptor:
+    return load_embedded_candidate_descriptor(settings)
 
 
 async def _collect_runtime_database_identity(
