@@ -198,6 +198,9 @@ async def test_real_browser_proves_private_session_csrf_expiry_and_logout(
                 "browser": {
                     "browserName": "chromium",
                     "isolated": True,
+                    # GitHub's ephemeral runner exposes no usable Chromium OS sandbox.
+                    # This option applies only to this loopback, test-only browser.
+                    "launchOptions": {"chromiumSandbox": False},
                     "contextOptions": {"ignoreHTTPSErrors": True},
                 }
             }
