@@ -365,13 +365,13 @@ async def test_verifier_rejects_nil_run_identity_before_creating_resources() -> 
     assert resources_created is False
 
 
-def test_cloud_web_uses_ipv6_port_and_distrusts_forwarded_headers() -> None:
+def test_cloud_web_uses_railway_public_binding_and_distrusts_forwarded_headers() -> None:
     async def application(_scope: object, _receive: object, _send: object) -> None:
         return None
 
     server = build_cloud_web_server(application, port=12_345)
 
-    assert server.config.host == "::"
+    assert server.config.host == "0.0.0.0"
     assert server.config.port == 12_345
     assert server.config.proxy_headers is False
     assert server.config.forwarded_allow_ips == ""
