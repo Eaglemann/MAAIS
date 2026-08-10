@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import make_url
+from sqlalchemy.engine import Connection
 
 from maais.cli import build_parser
 from maais.config.cloud import DATABASE_ROLE_BY_SERVICE, ServiceRole
@@ -27,6 +29,7 @@ from maais.operations.migrations import (
     assert_expected_schema,
     ensure_no_active_runs,
     initialize_database_with_url,
+    migrate_with_url,
 )
 
 
@@ -170,7 +173,7 @@ def test_upgrade_to_head_reuses_the_connection_that_holds_the_advisory_lock(
         observed["connection"] = config.attributes.get("connection")
         observed["target"] = target
 
-    held_connection = object()
+    held_connection = cast(Connection, object())
     config_path = Path("/workspace/alembic.ini")
     monkeypatch.setattr("maais.operations.migrations.Config", FakeConfig)
     monkeypatch.setattr("maais.operations.migrations.command.upgrade", upgrade)
@@ -191,6 +194,50 @@ def test_alembic_environment_accepts_an_externally_managed_connection() -> None:
 
     assert 'config.attributes.get("connection")' in source
     assert "do_run_migrations(external_connection)" in source
+
+
+@pytest.mark.asyncio
+async def test_cloud_migration_moves_the_blocking_alembic_path_to_a_worker_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed: dict[str, object] = {}
+    (tmp_path / "alembic.ini").touch()
+
+    def migrate_synchronously(
+        database_url: str,
+        *,
+        expected_revision: str,
+        config_path: Path,
+    ) -> str:
+        observed.update(
+            database_url=database_url,
+            expected_revision=expected_revision,
+            config_path=config_path,
+        )
+        return expected_revision
+
+    monkeypatch.setattr(
+        "maais.operations.migrations._migrate_with_url_synchronously",
+        migrate_synchronously,
+    )
+
+    result = await migrate_with_url(
+        "postgresql+psycopg://maais_migrator@postgres.railway.internal:5432/railway",
+        expected_revision="0022",
+        repository_root=tmp_path,
+    )
+
+    assert result == "0022"
+    assert observed == {
+        "database_url": (
+            "postgresql+psycopg://maais_migrator@postgres.railway.internal:5432/railway"
+            "?options=-c+lock_timeout%3D10000ms+"
+            "-c+statement_timeout%3D120000ms"
+        ),
+        "expected_revision": "0022",
+        "config_path": tmp_path / "alembic.ini",
+    }
 
 
 @pytest.mark.asyncio

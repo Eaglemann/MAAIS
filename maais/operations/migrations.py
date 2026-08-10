@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from alembic.config import Config
-from sqlalchemy import make_url, text
+from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
@@ -259,27 +261,83 @@ async def migrate_with_url(
     if not config_path.is_file():
         raise ValueError("repository root does not contain alembic.ini")
     bounded_database_url = _database_url_with_maintenance_timeouts(database_url)
-    engine = create_async_engine(
+    return await asyncio.to_thread(
+        _migrate_with_url_synchronously,
         bounded_database_url,
+        expected_revision=expected_revision,
+        config_path=config_path,
+    )
+
+
+def _migrate_with_url_synchronously(
+    database_url: str,
+    *,
+    expected_revision: str,
+    config_path: Path,
+) -> str:
+    """Keep Alembic and its advisory-lock connection on one blocking thread."""
+
+    engine = create_engine(
+        database_url,
         pool_pre_ping=True,
         hide_parameters=True,
     )
     try:
-        async with engine.connect() as connection:
-            current_user = str(await connection.scalar(text("SELECT current_user")))
+        with engine.connect() as connection:
+            current_user = str(connection.scalar(text("SELECT current_user")))
             if current_user != "maais_migrator":
                 raise DatabaseAuthorityError("cloud migration must connect as maais_migrator")
-            await connection.commit()
-            async with migration_advisory_lock(connection):
-                await ensure_no_active_runs(connection)
-                await connection.commit()
-                await connection.run_sync(_upgrade_to_head, config_path)
-                await ensure_no_active_runs(connection)
-                await assert_expected_schema(connection, expected_revision)
-                await connection.commit()
+            connection.commit()
+            with _migration_advisory_lock_synchronously(connection):
+                _ensure_no_active_runs_synchronously(connection)
+                connection.commit()
+                _upgrade_to_head(connection, config_path)
+                _ensure_no_active_runs_synchronously(connection)
+                _assert_expected_schema_synchronously(connection, expected_revision)
+                connection.commit()
         return expected_revision
     finally:
-        await engine.dispose()
+        engine.dispose()
+
+
+@contextmanager
+def _migration_advisory_lock_synchronously(connection: Connection) -> Iterator[None]:
+    connection.execute(
+        text("SELECT pg_advisory_lock(:lock_key)"),
+        {"lock_key": MIGRATION_LOCK_KEY},
+    )
+    connection.commit()
+    try:
+        yield
+    finally:
+        released = connection.scalar(
+            text("SELECT pg_advisory_unlock(:lock_key)"),
+            {"lock_key": MIGRATION_LOCK_KEY},
+        )
+        connection.commit()
+        if released is not True:
+            raise RuntimeError("cloud migration advisory lock was not held")
+
+
+def _ensure_no_active_runs_synchronously(connection: Connection) -> None:
+    relation = connection.scalar(text("SELECT to_regclass('public.run_instances')"))
+    if relation is None:
+        return
+    active = connection.scalar(
+        text("SELECT count(*) FROM public.run_instances WHERE status = 'active'")
+    )
+    if type(active) is not int:
+        raise RuntimeError("active run count query returned an invalid value")
+    if active:
+        raise ActiveRunBlocksMaintenance(
+            f"database maintenance is blocked by {active} active run instance(s)"
+        )
+
+
+def _assert_expected_schema_synchronously(connection: Connection, expected: str) -> None:
+    actual = str(connection.scalar(text("SELECT version_num FROM alembic_version")))
+    if actual != expected:
+        raise SchemaIdentityError(f"database schema mismatch: expected={expected} actual={actual}")
 
 
 def _upgrade_to_head(connection: Connection, config_path: Path) -> None:
