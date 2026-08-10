@@ -131,12 +131,12 @@ async def test_migrator_catalogs_exact_candidate_once_across_deployment_retries(
     role_engine = None
     try:
         await bootstrap_roles_with_url(test_database_url, passwords)
-        migrator_url = str(
+        migrator_url = (
             make_url(test_database_url).set(
                 username="maais_migrator",
                 password=passwords.migrator,
             )
-        )
+        ).render_as_string(hide_password=False)
         first_settings = _settings(
             candidate_path,
             service_role=ServiceRole.MIGRATOR,
