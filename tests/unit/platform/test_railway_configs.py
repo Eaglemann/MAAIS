@@ -41,12 +41,12 @@ def test_every_service_uses_one_deterministic_image_and_explicit_role(name: str)
     assert "cronSchedule" not in deploy
 
 
-def test_only_web_exposes_a_bounded_readiness_healthcheck() -> None:
+def test_only_web_exposes_a_bounded_liveness_deploy_probe() -> None:
     for name in EXPECTED_START_COMMANDS:
         deploy = _config(name)["deploy"]
         assert isinstance(deploy, dict)
         if name == "web.toml":
-            assert deploy["healthcheckPath"] == "/healthz/ready"
+            assert deploy["healthcheckPath"] == "/healthz/live"
             assert deploy["healthcheckTimeout"] == 120
         else:
             assert "healthcheckPath" not in deploy

@@ -42,7 +42,9 @@ In order:
    After migration, the command atomically catalogs or verifies the exact embedded
    candidate before registering its runtime attestation.
 4. Deploy web, worker, operations, and verifier from the same commit in standby. Only web
-   receives a public domain.
+   receives a public domain. Railway uses `/healthz/live` only to prove that the web
+   process can serve traffic; `/healthz/ready` remains the fail-closed candidate and
+   platform readiness signal and may stay unavailable before qualification.
 5. Verify runtime candidate, schema, cluster, role, deployment, replica, region, auth,
    CSRF, telemetry redaction, Sentry delivery, storage version/retention, and audit chain.
 6. Publish and read back disposable evidence from the Railway replica and canonical WORM
