@@ -7,11 +7,13 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
 import uvicorn
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from maais.api.health import (
@@ -27,6 +29,7 @@ from maais.artifacts.store import ArtifactStore
 from maais.config.cloud import ServiceRole
 from maais.config.settings import Settings
 from maais.core.logging import get_logger
+from maais.db.models.platform import PlatformCandidateModel
 from maais.db.replay import verify_ledger_consistency
 from maais.db.repositories.artifacts import ArtifactRepository
 from maais.db.repositories.observability import ObservabilityRepository
@@ -49,7 +52,12 @@ from maais.platform.lifecycle import (
     cloud_service_lifecycle,
     require_service_role,
 )
-from maais.platform.runtime import RuntimeIdentityEvidence, load_embedded_candidate_descriptor
+from maais.platform.registry import CandidateStatus, PlatformCandidate
+from maais.platform.runtime import (
+    RuntimeIdentityError,
+    RuntimeIdentityEvidence,
+    load_embedded_candidate_descriptor,
+)
 
 _MANIFEST_DOCUMENT_NAME = "manifest.json"
 _MAX_MANIFEST_BUNDLE_BYTES = 4 * 1024 * 1024
@@ -285,6 +293,85 @@ async def attest_cloud_migrator_service(
     ) as lifecycle:
         lifecycle.mark_ready()
         return lifecycle.evidence
+
+
+async def ensure_cloud_migrator_candidate(
+    settings: Settings,
+    *,
+    backend_factory: Callable[[Settings], DatabaseServiceLifecycleBackend] = (
+        DatabaseServiceLifecycleBackend
+    ),
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> CandidateDescriptor:
+    """Catalog the embedded candidate without rewriting its first-deploy evidence."""
+
+    require_service_role(settings, ServiceRole.MIGRATOR)
+    descriptor = load_embedded_candidate_descriptor(settings)
+    if descriptor.git_sha != settings.railway_git_commit_sha:
+        raise RuntimeIdentityError("candidate Git commit does not match Railway deployment")
+    if descriptor.schema_revision != settings.expected_schema_revision:
+        raise RuntimeIdentityError("candidate schema revision does not match Railway settings")
+    candidate = PlatformCandidate.register(
+        descriptor,
+        creator_deployment_id=settings.railway_deployment_id,
+        registered_at=clock(),
+    )
+    backend = backend_factory(settings)
+    try:
+        async with backend.session_factory() as session:
+            async with session.begin():
+                created_hash = await session.scalar(
+                    insert(PlatformCandidateModel)
+                    .values(
+                        descriptor_hash=descriptor.descriptor_hash,
+                        git_sha=descriptor.git_sha,
+                        schema_revision=descriptor.schema_revision,
+                        descriptor_json=descriptor.to_json_data(),
+                        status=candidate.status.value,
+                        creator_deployment_id=candidate.creator_deployment_id,
+                        registered_at=candidate.registered_at,
+                        qualifying_at=None,
+                        qualified_at=None,
+                        qualification_evidence_hash=None,
+                    )
+                    .on_conflict_do_nothing()
+                    .returning(PlatformCandidateModel.descriptor_hash)
+                )
+                row = await session.get(
+                    PlatformCandidateModel,
+                    descriptor.descriptor_hash,
+                )
+                if row is None:
+                    raise RuntimeIdentityError("candidate catalog write was not durable")
+                try:
+                    existing = PlatformCandidate(
+                        descriptor=CandidateDescriptor.from_json_data(row.descriptor_json),
+                        status=CandidateStatus(row.status),
+                        creator_deployment_id=row.creator_deployment_id,
+                        registered_at=row.registered_at,
+                        qualifying_at=row.qualifying_at,
+                        qualified_at=row.qualified_at,
+                        qualification_evidence_hash=row.qualification_evidence_hash,
+                    )
+                except ValueError as exc:
+                    raise RuntimeIdentityError("catalogued candidate evidence is invalid") from exc
+                if (
+                    existing.descriptor != descriptor
+                    or row.git_sha != descriptor.git_sha
+                    or row.schema_revision != descriptor.schema_revision
+                ):
+                    raise RuntimeIdentityError(
+                        "catalogued candidate conflicts with embedded identity"
+                    )
+    finally:
+        await backend.close()
+    logger.info(
+        "cloud_migrator_candidate_catalogued",
+        candidate_hash=descriptor.descriptor_hash,
+        deployment_id=settings.railway_deployment_id,
+        outcome="created" if created_hash is not None else "reused",
+    )
+    return descriptor
 
 
 class _ReadyHealthEvaluator:

@@ -39,6 +39,8 @@ In order:
    maintenance lock waits are limited to 10 seconds and every database statement is
    limited to 120 seconds so a blocked release fails with evidence instead of hanging.
 3. Run `uv run maais cloud-migrate --expected-revision 0022` as `maais_migrator`.
+   After migration, the command atomically catalogs or verifies the exact embedded
+   candidate before registering its runtime attestation.
 4. Deploy web, worker, operations, and verifier from the same commit in standby. Only web
    receives a public domain.
 5. Verify runtime candidate, schema, cluster, role, deployment, replica, region, auth,
