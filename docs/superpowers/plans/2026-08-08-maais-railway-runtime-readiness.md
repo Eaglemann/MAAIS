@@ -96,7 +96,7 @@ Worker and operations read the frozen `MAAIS_RUN_ID`; worker also reads `MAAIS_M
       raise NotImplementedError
   ```
 
-- [x] Use Uvicorn's programmatic server for `cloud-web`, bind `host="::"` and integer `PORT`, disable proxy trust except Railway's documented boundary, and drive liveness/readiness from lifecycle state.
+- [x] Use Uvicorn's programmatic server for `cloud-web`, bind `host="0.0.0.0"` and integer `PORT` for Railway's public proxy, disable proxy trust except Railway's documented boundary, and drive liveness/readiness from lifecycle state.
 
 - [x] Ensure SIGTERM allows bounded shutdown, releases worker lease through existing logic, records stop, flushes structured logs/Sentry, and exits before Railway's termination deadline. A clean Railway process start never activates a standby run by itself.
 

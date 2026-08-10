@@ -44,7 +44,9 @@ In order:
 4. Deploy web, worker, operations, and verifier from the same commit in standby. Only web
    receives a public domain. Railway uses `/healthz/live` only to prove that the web
    process can serve traffic; `/healthz/ready` remains the fail-closed candidate and
-   platform readiness signal and may stay unavailable before qualification.
+   platform readiness signal and may stay unavailable before qualification. The Uvicorn
+   process binds `0.0.0.0` to the integer Railway `PORT`; Uvicorn's `::` binding is not
+   dual-stack and is not reachable by Railway's public deployment health check.
 5. Verify runtime candidate, schema, cluster, role, deployment, replica, region, auth,
    CSRF, telemetry redaction, Sentry delivery, storage version/retention, and audit chain.
 6. Publish and read back disposable evidence from the Railway replica and canonical WORM

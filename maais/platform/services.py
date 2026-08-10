@@ -122,7 +122,7 @@ def build_cloud_web_server(application: Any, *, port: int) -> LifecycleUvicornSe
     return LifecycleUvicornServer(
         uvicorn.Config(
             application,
-            host="::",
+            host="0.0.0.0",
             port=port,
             workers=1,
             proxy_headers=False,
