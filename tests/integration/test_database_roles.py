@@ -20,6 +20,7 @@ from maais.operations.migrations import (
     MIGRATION_LOCK_KEY,
     ActiveRunBlocksMaintenance,
     bootstrap_roles_with_url,
+    initialize_database_with_url,
     migrate_with_url,
 )
 from maais.operations.operator_commands import CommandType, OperatorCommand
@@ -47,6 +48,52 @@ WEB_BOOT = UUID("99999999-9999-4999-8999-999999999999")
 WEB_AUDIT = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1")
 WORKER_AUDIT = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2")
 OPERATIONS_AUDIT = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3")
+EMPTY_BOOTSTRAP_DATABASE = "maais_empty_bootstrap_test"
+
+
+async def test_empty_database_bootstrap_reaches_the_expected_schema(
+    db_engine: AsyncEngine,
+    test_database_url: str,
+) -> None:
+    await _cleanup_roles(db_engine)
+    await _replace_test_database(db_engine, EMPTY_BOOTSTRAP_DATABASE)
+    empty_database_url = make_url(test_database_url).set(database=EMPTY_BOOTSTRAP_DATABASE)
+    migrated_engine: AsyncEngine | None = None
+    try:
+        revision, roles = await initialize_database_with_url(
+            empty_database_url.render_as_string(hide_password=False),
+            _passwords(),
+            expected_revision="0022",
+            repository_root=Path(__file__).resolve().parents[2],
+        )
+
+        assert revision == "0022"
+        assert roles == (
+            "maais_migrator",
+            "maais_worker",
+            "maais_web",
+            "maais_ops",
+            "maais_verifier",
+        )
+        migrated_engine = _role_engine(
+            empty_database_url.render_as_string(hide_password=False),
+            "maais_migrator",
+            _passwords().migrator,
+        )
+        async with migrated_engine.connect() as connection:
+            assert (
+                await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0022"
+            )
+            assert await connection.scalar(text("SELECT to_regclass('public.audit_events')"))
+            assert await connection.scalar(
+                text("SELECT to_regclass('maais_auth.operator_sessions')")
+            )
+            await connection.rollback()
+    finally:
+        if migrated_engine is not None:
+            await migrated_engine.dispose()
+        await _drop_test_database(db_engine, EMPTY_BOOTSTRAP_DATABASE)
+        await _cleanup_roles(db_engine)
 
 
 async def test_role_bootstrap_refuses_an_active_run(
@@ -458,6 +505,19 @@ def _role_url(database_url: str, role_name: str, password: str):
 
 def _role_engine(database_url: str, role_name: str, password: str) -> AsyncEngine:
     return create_async_engine(_role_url(database_url, role_name, password), pool_pre_ping=True)
+
+
+async def _replace_test_database(engine: AsyncEngine, database_name: str) -> None:
+    await _drop_test_database(engine, database_name)
+    async with engine.connect() as connection:
+        connection = await connection.execution_options(isolation_level="AUTOCOMMIT")
+        await connection.execute(text(f'CREATE DATABASE "{database_name}"'))
+
+
+async def _drop_test_database(engine: AsyncEngine, database_name: str) -> None:
+    async with engine.connect() as connection:
+        connection = await connection.execution_options(isolation_level="AUTOCOMMIT")
+        await connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
 
 
 async def _expect_denied(
