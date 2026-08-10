@@ -11,6 +11,7 @@ from uuid import UUID
 
 import pytest
 
+import maais.platform.services as platform_services
 from maais.artifacts.models import (
     GENESIS_EVIDENCE_HASH,
     ArtifactRecord,
@@ -162,6 +163,38 @@ def test_clean_cloud_command_flushes_sentry_before_reporting_success(
     assert runtime.flushes == [5.0]
 
 
+def test_cloud_migration_catalogs_candidate_before_runtime_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    settings = _railway_settings(
+        service_role=ServiceRole.MIGRATOR,
+        database_role_name="maais_migrator",
+    )
+
+    async def migrate(*_args: object, **_values: object) -> str:
+        calls.append("migrate")
+        return "0022"
+
+    async def catalog(_settings: Settings) -> None:
+        calls.append("catalog")
+
+    async def attest(_settings: Settings) -> None:
+        calls.append("attest")
+
+    runtime = SimpleNamespace(enabled=False, initialization_error=None)
+    monkeypatch.setattr("maais.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("maais.cli.initialize_backend_sentry", lambda _settings: runtime)
+    monkeypatch.setattr("maais.cli.configure_logging", lambda *_args: None)
+    monkeypatch.setattr("maais.cli.migrate_with_url", migrate)
+    monkeypatch.setattr("maais.cli.ensure_cloud_migrator_candidate", catalog)
+    monkeypatch.setattr("maais.cli.attest_cloud_migrator_service", attest)
+    monkeypatch.setattr("maais.cli._flush_cloud_service_shutdown", lambda *_args: None)
+
+    assert main(("cloud-migrate", "--expected-revision", "0022")) == 0
+    assert calls == ["migrate", "catalog", "attest"]
+
+
 def test_cloud_verifier_uses_the_frozen_settings_run_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -285,6 +318,27 @@ async def test_role_entrypoints_reject_wrong_authority_before_creating_resources
                 settings,
                 backend_factory=backend_factory,
             )
+
+    assert resources_created is False
+
+
+@pytest.mark.asyncio
+async def test_migrator_candidate_catalog_rejects_wrong_authority_before_database_access() -> None:
+    resources_created = False
+
+    def backend_factory(_settings: Settings):
+        nonlocal resources_created
+        resources_created = True
+        raise AssertionError("role mismatch must fail before database resources")
+
+    with pytest.raises(ServiceRoleMismatch, match="migrator"):
+        await platform_services.ensure_cloud_migrator_candidate(
+            _railway_settings(
+                service_role=ServiceRole.WEB,
+                database_role_name="maais_web",
+            ),
+            backend_factory=backend_factory,
+        )
 
     assert resources_created is False
 

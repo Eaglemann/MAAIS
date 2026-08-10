@@ -10,9 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import maais.platform.services as platform_services
 from maais.config.cloud import EU_WEST_RAILWAY_REGION, DeploymentTarget, ServiceRole
 from maais.config.settings import Settings
-from maais.db.models.platform import ServiceInstanceModel
+from maais.db.models.platform import PlatformCandidateModel, ServiceInstanceModel
 from maais.operations.migrations import bootstrap_roles_with_url
 from maais.platform.runtime import (
     RuntimeIdentityError,
@@ -44,6 +45,7 @@ def _settings(
     *,
     service_role: ServiceRole = ServiceRole.WORKER,
     service_id: str = "worker-service",
+    database_url: str | None = None,
 ) -> Settings:
     database_roles = {
         ServiceRole.WORKER: "maais_worker",
@@ -72,6 +74,8 @@ def _settings(
         "database_role_name": database_roles[service_role],
         "_env_file": None,
     }
+    if database_url is not None:
+        values["database_url"] = database_url
     if service_role is ServiceRole.WEB:
         values.update(railway_security_values())
     if service_role in {ServiceRole.WORKER, ServiceRole.OPERATIONS, ServiceRole.VERIFIER}:
@@ -113,6 +117,81 @@ def _settings(
             }
         )
     return Settings(**values)
+
+
+async def test_migrator_catalogs_exact_candidate_once_across_deployment_retries(
+    db_engine,
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    descriptor = _descriptor()
+    candidate_path = tmp_path / "candidate.json"
+    candidate_path.write_text(json.dumps(descriptor.to_json_data()), encoding="utf-8")
+    passwords = integration_role_passwords()
+    role_engine = None
+    try:
+        await bootstrap_roles_with_url(test_database_url, passwords)
+        migrator_url = (
+            make_url(test_database_url).set(
+                username="maais_migrator",
+                password=passwords.migrator,
+            )
+        ).render_as_string(hide_password=False)
+        first_settings = _settings(
+            candidate_path,
+            service_role=ServiceRole.MIGRATOR,
+            service_id="migrator-service",
+            database_url=migrator_url,
+        )
+        second_settings = first_settings.model_copy(
+            update={"railway_deployment_id": "deployment-2"}
+        )
+
+        first = await platform_services.ensure_cloud_migrator_candidate(
+            first_settings,
+            clock=lambda: NOW,
+        )
+        second = await platform_services.ensure_cloud_migrator_candidate(
+            second_settings,
+            clock=lambda: NOW + timedelta(seconds=1),
+        )
+
+        async with db_engine.connect() as connection:
+            rows = tuple(
+                (
+                    await connection.execute(
+                        select(
+                            PlatformCandidateModel.descriptor_hash,
+                            PlatformCandidateModel.descriptor_json,
+                            PlatformCandidateModel.creator_deployment_id,
+                            PlatformCandidateModel.registered_at,
+                        )
+                    )
+                ).all()
+            )
+            await connection.rollback()
+        assert first == descriptor
+        assert second == descriptor
+        assert len(rows) == 1
+        assert rows[0].descriptor_hash == descriptor.descriptor_hash
+        assert rows[0].descriptor_json == descriptor.to_json_data()
+        assert rows[0].creator_deployment_id == "deployment-1"
+        assert rows[0].registered_at == NOW
+
+        role_engine = create_async_engine(migrator_url, pool_pre_ping=True)
+        evidence = await verify_and_register_runtime_evidence(
+            settings=second_settings,
+            session_factory=async_sessionmaker(role_engine, expire_on_commit=False),
+            descriptor=descriptor,
+            boot_id=ROLE_BOOT_IDS[ServiceRole.MIGRATOR],
+            started_at=NOW + timedelta(seconds=2),
+            run_id=None,
+        )
+        assert evidence.identity.candidate_hash == descriptor.descriptor_hash
+    finally:
+        if role_engine is not None:
+            await role_engine.dispose()
+        await cleanup_database_roles(db_engine)
 
 
 async def test_runtime_registration_uses_real_database_identity_and_freezes_boot(

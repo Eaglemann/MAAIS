@@ -90,6 +90,7 @@ from maais.platform.lifecycle import require_service_role
 from maais.platform.runtime import verify_configured_runtime_identity
 from maais.platform.services import (
     attest_cloud_migrator_service,
+    ensure_cloud_migrator_candidate,
     run_cloud_operations_service,
     run_cloud_verifier_service,
     run_cloud_web_service,
@@ -531,6 +532,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     repository_root=arguments.repository,
                 )
             )
+            asyncio.run(ensure_cloud_migrator_candidate(settings))
             asyncio.run(attest_cloud_migrator_service(settings))
         except Exception as exc:
             return _cloud_terminal_failure("cloud_migrate", exc)
